@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#fbfaf9" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1a1918">
+  <title>Projektsøg</title>
+  <link rel="icon" href="/assets/icon.png">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 17.3V6.7c0-.9.8-1.7 1.7-1.7h3.9c.5 0 .9.2 1.2.5l1.6 1.7h6.9c.9 0 1.7.8 1.7 1.7v8.4c0 .9-.8 1.7-1.7 1.7H5.2c-.9 0-1.7-.8-1.7-1.7z"/><path d="M3.5 10.2h17"/></symbol>
+    <symbol id="i-project" viewBox="0 0 24 24"><rect x="3.5" y="10" width="17" height="9.5" rx="1.8"/><path d="M3.6 10 19.8 6.55l-.58-2.74L3.02 7.26z"/><path d="m8.46 8.97.98-3.07M13.64 7.86l.98-3.07"/></symbol>
+    <symbol id="i-group" viewBox="0 0 24 24"><path d="M7.2 7.4v-1c0-.9.7-1.6 1.6-1.6h3.2c.4 0 .8.2 1.1.5l1.1 1.1h4.9c.9 0 1.6.7 1.6 1.6v6.9c0 .9-.7 1.6-1.6 1.6h-.6"/><path d="M3.5 10.6c0-.9.7-1.6 1.6-1.6h3.4c.4 0 .8.2 1.1.5l1.2 1.2h5.6c.9 0 1.6.7 1.6 1.6v5.8c0 .9-.7 1.6-1.6 1.6H5.1c-.9 0-1.6-.7-1.6-1.6z"/></symbol>
+    <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2.2"/><path d="m16 10.3 4.1-2.4c.4-.2.9.1.9.5v7.2c0 .5-.5.7-.9.5L16 13.7"/></symbol>
+    <symbol id="i-audio" viewBox="0 0 24 24"><path d="M3.5 10.5v3M7 7.5v9M10.5 4.5v15M14 8v8M17.5 6v12M21 10.5v3"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.2"/><circle cx="9" cy="9.7" r="1.7"/><path d="m20.5 15.3-4.3-4.3a1.2 1.2 0 0 0-1.7 0L5.9 19.5"/></symbol>
+    <symbol id="i-sequence" viewBox="0 0 24 24"><rect x="7.5" y="7.5" width="13" height="12" rx="1.8"/><path d="M4.5 15.5V5.8c0-.9.7-1.6 1.6-1.6h10.6"/><circle cx="11.7" cy="11.4" r="1.2"/><path d="m20.5 16.2-3-3a1.1 1.1 0 0 0-1.5 0l-6.2 6.3"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6.5 3.5h7.3l4.7 4.7v10.6c0 .9-.8 1.7-1.7 1.7H6.5c-.9 0-1.7-.8-1.7-1.7V5.2c0-.9.8-1.7 1.7-1.7z"/><path d="M13.5 3.7v4.8h4.8M8.5 12.5h6.5M8.5 16h4.5"/></symbol>
+    <symbol id="i-projfile" viewBox="0 0 24 24"><path d="M6.5 3.5h7.3l4.7 4.7v10.6c0 .9-.8 1.7-1.7 1.7H6.5c-.9 0-1.7-.8-1.7-1.7V5.2c0-.9.8-1.7 1.7-1.7z"/><path d="M13.5 3.7v4.8h4.8M8.2 12.2h4.3M10.6 15h5M8.2 17.8h3.2"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6.5 3.5h7.3l4.7 4.7v10.6c0 .9-.8 1.7-1.7 1.7H6.5c-.9 0-1.7-.8-1.7-1.7V5.2c0-.9.8-1.7 1.7-1.7z"/><path d="M13.5 3.7v4.8h4.8"/></symbol>
+    <symbol id="i-resolve" viewBox="0 0 24 24"><circle cx="12" cy="8.4" r="4.4" style="fill: var(--petal-a, none)"/><circle cx="7.8" cy="15.6" r="4.4" style="fill: var(--petal-b, none)"/><circle cx="16.2" cy="15.6" r="4.4" style="fill: var(--petal-c, none)"/></symbol>
+    <symbol id="i-disk" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="10" rx="2.6"/><path d="M6.8 12h5.4"/><circle cx="16.7" cy="12" r="1" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-pc" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M9 20h6M12 16.5V20"/></symbol>
+    <symbol id="i-net" viewBox="0 0 24 24"><rect x="4" y="3.5" width="16" height="10.5" rx="2"/><path d="M12 14v4.5M3.5 18.5h5.8M14.7 18.5h5.8"/><circle cx="12" cy="18.5" r="1.9"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><path d="M9.95 5.31 10.29 2.76A9.4 9.4 0 0 1 13.71 2.76L14.05 5.31A7 7 0 0 1 15.29 5.82L17.32 4.25A9.4 9.4 0 0 1 19.75 6.68L18.18 8.71A7 7 0 0 1 18.69 9.95L21.24 10.29A9.4 9.4 0 0 1 21.24 13.71L18.69 14.05A7 7 0 0 1 18.18 15.29L19.75 17.32A9.4 9.4 0 0 1 17.32 19.75L15.29 18.18A7 7 0 0 1 14.05 18.69L13.71 21.24A9.4 9.4 0 0 1 10.29 21.24L9.95 18.69A7 7 0 0 1 8.71 18.18L6.68 19.75A9.4 9.4 0 0 1 4.25 17.32L5.82 15.29A7 7 0 0 1 5.31 14.05L2.76 13.71A9.4 9.4 0 0 1 2.76 10.29L5.31 9.95A7 7 0 0 1 5.82 8.71L4.25 6.68A9.4 9.4 0 0 1 6.68 4.25L8.71 5.82A7 7 0 0 1 9.95 5.31Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6.5 9.5 5.5 5.5 5.5-5.5"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3l2.2 2.1"/><path d="M19.5 4.3v4.5H15"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="12" height="12" rx="2"/><path d="M15.5 8.5v-3c0-1.1-.9-2-2-2h-8c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h3"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M10.3 4.3 2.9 17.3c-.8 1.4.2 3.2 1.7 3.2h14.8c1.5 0 2.5-1.8 1.7-3.2L13.7 4.3c-.8-1.4-2.6-1.4-3.4 0z"/><path d="M12 9.6v4.2M12 16.9h.01"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6.5 6.5 11 11M17.5 6.5l-11 11"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></symbol>
+    <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M4.5 12h14M13.5 7l5 5-5 5"/></symbol>
+    <symbol id="i-open" viewBox="0 0 24 24"><path d="M3.5 17.8V6.7c0-.9.8-1.7 1.7-1.7h3.7c.5 0 .9.2 1.2.5l1.5 1.6h6.2c.9 0 1.7.8 1.7 1.7V10"/><path d="M3.7 18.6 6.2 12a1.7 1.7 0 0 1 1.6-1.1h12.5c.8 0 1.4.8 1.1 1.6l-1.9 5.6c-.2.7-.9 1.2-1.6 1.2H4.5c-.5 0-.9-.3-.8-.7z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5.5h16l-6.2 7.3v5.2l-3.6 1.8v-7z"/></symbol>
+  </svg>
+
+  <div class="app">
+    <header class="top">
+      <div class="search">
+        <svg class="icon search__icon" aria-hidden="true"><use href="#i-search"/></svg>
+        <input id="q" class="search__input" type="text" role="combobox" aria-controls="results"
+               aria-expanded="true" aria-autocomplete="list" aria-label="Søg efter projekt, mappe eller fil"
+               placeholder="Søg efter projekt, mappe eller fil …" autocomplete="off" autocapitalize="off"
+               spellcheck="false" autofocus>
+        <button id="clear" class="search__clear" type="button" tabindex="-1" title="Ryd søgningen (Esc)" aria-label="Ryd søgningen" hidden>
+          <svg class="icon" aria-hidden="true"><use href="#i-close"/></svg>
+        </button>
+      </div>
+      <button id="pill" class="pill" type="button" data-tone="muted" title="Placeringer">
+        <span class="pill__dot" aria-hidden="true"></span><span class="pill__text">Forbinder …</span>
+      </button>
+      <button id="settings-button" class="btn btn--ghost top__settings" type="button" aria-controls="settings"
+              aria-expanded="false" aria-label="Indstillinger" title="Indstillinger (Ctrl+,)">
+        <svg class="icon" aria-hidden="true"><use href="#i-gear"/></svg><span class="top__settings-label">Indstillinger</span>
+      </button>
+      <div id="loadbar" class="loadbar" hidden></div>
+    </header>
+
+    <div class="stage">
+      <div class="filters" role="toolbar" aria-label="Filtre">
+        <div class="seg" role="radiogroup" aria-label="Vis">
+          <button type="button" role="radio" class="seg__item" data-kind="all" aria-checked="true" title="Alle (Ctrl+1)">Alle</button>
+          <button type="button" role="radio" class="seg__item" data-kind="project" aria-checked="false" title="Projekter (Ctrl+2)">Projekter</button>
+          <button type="button" role="radio" class="seg__item" data-kind="dir" aria-checked="false" title="Mapper (Ctrl+3)">Mapper</button>
+          <button type="button" role="radio" class="seg__item" data-kind="file" aria-checked="false" title="Filer (Ctrl+4)">Filer</button>
+        </div>
+        <button id="online-only" class="switch-label" type="button" role="switch" aria-checked="false"
+                title="Vis kun resultater fra tilsluttede placeringer">
+          <span class="switch" aria-hidden="true"><span class="switch__thumb"></span></span>Kun online
+        </button>
+        <span class="filters__spacer"></span>
+        <span id="result-count" class="filters__count"></span>
+        <label class="select filters__location">
+          <span class="sr-only">Placering</span>
+          <select id="location"><option value="">Alle placeringer</option></select>
+          <svg class="icon select__chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+        </label>
+      </div>
+
+      <section id="resolve" class="resolve" aria-label="DaVinci Resolve" hidden></section>
+      <div id="cards" class="cards"></div>
+
+      <main class="main">
+        <div id="results" class="results" role="listbox" aria-label="Resultater"></div>
+        <div id="empty" class="empty" hidden></div>
+      </main>
+
+      <section id="settings" class="settings" aria-label="Indstillinger" hidden>
+        <div class="settings__head">
+          <h2 class="settings__title">Indstillinger</h2>
+          <div class="tabs" role="tablist" aria-label="Indstillinger">
+            <button type="button" role="tab" class="tabs__tab" id="tab-placeringer" data-tab="placeringer" aria-controls="panel-placeringer" aria-selected="true">Placeringer</button>
+            <button type="button" role="tab" class="tabs__tab" id="tab-generelt" data-tab="generelt" aria-controls="panel-generelt" aria-selected="false" tabindex="-1">Generelt</button>
+            <button type="button" role="tab" class="tabs__tab" id="tab-resolve" data-tab="resolve" aria-controls="panel-resolve" aria-selected="false" tabindex="-1">DaVinci Resolve</button>
+          </div>
+          <button id="settings-close" class="btn btn--ghost btn--icon" type="button" title="Luk (Esc)" aria-label="Luk indstillinger">
+            <svg class="icon" aria-hidden="true"><use href="#i-close"/></svg>
+          </button>
+        </div>
+
+        <div class="settings__body">
+          <div id="panel-placeringer" class="tabpanel" role="tabpanel" aria-labelledby="tab-placeringer">
+            <div class="panel-intro">
+              <p id="sources-summary" class="panel-intro__text"></p>
+              <button id="scan-all" class="btn btn--secondary" type="button">
+                <svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg>Scan alle nu
+              </button>
+            </div>
+            <div id="source-groups" class="source-groups"></div>
+
+            <div class="settings-grid">
+              <section class="box" aria-labelledby="hosts-title">
+                <h3 id="hosts-title" class="box__title">Tilføj computer</h3>
+                <p class="box__hint">Delte mapper på computeren findes og medtages automatisk.</p>
+                <form id="host-form" class="inline-form" autocomplete="off">
+                  <input id="host-input" class="field" type="text" placeholder="Computernavn, fx GRAFIK-PC" aria-label="Computernavn" spellcheck="false">
+                  <button class="btn btn--secondary" type="submit"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Tilføj</button>
+                </form>
+                <p id="host-error" class="form-error" role="alert" hidden></p>
+              </section>
+
+              <section class="box" aria-labelledby="roots-title">
+                <h3 id="roots-title" class="box__title">Tilføjede mapper</h3>
+                <p class="box__hint">Mapper, der altid medtages – lokale stier eller netværksstier.</p>
+                <ul id="root-list" class="plain-list"></ul>
+                <form id="root-form" class="inline-form" autocomplete="off">
+                  <input id="root-input" class="field" type="text" placeholder="Sti, fx D:\Arkiv eller \\GRAFIK-PC\Arkiv" aria-label="Sti til mappe" spellcheck="false">
+                  <button class="btn btn--secondary" type="submit"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>Tilføj</button>
+                </form>
+                <p id="root-error" class="form-error" role="alert" hidden></p>
+              </section>
+            </div>
+          </div>
+
+          <div id="panel-generelt" class="tabpanel" role="tabpanel" aria-labelledby="tab-generelt" hidden>
+            <section class="box" aria-labelledby="hotkey-title">
+              <h3 id="hotkey-title" class="box__title">Genvejstast</h3>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-hotkey-enabled">Global genvejstast</span>
+                  <span class="setting__hint" id="hotkey-state"></span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="hotkey_enabled" aria-checked="false" aria-labelledby="lbl-hotkey-enabled"><span class="switch__thumb"></span></button>
+              </div>
+              <form id="hotkey-form" class="setting setting--form" autocomplete="off">
+                <div class="setting__text">
+                  <label class="setting__label" for="hotkey-input">Tastekombination</label>
+                  <span class="setting__hint">Skriv fx <code>shift+space</code>, <code>ctrl+alt+p</code> eller <code>ctrl+shift+f12</code></span>
+                </div>
+                <div class="inline-form">
+                  <input id="hotkey-input" class="field field--mono" type="text" spellcheck="false" aria-describedby="hotkey-error">
+                  <button class="btn btn--secondary" type="submit">Gem</button>
+                </div>
+              </form>
+              <p id="hotkey-error" class="form-error" role="alert" hidden></p>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-passthrough">Lad DaVinci Resolve beholde Shift+Mellemrum (tryk to gange hurtigt for Projektsøg)</span>
+                  <span class="setting__hint">Resolve bruger selv Shift+Mellemrum til effektsøgning.</span>
+                </div>
+                <button type="button" role="switch" class="switch" id="passthrough-switch" aria-checked="false" aria-labelledby="lbl-passthrough"><span class="switch__thumb"></span></button>
+              </div>
+            </section>
+
+            <section class="box" aria-labelledby="behaviour-title">
+              <h3 id="behaviour-title" class="box__title">Søgning og vindue</h3>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-hide">Skjul Projektsøg efter åbning</span>
+                  <span class="setting__hint">Vinduet forsvinder, når en mappe eller fil er åbnet.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="hide_after_open" aria-checked="false" aria-labelledby="lbl-hide"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-offline">Vis resultater fra offline placeringer</span>
+                  <span class="setting__hint">Frakoblede diske og computere, der ikke svarer, vises nedtonet.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="show_offline" aria-checked="false" aria-labelledby="lbl-offline"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-login">Start med Windows</span>
+                  <span class="setting__hint">Projektsøg starter i baggrunden, når du logger på.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="run_at_login" aria-checked="false" aria-labelledby="lbl-login"><span class="switch__thumb"></span></button>
+              </div>
+            </section>
+            <p id="about" class="about"></p>
+          </div>
+
+          <div id="panel-resolve" class="tabpanel" role="tabpanel" aria-labelledby="tab-resolve" hidden>
+            <section class="box" aria-labelledby="resolve-title">
+              <h3 id="resolve-title" class="box__title">DaVinci Resolve</h3>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-resolve">Vis projektmappen for det åbne Resolve-projekt</span>
+                  <span class="setting__hint" id="resolve-connection"></span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="resolve_enabled" aria-checked="false" aria-labelledby="lbl-resolve"><span class="switch__thumb"></span></button>
+              </div>
+            </section>
+            <section class="box" aria-labelledby="follow-title">
+              <h3 id="follow-title" class="box__title">Når du skifter projekt i Resolve</h3>
+              <div class="choices" role="radiogroup" aria-labelledby="follow-title">
+                <button type="button" role="radio" class="choice" data-follow="off" aria-checked="false">
+                  <span class="choice__radio" aria-hidden="true"></span>
+                  <span class="choice__text"><span class="choice__label">Fra</span><span class="choice__hint">Projektsøg gør ingenting af sig selv.</span></span>
+                </button>
+                <button type="button" role="radio" class="choice" data-follow="notify" aria-checked="false">
+                  <span class="choice__radio" aria-hidden="true"></span>
+                  <span class="choice__text"><span class="choice__label">Vis besked</span><span class="choice__hint">En diskret besked viser, hvor projektmappen ligger.</span></span>
+                </button>
+                <button type="button" role="radio" class="choice" data-follow="open" aria-checked="false">
+                  <span class="choice__radio" aria-hidden="true"></span>
+                  <span class="choice__text"><span class="choice__label">Åbn mappe automatisk</span><span class="choice__hint">Projektmappen åbnes i Stifinder i baggrunden, uden at tage fokus.</span></span>
+                </button>
+              </div>
+            </section>
+            <p class="about">Tip: I Resolve finder du også <strong>Workspace ▸ Scripts ▸ Utility ▸ Projektsøg</strong>, som åbner projektmappen direkte.</p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <footer class="foot">
+      <div id="actions" class="foot__actions" aria-label="Handlinger"></div>
+      <div id="hotkey-hint" class="foot__hint"></div>
+    </footer>
+  </div>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+  <div id="announcer" class="sr-only" aria-live="polite"></div>
+</body>
+</html>

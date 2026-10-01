@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Local runtime data never lives in the repo (it is in %LOCALAPPDATA%\Projektsog),
+# but keep stray copies out just in case.
+*.db
+*.db-wal
+*.db-shm
+*.log
+instance.json
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
