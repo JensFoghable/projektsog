@@ -116,11 +116,20 @@ class StaticUiTests(unittest.TestCase):
         self.assertIn("init.headers['X-Projektsog'] = '1'", self.js)
         self.assertNotIn("console.log", self.js)
         self.assertNotIn("debugger", self.js)
-        self.assertNotIn("localStorage", self.js)
+        # Settings live in the app's config, never in browser storage. The one exception is a
+        # cached copy of the theme, read before the first paint so the window never flashes.
+        uses = re.findall(r"localStorage\.\w+\(([^)]*)\)", self.js)
+        self.assertTrue(uses)
+        for args in uses:
+            self.assertTrue(args.startswith("'projektsog.theme'"), args)
+        self.assertEqual(self.js.count("localStorage"), len(uses))
 
     def test_dark_default_with_light_override(self) -> None:
         self.assertRegex(self.css, r":root \{\s*color-scheme: dark;")
-        self.assertIn("@media (prefers-color-scheme: light)", self.css)
+        # Light only on request (the "theme" setting, applied by app.js) – never just because
+        # Windows is in light mode.
+        self.assertRegex(self.css, r':root\[data-theme="light"\] \{\s*color-scheme: light;')
+        self.assertNotIn("prefers-color-scheme", self.css)
         self.assertIn("@media (prefers-reduced-motion: reduce)", self.css)
 
 

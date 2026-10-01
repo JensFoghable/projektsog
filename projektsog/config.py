@@ -29,6 +29,7 @@ DEFAULTS: dict[str, Any] = {
     "hide_after_open": True,            # hide the search window after opening a folder
     "show_offline": True,               # include results from disconnected drives/shares
     "result_limit": 200,
+    "theme": "dark",                    # "dark" | "light" | "system" (follow Windows)
     # --- Global hotkey -----------------------------------------------------------------
     "hotkey": "shift+space",
     "hotkey_enabled": True,
@@ -112,6 +113,7 @@ DEFAULTS: dict[str, Any] = {
 }
 
 VALID_RESOLVE_FOLLOW = ("off", "notify", "open")
+VALID_THEMES = ("dark", "light", "system")
 
 
 # --------------------------------------------------------------------------------------
@@ -271,6 +273,8 @@ def validate(changes: dict[str, Any]) -> dict[str, Any]:
             value = [v.strip() for v in value if v.strip()]
         if key == "resolve_follow" and value not in VALID_RESOLVE_FOLLOW:
             raise ValueError("resolve_follow skal være off, notify eller open")
+        if key == "theme" and value not in VALID_THEMES:
+            raise ValueError("theme skal være dark, light eller system")
         if key == "port" and not (1024 <= value <= 65535):
             raise ValueError("port skal være mellem 1024 og 65535")
         out[key] = value

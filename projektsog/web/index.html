@@ -4,9 +4,20 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
-  <meta name="theme-color" content="#fbfaf9" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#1a1918">
+  <meta name="theme-color" id="theme-color" content="#1a1918">
   <title>Projektsøg</title>
+  <script>
+    // Apply the last used theme before the first paint (app.js keeps it in sync with the
+    // "theme" setting), so a light-theme user never sees a dark flash and vice versa.
+    try {
+      var t = localStorage.getItem('projektsog.theme');
+      if (t === 'system') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      if (t === 'light') {
+        document.documentElement.dataset.theme = 'light';
+        document.getElementById('theme-color').content = '#fbfaf9';
+      }
+    } catch (e) { /* storage unavailable: stay dark */ }
+  </script>
   <link rel="icon" href="/assets/icon.png">
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
@@ -169,6 +180,24 @@
               </div>
             </section>
 
+            <section class="box" aria-labelledby="theme-title">
+              <h3 id="theme-title" class="box__title">Udseende</h3>
+              <div class="choices" id="theme-choices" role="radiogroup" aria-labelledby="theme-title">
+                <button type="button" role="radio" class="choice" data-theme-choice="dark" aria-checked="false">
+                  <span class="choice__radio" aria-hidden="true"></span>
+                  <span class="choice__text"><span class="choice__label">Mørkt</span><span class="choice__hint">Mørk baggrund – skåner øjnene i et mørkt klipperum.</span></span>
+                </button>
+                <button type="button" role="radio" class="choice" data-theme-choice="light" aria-checked="false">
+                  <span class="choice__radio" aria-hidden="true"></span>
+                  <span class="choice__text"><span class="choice__label">Lyst</span><span class="choice__hint">Lys baggrund.</span></span>
+                </button>
+                <button type="button" role="radio" class="choice" data-theme-choice="system" aria-checked="false">
+                  <span class="choice__radio" aria-hidden="true"></span>
+                  <span class="choice__text"><span class="choice__label">Følg Windows</span><span class="choice__hint">Skifter sammen med Windows' lyse eller mørke tema.</span></span>
+                </button>
+              </div>
+            </section>
+
             <section class="box" aria-labelledby="behaviour-title">
               <h3 id="behaviour-title" class="box__title">Søgning og vindue</h3>
               <div class="setting">
@@ -209,7 +238,7 @@
             </section>
             <section class="box" aria-labelledby="follow-title">
               <h3 id="follow-title" class="box__title">Når du skifter projekt i Resolve</h3>
-              <div class="choices" role="radiogroup" aria-labelledby="follow-title">
+              <div class="choices" id="follow-choices" role="radiogroup" aria-labelledby="follow-title">
                 <button type="button" role="radio" class="choice" data-follow="off" aria-checked="false">
                   <span class="choice__radio" aria-hidden="true"></span>
                   <span class="choice__text"><span class="choice__label">Fra</span><span class="choice__hint">Projektsøg gør ingenting af sig selv.</span></span>

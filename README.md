@@ -166,6 +166,7 @@ automatisk), **Start med Windows** og **Afslut**. Et venstreklik åbner vinduet.
   (@, €, { } osv.).
 - **Global genvejstast** – slå genvejen helt fra.
 - **Lad DaVinci Resolve beholde Shift+Mellemrum** – se afsnittet om Resolve.
+- **Udseende** – **Mørkt** (standard), **Lyst** eller **Følg Windows**.
 - **Skjul efter åbning** – skjul Projektsøg, når en mappe er åbnet (standard: til).
 - **Vis offline** – vis resultater fra frakoblede diske og slukkede pc'er (standard: til).
 - **Start med Windows**.

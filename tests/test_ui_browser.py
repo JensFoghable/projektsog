@@ -1150,6 +1150,38 @@ class SettingsTests(UiCase):
         self.assertEqual(self.wait_request("/api/settings", count=5)["body"], {"resolve_follow": "open"})
         self.wait("document.querySelector('[data-follow=open]').getAttribute('aria-checked') === 'true'")
 
+    def test_theme_is_dark_by_default_and_follows_the_setting(self) -> None:
+        # Dark even when Windows is light: the default "theme" setting is "dark".
+        self.page.color_scheme("light")
+        checked = "document.querySelector('[data-theme-choice={}]').getAttribute('aria-checked') === 'true'"
+        self.open(ready="!document.querySelector('#panel-generelt').hidden && " + checked.format("dark"),
+                  panel="settings", tab="generelt")
+        self.assertIsNone(self.js("document.documentElement.dataset.theme ?? null"))
+        self.assertEqual(self.js("document.querySelector('#theme-color').content"), "#1a1918")
+
+        self.page.click("[data-theme-choice=light]")
+        self.assertEqual(self.wait_request("/api/settings")["body"], {"theme": "light"})
+        self.wait("document.documentElement.dataset.theme === 'light' && " + checked.format("light"))
+        self.assertEqual(self.js("document.querySelector('#theme-color').content"), "#fbfaf9")
+        # Remembered for the next start, so the page is painted light before the settings load.
+        self.assertEqual(self.js("localStorage.getItem('projektsog.theme')"), "light")
+        self.open(ready="document.readyState !== 'loading'")
+        self.assertEqual(self.js("document.documentElement.dataset.theme"), "light")
+
+        # "Følg Windows" switches along with the system scheme.
+        self.open(ready=checked.format("light"), panel="settings", tab="generelt")
+        self.page.click("[data-theme-choice=system]")
+        self.assertEqual(self.wait_request("/api/settings", count=2)["body"], {"theme": "system"})
+        self.wait("document.documentElement.dataset.theme === 'light'")
+        self.page.color_scheme("dark")
+        self.wait("!document.documentElement.dataset.theme")
+
+        self.page.click("[data-theme-choice=dark]")
+        self.assertEqual(self.wait_request("/api/settings", count=3)["body"], {"theme": "dark"})
+        self.page.color_scheme("light")
+        time.sleep(0.2)
+        self.assertIsNone(self.js("document.documentElement.dataset.theme ?? null"))
+
     def test_locations_modes_forget_hosts_and_roots(self) -> None:
         self.open(ready="document.querySelectorAll('.src').length >= 12", panel="settings")
         self.page.click(f"{self.GRAFIK} .sg__more-head")  # "Ikke medtaget (1)"

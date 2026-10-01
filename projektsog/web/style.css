@@ -1,4 +1,5 @@
-/* Projektsøg – search window. Dark by default; light when the OS asks for it. */
+/* Projektsøg – search window. Dark by default; light when <html data-theme="light"> (set by
+   app.js from the "theme" setting: dark, light or follow Windows). */
 
 :root {
   color-scheme: dark;
@@ -37,36 +38,34 @@
   --gutter: 20px;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color-scheme: light;
-    --bg: #f6f5f3;
-    --bg-elev: #fbfaf9;
-    --surface: #ffffff;
-    --surface-2: #f0eeeb;
-    --surface-3: #e5e1dc;
-    --hover: rgba(60, 40, 20, 0.035);
-    --sel: #f1e9e0;
-    --line: rgba(60, 40, 20, 0.09);
-    --line-strong: rgba(60, 40, 20, 0.15);
-    --text: #1d1b19;
-    --text-2: #57524c;
-    --text-3: #8a837b;
-    --accent: #c4610c;
-    --accent-strong: #a9520a;
-    --accent-ink: #ffffff;
-    --accent-soft: rgba(196, 97, 12, 0.1);
-    --mark: rgba(240, 150, 60, 0.26);
-    --ok: #1d9a55;
-    --warn: #a86d10;
-    --warn-soft: rgba(210, 150, 40, 0.12);
-    --danger: #cc4338;
-    --danger-soft: rgba(204, 67, 56, 0.1);
-    --shadow: 0 18px 40px rgba(40, 30, 20, 0.16), 0 2px 6px rgba(40, 30, 20, 0.08);
-    --tile-alpha: 0.14;
-    --tile-l: 42%;
-    --chip-bg: rgba(60, 40, 20, 0.045);
-  }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f5f3;
+  --bg-elev: #fbfaf9;
+  --surface: #ffffff;
+  --surface-2: #f0eeeb;
+  --surface-3: #e5e1dc;
+  --hover: rgba(60, 40, 20, 0.035);
+  --sel: #f1e9e0;
+  --line: rgba(60, 40, 20, 0.09);
+  --line-strong: rgba(60, 40, 20, 0.15);
+  --text: #1d1b19;
+  --text-2: #57524c;
+  --text-3: #8a837b;
+  --accent: #c4610c;
+  --accent-strong: #a9520a;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(196, 97, 12, 0.1);
+  --mark: rgba(240, 150, 60, 0.26);
+  --ok: #1d9a55;
+  --warn: #a86d10;
+  --warn-soft: rgba(210, 150, 40, 0.12);
+  --danger: #cc4338;
+  --danger-soft: rgba(204, 67, 56, 0.1);
+  --shadow: 0 18px 40px rgba(40, 30, 20, 0.16), 0 2px 6px rgba(40, 30, 20, 0.08);
+  --tile-alpha: 0.14;
+  --tile-l: 42%;
+  --chip-bg: rgba(60, 40, 20, 0.045);
 }
 
 /* ---------------------------------------------------------------- base */

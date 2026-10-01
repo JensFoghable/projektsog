@@ -2182,6 +2182,12 @@
       choice.setAttribute('aria-checked', String(checked));
       choice.tabIndex = checked ? 0 : -1;
     }
+    const theme = THEMES.includes(s.theme) ? s.theme : 'dark';
+    for (const choice of el.settings.querySelectorAll('[data-theme-choice]')) {
+      const checked = choice.dataset.themeChoice === theme;
+      choice.setAttribute('aria-checked', String(checked));
+      choice.tabIndex = checked ? 0 : -1;
+    }
     if (document.activeElement !== el.hotkeyInput && !state.hotkeyDirty) el.hotkeyInput.value = s.hotkey || '';
     const hk = state.hotkey;
     const label = (hk && hk.label) || 'Shift+Mellemrum';
@@ -2222,10 +2228,41 @@
     }
   }
 
+  // ---------------------------------------------------------------- theme
+
+  const THEME_COLORS = { dark: '#1a1918', light: '#fbfaf9' };
+  const THEMES = ['dark', 'light', 'system'];
+  const systemLight = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
+
+  /** "dark" | "light" for a theme setting ("dark", "light" or "system" = follow Windows). */
+  function effectiveTheme(setting) {
+    if (setting === 'light') return 'light';
+    if (setting === 'system') return systemLight && systemLight.matches ? 'light' : 'dark';
+    return 'dark';
+  }
+
+  function applyTheme(setting) {
+    const theme = THEMES.includes(setting) ? setting : 'dark';
+    const effective = effectiveTheme(theme);
+    if (effective === 'light') document.documentElement.dataset.theme = 'light';
+    else delete document.documentElement.dataset.theme;
+    const meta = document.getElementById('theme-color');
+    if (meta) meta.content = THEME_COLORS[effective];
+    try {
+      localStorage.setItem('projektsog.theme', theme);   // read by index.html before first paint
+    } catch (err) { /* storage unavailable: the setting still applies for this session */ }
+  }
+
+  function chooseTheme(theme) {
+    applyTheme(theme);   // instant feedback; the server's answer re-applies the saved value
+    saveSettings({ theme });
+  }
+
   function applySettings(settings) {
     if (!settings) return;
     const previous = state.settings;
     state.settings = settings;
+    applyTheme(settings.theme);
     renderFilters();
     renderSettingControls();
     if (state.settingsOpen) renderSourcesPanel();
@@ -2788,6 +2825,11 @@
         saveSettings({ resolve_follow: follow.dataset.follow });
         return;
       }
+      const themeChoice = event.target.closest('[data-theme-choice]');
+      if (themeChoice) {
+        chooseTheme(themeChoice.dataset.themeChoice);
+        return;
+      }
       if (event.target.closest('#passthrough-switch')) {
         const keep = !hasResolvePassthrough(state.settings && state.settings.hotkey_passthrough_apps);
         el.passthrough.setAttribute('aria-checked', String(keep));
@@ -2819,8 +2861,16 @@
       const root = event.target.closest('[data-remove-root]');
       if (root) removeRoot(root.dataset.removeRoot);
     });
-    el.settings.querySelector('.choices').addEventListener('keydown', (event) => onRovingKeys(event,
+    el.settings.querySelector('#follow-choices').addEventListener('keydown', (event) => onRovingKeys(event,
       [...el.settings.querySelectorAll('[data-follow]')], (choice) => saveSettings({ resolve_follow: choice.dataset.follow })));
+    el.settings.querySelector('#theme-choices').addEventListener('keydown', (event) => onRovingKeys(event,
+      [...el.settings.querySelectorAll('[data-theme-choice]')], (choice) => chooseTheme(choice.dataset.themeChoice)));
+    if (systemLight) {
+      // "Følg Windows": switch along with Windows' light/dark setting while the window is open.
+      systemLight.addEventListener('change', () => {
+        if (state.settings && state.settings.theme === 'system') applyTheme('system');
+      });
+    }
     el.sourceGroups.addEventListener('change', (event) => {
       const select = event.target.closest('select[data-source-mode]');
       if (select) setSourceMode(Number(select.dataset.sourceMode), select.value);
