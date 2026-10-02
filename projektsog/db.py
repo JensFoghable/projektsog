@@ -753,6 +753,18 @@ def child_dir_names(conn: sqlite3.Connection, source_id: int, rel_path: str,
         "ORDER BY name COLLATE NOCASE LIMIT ?", (source_id, rel_path, limit))]
 
 
+def files_named(conn: sqlite3.Connection, folded_names: Collection[str]) -> list[sqlite3.Row]:
+    """Files whose ``name_fold`` is one of ``folded_names`` (e.g. the clips of a camera card)."""
+    names = list(dict.fromkeys(folded_names))
+    rows: list[sqlite3.Row] = []
+    cur = _row_cursor(conn)
+    for i in range(0, len(names), 500):
+        chunk = names[i:i + 500]
+        rows += cur.execute(f"SELECT {ROW_COLUMNS} FROM entries WHERE kind = ? AND name_fold IN "
+                            f"({', '.join('?' * len(chunk))})", [KIND_FILE, *chunk]).fetchall()
+    return rows
+
+
 def template_prefixes(conn: sqlite3.Connection) -> dict[int, tuple[str, ...]]:
     """``{source_id: (template_rel + "\\", …)}`` for hiding template subtrees."""
     out: dict[int, list[str]] = {}

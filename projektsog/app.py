@@ -39,6 +39,11 @@ from .hotkey import HotkeyManager
 from .indexer import Indexer
 from .resolve_bridge import ResolveBridge
 from .server import HOST, Server
+from .importer import Importer
+from .messages import MessageBoard
+from .petplay import PetPlay, window_shown
+from .widget import PetWindow
+from .timetrack import TimeTracker
 from .tray import TrayIcon
 from .window import AppWindow
 
@@ -75,7 +80,7 @@ _OPEN_FAILED = {
     "file": "Filen kunne ikke åbnes – tryk Enter for at vise den i mappen",
 }
 # Share of the exit deadline each step may use, in the order of SPEC §13.
-_EXIT_SHARES = {"hotkey": 0.15, "tray": 0.15, "resolve": 0.15, "indexer": 0.35,
+_EXIT_SHARES = {"hotkey": 0.10, "tray": 0.15, "import": 0.05, "time": 0.05, "resolve": 0.10, "indexer": 0.35,
                 "server": 0.10, "window": 0.10}
 # Config keys that concern the global hotkey -> HotkeyManager keyword.
 _HOTKEY_OPTIONS = {
@@ -604,9 +609,14 @@ class Components:
     config: Callable[[], Config] = Config
     indexer: Callable[[Config, EventBus], Indexer] = Indexer
     bridge: Callable[[Config, EventBus, Indexer], ResolveBridge] = ResolveBridge
+    tracker: Callable[..., TimeTracker] = TimeTracker
+    importer: Callable[..., Importer] = Importer
     controller: Callable[..., Controller] = Controller
     server: Callable[..., Server] = Server
     window: Callable[[str, str], AppWindow] = AppWindow
+    widget: Callable[..., PetWindow] = PetWindow
+    petplay: Callable[..., PetPlay] = PetPlay
+    messages: Callable[..., MessageBoard] = MessageBoard
     tray: Callable[..., TrayIcon] = TrayIcon
     hotkeys: Callable[..., HotkeyManager] = HotkeyManager
 
@@ -678,9 +688,14 @@ class App:
         self.bus: EventBus | None = None
         self.indexer: Indexer | None = None
         self.bridge: ResolveBridge | None = None
+        self.tracker: TimeTracker | None = None
+        self.importer: Importer | None = None
         self.controller: Controller | None = None
         self.server: Server | None = None
         self.window: AppWindow | None = None
+        self.widget: PetWindow | None = None
+        self.petplay: PetPlay | None = None
+        self.messages: MessageBoard | None = None
         self.tray: TrayIcon | None = None
         self._actions: _ActionRunner | None = None
         self._notify_queue: queue.Queue | None = None
@@ -725,21 +740,37 @@ class App:
             self.indexer.scan_now(None, full=True)
         self.bridge = c.bridge(cfg, bus, self.indexer)
         self.bridge.start()
+        self.tracker = c.tracker(cfg, self.bridge)
+        self.tracker.start()
         self.controller = c.controller(cfg, bus, self.indexer, self.bridge,
                                        request_exit=self.request_exit)
+        self.importer = c.importer(cfg, bus, self.indexer, self.bridge, self.tracker, self.controller)
         self.server = c.server(cfg, bus, self.indexer, self.bridge, self.controller,
-                               parse_hotkey=hotkey.parse_hotkey)
+                               parse_hotkey=hotkey.parse_hotkey, tracker=self.tracker,
+                               importer=self.importer)
+        # Messages from other programs (the Claude sessions' Resolve queue), shown by Klippe.
+        self.messages = c.messages(cfg, bus, shown=self._klippe_shown)
+        self.server.messages = self.messages
         port = self.server.start(args.port)
         self._instance_file = config.instance_path()
         write_instance_file(self._instance_file, os.getpid(), port)
         if with_ui:
             self.window = c.window(f"http://{HOST}:{port}/", config.edge_profile_dir())
             self.controller.window = self.window
+            # Klippe, the pet widget: its own small window, shown while widget_enabled is on –
+            # and its games with the mouse pointer when nobody is at the PC (petplay.py).
+            self.widget = c.widget(cfg, f"http://{HOST}:{port}/widget.html")
+            self.petplay = c.petplay(cfg, bus, widget=self.widget, bridge=self.bridge,
+                                     importer=self.importer, base_url=f"http://{HOST}:{port}")
+            self.server.petplay = self.petplay
+            self.widget.start()
+            self.petplay.start()
             self._start_tray()
             self._spawn(self._forward_notifications, "notify-forwarder")
             self._hotkey_settings = _hotkey_settings(cfg.snapshot())
             if self._hotkey_settings["hotkey_enabled"]:
                 self._start_hotkeys(self._hotkey_settings)
+        self.importer.start()      # camera cards: a card going in may show the window
         self._spawn(self._maintenance_loop, "app-maintenance")
         if with_ui:
             if args.background:
@@ -747,6 +778,13 @@ class App:
             else:
                 self._actions.submit(self.controller.show_window, reason="launch")
         log.info("%s %s running on port %d", APP_NAME, __version__, port)
+
+    def _klippe_shown(self) -> bool:
+        """Klippe is on the screen (it shows messages with their buttons)."""
+        widget = self.widget
+        hwnd = getattr(widget, "hwnd", None) if widget is not None else None
+        return bool(self.cfg is not None and self.cfg.get("widget_enabled", False)
+                    and hwnd and window_shown(hwnd))
 
     def request_exit(self) -> None:
         """"Afslut" / /api/quit: only signals; the main thread runs the exit sequence."""
@@ -781,6 +819,10 @@ class App:
             steps["hotkey"] = self._stop_hotkeys
         if self.tray is not None:
             steps["tray"] = self.tray.stop
+        if self.importer is not None:
+            steps["import"] = self.importer.stop   # cancels a running copy (removes its temp file)
+        if self.tracker is not None:
+            steps["time"] = self.tracker.stop   # closes the running stretch before Resolve stops
         if self.bridge is not None:
             steps["resolve"] = self.bridge.stop
         if self.indexer is not None:
@@ -788,8 +830,10 @@ class App:
             steps["indexer"] = lambda: indexer.stop(timeout=worker_timeout)
         if self.server is not None:
             steps["server"] = self.server.stop
-        if self.window is not None:
-            steps["window"] = self.window.close
+        # A game ends first: the helper puts the pointer back where it was.
+        windows = [w.close for w in (self.petplay, self.widget, self.window) if w is not None]
+        if windows:
+            steps["window"] = lambda: [close() for close in windows]
         for name, budget in budgets.items():
             if name in steps:
                 _run_bounded(name, steps[name], min(budget, deadline - time.monotonic()))

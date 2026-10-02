@@ -20,10 +20,17 @@ Stifinder.
   Projektsøg fortæller, hvilken disk du skal tilslutte, eller hvilken pc der skal tændes.
 - **DaVinci Resolve**: viser, hvor det åbne projekts optagelser ligger, og åbner mappen med ét
   klik – også direkte fra Resolves menu.
+- **Tidsregistrering til fakturering**: tæller automatisk, hvor længe du arbejder på hvert
+  Resolve-projekt – fordelt på Edit, Color, Fusion osv. – og eksporterer til Excel.
 - **Kører diskret i baggrunden** med et ikon i meddelelsesområdet (ved uret). Scanning sker med
   lav prioritet, så den ikke forstyrrer afspilning i Resolve.
-- **Læser kun.** Projektsøg ændrer, flytter eller sletter aldrig noget i dine mapper, diske eller
-  delte mapper – den læser kun navne, størrelser og datoer.
+- **Import af kort**: sæt et kort fra FX9, FS7, A7S, DJI eller GoPro i, og Projektsøg foreslår
+  projektmappen (eller opretter et nyt projekt ud fra skabelonen), kopierer klippene til
+  `Klip\FX9` osv. og kontrollerer hver kopi.
+- **Ændrer aldrig dine filer.** Søgningen læser kun navne, størrelser og datoer. Kun når du selv
+  importerer et kort eller opretter et projekt, laver Projektsøg nye mapper og kopierer nye filer –
+  den overskriver aldrig noget, og den sletter kun fra kortet, når du vælger **Klip** (og først
+  når alt er kontrolleret).
 
 ## Krav
 
@@ -174,6 +181,121 @@ automatisk), **Start med Windows** og **Afslut**. Et venstreklik åbner vinduet.
 **DaVinci Resolve** – slå integrationen til/fra, og vælg hvad der skal ske, når du åbner et
 andet projekt i Resolve: **Fra**, **Vis besked** eller **Åbn mappe automatisk**.
 
+**Tid** – se afsnittet om tidsregistrering. **Import** – se afsnittet om import af kort.
+
+## Klippe – kæledyret
+
+Slå **Klippe** til under **Indstillinger ▸ Generelt**, så bor der et lille klaptræ-kæledyr i et
+smalt vindue nederst i højre side af skærm 2 (eller hovedskærmen, hvis der kun er én). Det ligger
+altid øverst, og du kan trække det hen, hvor du vil – Projektsøg husker stedet. Luk det med X for
+at slå det fra igen.
+
+- **Humør:** glad og travl, mens du klipper; kigger utålmodigt rundt, når du er i et andet
+  program (tiden tæller stadig); søvnig i lange pauser; sover, når Resolve er lukket.
+- **Tøj efter siden:** solbriller på Color, troldmandshat på Fusion, høretelefoner på Fairlight
+  og musiksider, kasket på Deliver.
+- **Fester:** konfetti for hver hele time i dag, fyrværkeri når **dagens mål** er nået (standard
+  6 timer), stjerner for 25/50/90 minutters fokus i træk, fest når et kort er overført eller
+  tømt – og en venlig påmindelse om en pause efter 90 minutter i træk.
+- **Vokser:** fra æg til baby, junior, pro og legende med al den tid, du har registreret, og viser
+  🔥 dage i træk med mindst en times arbejde. Klik på den, så bliver den glad.
+
+**Beskeder:** Når en Claude-session vil bruge Resolve, er færdig eller venter på dig, kommer
+beskeden op nede ved Klippe med knapperne (f.eks. **Byg nu**) og en lille lyd – den tager ikke
+fokus fra Resolve, og den kommer aldrig ind i søgevinduet. Der vises én besked ad gangen; er der
+flere, bladrer du med ‹ ›, og det, der venter på dit svar, kommer forrest. En session, der bare er
+færdig og ikke skal have svar, kommer stille: ingen lyd, kun en lille linje „📬 1 besked · vis".
+× lukker en besked. Er Klippe slået fra, viser køen sin egen Windows-besked i stedet.
+
+Navn og dagens mål kan ændres samme sted. Klippe kører i sit eget lille vindue og tager aldrig
+fokus fra Resolve.
+
+**Klippe leger:** Når hverken mus eller tastatur er rørt i 5 minutter (kan ændres), kan Klippe
+bryde ud af boksen og lege med musen på sin skærm: ride på den, flyve med den, kaste den rundt –
+og så lægge den tilbage præcis, hvor den lå, og flyve hjem. Rører du musen eller tastaturet,
+stopper legen med det samme, og musen er tilbage, hvor du slap den. Klippe klikker aldrig.
+Babyen leger i hver pause, en junior hver anden, en pro sjældent – et æg aldrig. Der leges højst
+én gang pr. pause og aldrig under afspilning i Resolve, mens et kort overføres, i fuld skærm eller
+på en låst skærm (en render er fin). Slå det fra med **Klippe må lege med musen i pauser**, eller
+prøv det med **Vis legen nu**.
+
+## Import af kort
+
+Sæt kortet fra kameraet i kortlæseren. Projektsøg kommer frem med fanen **Import** (eller viser
+en besked ved uret, hvis du har slået det fra), og kortet vises også øverst i søgevinduet.
+
+1. **Kortet**: Projektsøg kan se, hvilket kamera det er fra (FX9, FS7, A7S, DJI, GoPro – læst i
+   klippenes egne filer), hvor mange klip, hvor meget det fylder, og hvornår der er optaget.
+   Den ser også efter, om klippene allerede ligger i et projekt (samme navn *og* størrelse – FX9'ens
+   tæller starter forfra, så navnet alene er ikke nok).
+2. **Hvor skal klippene hen?** Øverst står forslagene: projektet, hvor nogle af kortets klip
+   allerede ligger, projektet der er åbent i DaVinci Resolve, projekter du har arbejdet på i dag,
+   og projekter du lige har oprettet. Du kan også søge efter et andet projekt eller vælge
+   **Nyt projekt**: skriv navnet (`Kunde 2026\Projekt` lægger det i en kundemappe), og vælg en
+   disk. Kun diske med skabelonen `1. KUNDENAVN` vises – med fri plads, og diske, der er for små
+   til kortet, er markeret. Projektmappen laves som en kopi af skabelonen.
+3. Klippene lægges løst i projektets `Klip\FX9`, `Klip\FS7`, `Klip\A7S` eller `Klip\Drone`
+   (kameramappen oprettes, hvis den mangler). Ligger der allerede klip fra en anden optagedag,
+   kan du vælge en ny mappe som `FX9 Dag 2`. Klip, der allerede ligger der, springes over.
+4. **Kopiér og kontrollér**: Projektsøg kopierer, og bagefter læses hver kopi igen fra disken
+   *og* kortets fil igen fra kortet – begge uden om Windows' hukommelse – og alle tre
+   „fingeraftryk" (SHA-1) skal være ens. Så fanges også et kort eller en kortlæser, der læser
+   forkert. Først når kopien er kontrolleret, får den sit rigtige navn – en afbrudt overførsel
+   efterlader aldrig halve klip, og du kan bare starte igen for at fortsætte.
+   Når den er færdig, kan kortet tages ud.
+   **Klip (flyt fra kortet)** virker som Ctrl+X, men med kontrol: intet slettes fra kortet, før
+   *alle* filer er kopieret og kontrolleret og skrevet helt ned på disken, og lige før hver fil
+   slettes, tjekkes det, at kopien stadig er der med samme størrelse, og at filen på kortet er
+   uændret. Går noget galt undervejs, bliver resten på kortet. Klip skal bekræftes med et ekstra
+   klik. Formatér gerne kortet i kameraet før næste optagelse.
+   **Kun opret mappen og åbn i Stifinder** laver mappen og åbner kortet og mappen ved siden af
+   hinanden, hvis du hellere vil kopiere selv.
+
+Sætter du et kort i, hvis filer allerede er overført (alle filer – også XML/BIM – med samme navn
+og størrelse, tjekket på selve disken), siger Projektsøg **„Alle klip er overført til …"** med en
+knap til mappen.
+
+Kun **Klip** ændrer noget på kortet. Importerne huskes i
+`%LOCALAPPDATA%\Projektsog\imports.json`, og hver overførsel skriver en log med navn, størrelse
+og fingeraftryk for hver fil (og hvad der er slettet fra kortet) i
+`%LOCALAPPDATA%\Projektsog\imports\` – også hvis pc'en går ned undervejs. Kameramodel → mappe kan
+ændres i `config.json` (`import_camera_folders`, fx `"ILCE-7SM3=A7S"`).
+
+## Tidsregistrering
+
+Projektsøg tæller selv, hvor lang tid du bruger på hvert projekt i DaVinci Resolve – du skal
+ikke starte eller stoppe noget. Uret øverst i Projektsøg viser dagens tid (rød prik = tiden
+tæller lige nu); klik på det for at åbne fanen **Tid**.
+
+**Hvad tæller med?**
+
+- Tid, mens **DaVinci Resolve er i forgrunden** med et projekt åbent – fordelt på den side, du
+  arbejder på: **Edit, Cut, Color, Fusion, Fairlight, Deliver** …
+- Tid i browseren på **musik- og lydsider** som Artlist, Epidemic Sound og Musicbed – den tæller
+  på det projekt, der er åbent i Resolve, som „Musik/lyd". Listen kan rettes under **Tid**.
+- **Afspilning tæller som arbejde**, også uden at du rører mus og tastatur – dog højst en time
+  ad gangen, så en tidslinje, der kører i loop natten over, ikke tæller.
+
+**Hvad tæller ikke?**
+
+- **Pauser længere end 10 minutter** (kan ændres under **Pause efter**) – de tæller slet ikke.
+  En pause er enten tid uden mus, tastatur eller afspilning, eller tid i et andet program (mail,
+  Stifinder, Projektsøg …). Kortere pauser tæller med: uret kører videre, mens du er i et andet
+  program, og kommer du tilbage til Resolve inden 10 minutter, tæller det hele. Ellers stopper
+  tiden, fra da du forlod Resolve. Uret ved tiden viser en gul prik imens.
+- Rendering alene, når ingen sidder ved maskinen, og Resolves „Untitled Project".
+- Tid mens pc'en sover.
+
+**Rapport og fakturering:** Vælg **I dag**, **Denne uge**, **Sidste måned** osv. (eller egne
+datoer). Tabellen viser tiden pr. projekt og side; **Pr. dag** viser hver dag for sig, og
+**Afrunding** (standard 15 min, opad) giver timerne til fakturaen. **Eksportér til Excel**
+henter en CSV-fil, der åbner direkte i dansk Excel (semikolon, komma som decimaltegn).
+
+Tiden gemmes kun på den pc, hvor der er arbejdet (`%LOCALAPPDATA%\Projektsog\time.db`). Der
+tages ingen skærmbilleder, og der gemmes ingen tastetryk – kun *hvornår* mus eller tastatur
+sidst blev brugt, hvilket vindue der er foran, og hvad Resolve viser. Bruger I det til
+medarbejdere, så fortæl dem det på forhånd.
+
 ## Bærbare diske
 
 - Sæt disken i – Projektsøg opdager den selv inden for få sekunder. Første gang en disk ses,
@@ -188,6 +310,12 @@ andet projekt i Resolve: **Fra**, **Vis besked** eller **Åbn mappe automatisk**
   Indstillinger ▸ Placeringer.
 - **Tip:** Giv dine diske et navn (højreklik på drevet i Stifinder ▸ *Omdøb*). Så bliver
   beskederne tydeligere end „disk uden navn (2 TB, sidst som H:)".
+- **Hukommelseskort** går bare igennem: kamerakort (XDROOT, PRIVATE, DCIM) bliver aldrig
+  placeringer – dem tager **Import** sig af. Andre små kort og USB-nøgler uden projektmapper
+  (f.eks. en lydoptagers MUSIC-mappe) kan søges, mens de sidder i, og glemmes af sig selv et par
+  minutter efter, at de er taget ud. Så hober der sig ikke en ny offline-placering op, hver gang
+  et kort sættes i eller formateres. Diske med projekter, store diske og placeringer, du selv har
+  valgt **Medtag altid** eller **Medtag aldrig** for, bliver stående.
 
 ## DaVinci Resolve
 

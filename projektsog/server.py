@@ -25,9 +25,10 @@ import socketserver
 import sys
 import threading
 from dataclasses import dataclass
+from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any, Callable
-from urllib.parse import parse_qs, unquote
+from urllib.parse import parse_qs, quote, unquote
 
 from . import __version__
 from .config import Config, validate as validate_settings
@@ -37,8 +38,14 @@ if TYPE_CHECKING:
     from .app import Controller
     from .indexer import Indexer
     from .resolve_bridge import ResolveBridge
+    from .importer import Importer
+    from .messages import MessageBoard
+    from .petplay import PetPlay
+    from .timetrack import TimeTracker
 
 log = logging.getLogger(__name__)
+
+MAX_TIME_RANGE_DAYS = 400
 
 HOST = "127.0.0.1"
 PORT_FALLBACKS = 20                 # when the port is taken, try port+1 … port+20
@@ -97,6 +104,14 @@ class _Route:
     handler: Callable[[_Request], Any] | None     # None = the SSE stream (/api/events)
 
 
+@dataclass(frozen=True)
+class _FileResponse:
+    """A handler result sent as a download instead of JSON (the time report export)."""
+    data: bytes
+    content_type: str
+    filename: str
+
+
 class Server:
     """HTTP API + SSE + static UI on 127.0.0.1 (see module docstring)."""
 
@@ -104,13 +119,19 @@ class Server:
                  controller: "Controller", *, web_dir: str | None = None,
                  assets_dir: str | None = None,
                  parse_hotkey: Callable[[str], object] | None = None,
-                 sse_heartbeat_s: float = SSE_HEARTBEAT_S) -> None:
+                 sse_heartbeat_s: float = SSE_HEARTBEAT_S,
+                 tracker: "TimeTracker | None" = None,
+                 importer: "Importer | None" = None) -> None:
         package_dir = os.path.dirname(os.path.abspath(__file__))
         self.cfg = cfg
         self.bus = bus
         self.indexer = indexer
         self.bridge = bridge
         self.controller = controller
+        self.tracker = tracker
+        self.importer = importer
+        self.petplay: "PetPlay | None" = None     # set by the app once the widget exists
+        self.messages: "MessageBoard | None" = None
         self.web_dir = web_dir or os.path.join(package_dir, "web")
         self.assets_dir = assets_dir or os.path.join(package_dir, "assets")
         self.sse_heartbeat_s = sse_heartbeat_s
@@ -245,6 +266,23 @@ class Server:
             ("POST", r"/api/window/hide", self._window_hide),
             ("POST", r"/api/window/show", self._window_show),
             ("POST", r"/api/quit", self._quit),
+            ("GET", r"/api/time", self._time_report),
+            ("GET", r"/api/time/status", self._time_status),
+            ("GET", r"/api/time/export", self._time_export),
+            ("GET", r"/api/import", self._import_state),
+            ("GET", r"/api/import/options", self._import_options),
+            ("GET", r"/api/import/plan", self._import_plan),
+            ("POST", r"/api/import/project", self._import_project),
+            ("POST", r"/api/import/start", self._import_start),
+            ("POST", r"/api/import/cancel", self._import_cancel),
+            ("POST", r"/api/import/dismiss", self._import_dismiss),
+            ("GET", r"/api/widget/play", self._pet_status),
+            ("POST", r"/api/widget/play", self._pet_play),
+            ("POST", r"/api/widget/look", self._pet_look),
+            ("GET", r"/api/messages", self._messages_list),
+            ("POST", r"/api/messages", self._messages_post),
+            ("DELETE", r"/api/messages", self._messages_remove),
+            ("POST", r"/api/messages/click", self._messages_click),
             ("GET", r"/api/events", None),
         ]
         return [_Route(method, re.compile(pattern), handler) for method, pattern, handler in table]
@@ -327,6 +365,92 @@ class Server:
         names = {name: value for name in ("project", "database", "uid")
                  if (value := _body_optional_str(req.body, name)) is not None}
         return self.bridge.open_primary(**names)
+
+    # -- time tracking ---------------------------------------------------------------------
+    def _time_tracker(self) -> "TimeTracker":
+        if self.tracker is None:
+            raise ValueError("Tidsregistrering er ikke tilgængelig")
+        return self.tracker
+
+    def _time_report(self, req: _Request) -> Any:
+        tracker = self._time_tracker()
+        first, last = time_range(req.query)
+        return {"report": tracker.report(first, last), "status": tracker.status()}
+
+    def _time_status(self, req: _Request) -> Any:
+        return self._time_tracker().status()
+
+    def _time_export(self, req: _Request) -> Any:
+        return time_export(self._time_tracker(), req.query)
+
+    # -- import helper (SPEC §17) -------------------------------------------------------------
+    def _import_helper(self) -> "Importer":
+        if self.importer is None:
+            raise ValueError("Import er ikke tilgængelig")
+        return self.importer
+
+    def _import_state(self, req: _Request) -> Any:
+        helper = self._import_helper()
+        return {"cards": helper.cards(), "job": helper.job(), "history": helper.history(8)}
+
+    def _import_options(self, req: _Request) -> Any:
+        return self._import_helper().options(_query_str(req.query, "card"))
+
+    def _import_plan(self, req: _Request) -> Any:
+        return self._import_helper().plan(_query_str(req.query, "card"), _query_str(req.query, "project"),
+                                          separate=bool(_query_bool(req.query, "separate")))
+
+    def _import_project(self, req: _Request) -> Any:
+        return self._import_helper().create_project(_body_str(req.body, "root"), _body_str(req.body, "name"))
+
+    def _import_start(self, req: _Request) -> Any:
+        mode = req.body.get("mode", "copy")
+        if mode not in ("copy", "prepare", "move"):
+            raise ValueError("Ugyldig værdi: mode")
+        return self._import_helper().start_import(
+            _body_str(req.body, "card"), _body_str(req.body, "project"),
+            separate=_body_bool(req.body, "separate", False), mode=mode)
+
+    def _import_cancel(self, req: _Request) -> Any:
+        self._import_helper().cancel()
+        return {"ok": True}
+
+    def _import_dismiss(self, req: _Request) -> Any:
+        self._import_helper().dismiss(_body_str(req.body, "card"))
+        return {"ok": True}
+
+    # -- Klippe plays (SPEC §18.4) ----------------------------------------------------------
+    def _pet(self) -> "PetPlay":
+        if self.petplay is None:
+            raise ValueError("Klippe er ikke startet")
+        return self.petplay
+
+    def _pet_status(self, req: _Request) -> Any:
+        return self._pet().status()
+
+    def _pet_play(self, req: _Request) -> Any:
+        return self._pet().play_now()
+
+    def _pet_look(self, req: _Request) -> Any:
+        return self._pet().set_look(req.body)
+
+    # -- messages from other programs (SPEC §19) ---------------------------------------------
+    def _board(self) -> "MessageBoard":
+        if self.messages is None:
+            raise ValueError("Beskeder er ikke tilgængelige")
+        return self.messages
+
+    def _messages_list(self, req: _Request) -> Any:
+        return self._board().list()
+
+    def _messages_post(self, req: _Request) -> Any:
+        return self._board().post(req.body)
+
+    def _messages_remove(self, req: _Request) -> Any:
+        return self._board().remove(req.body.get("tag"))
+
+    def _messages_click(self, req: _Request) -> Any:
+        return self._board().click(req.body.get("tag"), req.body.get("knap"))
 
     def _get_settings(self, req: _Request) -> Any:
         return self._settings_payload()
@@ -518,7 +642,10 @@ class _Handler(BaseHTTPRequestHandler):
             log.exception("%s %s failed", self.command, path)
             self._send_json(500, {"error": INTERNAL_ERROR})
         else:
-            self._send_json(200, result)
+            if isinstance(result, _FileResponse):
+                self._send_file(result)
+            else:
+                self._send_json(200, result)
 
     def _handle_static(self, path: str) -> None:
         file_path = self.server.api.static_file(path)
@@ -619,6 +746,14 @@ class _Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
+    def _send_file(self, result: _FileResponse) -> None:
+        self.send_response(200)
+        self._send_standard_headers(result.content_type, len(result.data))
+        self.send_header("Content-Disposition", content_disposition(result.filename))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(result.data)
+
     def _send_standard_headers(self, content_type: str, length: int) -> None:
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(length))
@@ -683,6 +818,56 @@ def _query_int(query: dict[str, str], name: str, *, minimum: int | None = None) 
     if minimum is not None and value < minimum:
         raise ValueError(f"Ugyldig værdi: {name}")
     return value
+
+
+def _query_str(query: dict[str, str], name: str) -> str:
+    value = query.get(name, "").strip()
+    if not value:
+        raise ValueError(f"{name} mangler")
+    return value
+
+
+def _query_date(query: dict[str, str], name: str, default: date) -> date:
+    raw = query.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        raise ValueError(f"Ugyldig dato: {name} (brug ÅÅÅÅ-MM-DD)") from None
+
+
+def time_range(query: dict[str, str]) -> tuple[date, date]:
+    """``from``/``to`` of a time report (local dates, inclusive; default: today)."""
+    first = _query_date(query, "from", date.today())
+    last = _query_date(query, "to", first)
+    if last < first:
+        raise ValueError("Slutdatoen ligger før startdatoen")
+    if (last - first).days > MAX_TIME_RANGE_DAYS:
+        raise ValueError(f"Vælg højst {MAX_TIME_RANGE_DAYS} dage ad gangen")
+    return first, last
+
+
+def time_export(tracker: "TimeTracker", query: dict[str, str]) -> _FileResponse:
+    """The CSV download of /api/time/export (``round`` minutes; ``detail=day`` / ``timeline``
+    for a row per project and day / per project and timeline)."""
+    first, last = time_range(query)
+    round_minutes = _query_int(query, "round", minimum=0) or 0
+    if round_minutes > 240:
+        raise ValueError("Afrunding må højst være 240 minutter")
+    detail = query.get("detail") or ""
+    if detail not in ("", "project", "day", "timeline"):
+        raise ValueError("Ugyldig værdi: detail")
+    text = tracker.export_csv(first, last, round_minutes=round_minutes, per_day=detail == "day",
+                              per_timeline=detail == "timeline")
+    span = first.isoformat() if first == last else f"{first.isoformat()} til {last.isoformat()}"
+    return _FileResponse(text.encode("utf-8"), "text/csv; charset=utf-8", f"Projektsøg tid {span}.csv")
+
+
+def content_disposition(filename: str) -> str:
+    """``attachment`` with an ASCII fallback name and the real (UTF-8) one (RFC 6266)."""
+    ascii_name = filename.encode("ascii", "replace").decode("ascii").replace('"', "")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
 
 
 def _query_bool(query: dict[str, str], name: str) -> bool | None:

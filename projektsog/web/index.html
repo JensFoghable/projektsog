@@ -50,6 +50,9 @@
     <symbol id="i-open" viewBox="0 0 24 24"><path d="M3.5 17.8V6.7c0-.9.8-1.7 1.7-1.7h3.7c.5 0 .9.2 1.2.5l1.5 1.6h6.2c.9 0 1.7.8 1.7 1.7V10"/><path d="M3.7 18.6 6.2 12a1.7 1.7 0 0 1 1.6-1.1h12.5c.8 0 1.4.8 1.1 1.6l-1.9 5.6c-.2.7-.9 1.2-1.6 1.2H4.5c-.5 0-.9-.3-.8-.7z"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
     <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5.5h16l-6.2 7.3v5.2l-3.6 1.8v-7z"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.3V12l3.2 2"/></symbol>
+    <symbol id="i-card" viewBox="0 0 24 24"><path d="M8.2 3.5h8.6c1 0 1.7.8 1.7 1.7v13.6c0 1-.8 1.7-1.7 1.7H7.2c-1 0-1.7-.8-1.7-1.7V6.2z"/><path d="M9.8 4v3.2M12.4 4v3.2M15 4v3.2"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/></symbol>
   </svg>
 
   <div class="app">
@@ -66,6 +69,10 @@
       </div>
       <button id="pill" class="pill" type="button" data-tone="muted" title="Placeringer">
         <span class="pill__dot" aria-hidden="true"></span><span class="pill__text">Forbinder …</span>
+      </button>
+      <button id="time-button" class="btn btn--ghost top__time" type="button" aria-controls="settings"
+              aria-expanded="false" data-state="off" title="Tid brugt på projekter i dag">
+        <span class="top__time-icon" aria-hidden="true"><svg class="icon"><use href="#i-clock"/></svg><span class="top__time-dot"></span></span><span id="time-today" class="top__time-label">Tid</span>
       </button>
       <button id="settings-button" class="btn btn--ghost top__settings" type="button" aria-controls="settings"
               aria-expanded="false" aria-label="Indstillinger" title="Indstillinger (Ctrl+,)">
@@ -105,11 +112,13 @@
 
       <section id="settings" class="settings" aria-label="Indstillinger" hidden>
         <div class="settings__head">
-          <h2 class="settings__title">Indstillinger</h2>
+          <h2 id="settings-title" class="settings__title">Indstillinger</h2>
           <div class="tabs" role="tablist" aria-label="Indstillinger">
             <button type="button" role="tab" class="tabs__tab" id="tab-placeringer" data-tab="placeringer" aria-controls="panel-placeringer" aria-selected="true">Placeringer</button>
             <button type="button" role="tab" class="tabs__tab" id="tab-generelt" data-tab="generelt" aria-controls="panel-generelt" aria-selected="false" tabindex="-1">Generelt</button>
             <button type="button" role="tab" class="tabs__tab" id="tab-resolve" data-tab="resolve" aria-controls="panel-resolve" aria-selected="false" tabindex="-1">DaVinci Resolve</button>
+            <button type="button" role="tab" class="tabs__tab" id="tab-tid" data-tab="tid" aria-controls="panel-tid" aria-selected="false" tabindex="-1">Tid</button>
+            <button type="button" role="tab" class="tabs__tab" id="tab-import" data-tab="import" aria-controls="panel-import" aria-selected="false" tabindex="-1">Import</button>
           </div>
           <button id="settings-close" class="btn btn--ghost btn--icon" type="button" title="Luk (Esc)" aria-label="Luk indstillinger">
             <svg class="icon" aria-hidden="true"><use href="#i-close"/></svg>
@@ -198,6 +207,74 @@
               </div>
             </section>
 
+            <section class="box" aria-labelledby="pet-title">
+              <h3 id="pet-title" class="box__title">Klippe – kæledyret</h3>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-pet">Vis Klippe på skærm 2</span>
+                  <span class="setting__hint">Et lille vindue i kanten af den anden skærm, der hepper på dig, mens du klipper – og fejrer timer, fokus og kort i hus.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="widget_enabled" aria-checked="false" aria-labelledby="lbl-pet"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-pet-top">Altid øverst</span>
+                  <span class="setting__hint">Klippe bliver liggende over andre vinduer. Du kan trække den hen, hvor du vil.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="widget_on_top" aria-checked="false" aria-labelledby="lbl-pet-top"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-pet-play">Klippe må lege med musen i pauser</span>
+                  <span class="setting__hint">Når hverken mus eller tastatur er rørt et stykke tid, bryder Klippe ud af boksen og leger med musen på sin skærm – og lægger den tilbage, hvor den lå. Rør musen, så stopper legen med det samme. Aldrig under afspilning i Resolve, en overførsel eller i fuld skærm.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="widget_play" aria-checked="false" aria-labelledby="lbl-pet-play"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <label class="setting__label" for="pet-play-idle">Pause før legen</label>
+                  <span class="setting__hint">Så længe skal mus og tastatur have ligget stille.</span>
+                </div>
+                <label class="select">
+                  <select id="pet-play-idle">
+                    <option value="2">2 min</option><option value="3">3 min</option><option value="5">5 min</option>
+                    <option value="10">10 min</option><option value="15">15 min</option><option value="30">30 min</option>
+                  </select>
+                  <svg class="icon select__chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+                </label>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label">Se legen nu</span>
+                  <span class="setting__hint" id="pet-play-state" aria-live="polite">Klippe kommer ud, når du har sluppet musen et par sekunder.</span>
+                </div>
+                <button type="button" class="btn btn--secondary" id="pet-play-now">Vis legen nu</button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <label class="setting__label" for="pet-goal">Dagens mål</label>
+                  <span class="setting__hint">Når dagens registrerede tid når målet, er der fyrværkeri.</span>
+                </div>
+                <label class="select">
+                  <select id="pet-goal">
+                    <option value="3">3 timer</option><option value="4">4 timer</option><option value="5">5 timer</option>
+                    <option value="6">6 timer</option><option value="7">7 timer</option><option value="8">8 timer</option>
+                  </select>
+                  <svg class="icon select__chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+                </label>
+              </div>
+              <form id="pet-name-form" class="setting setting--form" autocomplete="off">
+                <div class="setting__text">
+                  <label class="setting__label" for="pet-name">Navn</label>
+                  <span class="setting__hint">Hvad skal kæledyret hedde?</span>
+                </div>
+                <div class="inline-form">
+                  <input id="pet-name" class="field" type="text" maxlength="20" spellcheck="false">
+                  <button class="btn btn--secondary" type="submit">Gem</button>
+                </div>
+              </form>
+            </section>
+
             <section class="box" aria-labelledby="behaviour-title">
               <h3 id="behaviour-title" class="box__title">Søgning og vindue</h3>
               <div class="setting">
@@ -254,6 +331,177 @@
               </div>
             </section>
             <p class="about">Tip: I Resolve finder du også <strong>Workspace ▸ Scripts ▸ Utility ▸ Projektsøg</strong>, som åbner projektmappen direkte.</p>
+          </div>
+
+          <div id="panel-tid" class="tabpanel" role="tabpanel" aria-labelledby="tab-tid" hidden>
+            <div id="time-now" class="time-now" data-tone="off" role="status">
+              <span class="time-now__dot" aria-hidden="true"></span>
+              <div class="time-now__text">
+                <span id="time-now-main" class="time-now__main"></span>
+                <span id="time-now-sub" class="time-now__sub"></span>
+              </div>
+              <div class="time-now__today">
+                <span class="time-now__today-label">I dag</span>
+                <span id="time-now-today" class="time-now__today-value">0:00</span>
+              </div>
+            </div>
+
+            <div class="time-bar">
+              <div id="time-periods" class="seg" role="radiogroup" aria-label="Periode">
+                <button type="button" role="radio" class="seg__item" data-period="today" aria-checked="true">I dag</button>
+                <button type="button" role="radio" class="seg__item" data-period="yesterday" aria-checked="false" tabindex="-1">I går</button>
+                <button type="button" role="radio" class="seg__item" data-period="week" aria-checked="false" tabindex="-1">Denne uge</button>
+                <button type="button" role="radio" class="seg__item" data-period="last-week" aria-checked="false" tabindex="-1">Sidste uge</button>
+                <button type="button" role="radio" class="seg__item" data-period="month" aria-checked="false" tabindex="-1">Denne måned</button>
+                <button type="button" role="radio" class="seg__item" data-period="last-month" aria-checked="false" tabindex="-1">Sidste måned</button>
+              </div>
+              <div class="time-dates">
+                <label class="time-date"><span>Fra</span><input id="time-from" class="field" type="date" required></label>
+                <label class="time-date"><span>Til</span><input id="time-to" class="field" type="date" required></label>
+              </div>
+            </div>
+
+            <section class="box time-report" aria-labelledby="time-report-title">
+              <div class="time-report__head">
+                <h3 id="time-report-title" class="box__title">Projekter</h3>
+                <span class="filters__spacer"></span>
+                <div id="time-detail" class="seg" role="radiogroup" aria-label="Opdeling">
+                  <button type="button" role="radio" class="seg__item" data-detail="" aria-checked="true">Samlet</button>
+                  <button type="button" role="radio" class="seg__item" data-detail="day" aria-checked="false" tabindex="-1">Pr. dag</button>
+                  <button type="button" role="radio" class="seg__item" data-detail="timeline" aria-checked="false" tabindex="-1">Pr. tidslinje</button>
+                </div>
+                <label class="select">
+                  <span class="sr-only">Afrunding</span>
+                  <select id="time-round" title="Afrunding af tiden til fakturering – opad, pr. projekt (pr. dag, når dagene vises)">
+                    <option value="0">Ingen afrunding</option>
+                    <option value="5">Afrund til 5 min</option>
+                    <option value="6">Afrund til 6 min (0,1 t)</option>
+                    <option value="10">Afrund til 10 min</option>
+                    <option value="15">Afrund til 15 min</option>
+                    <option value="30">Afrund til 30 min</option>
+                    <option value="60">Afrund til hele timer</option>
+                  </select>
+                  <svg class="icon select__chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+                </label>
+                <button id="time-export" class="btn btn--secondary" type="button" title="Hent perioden som CSV-fil, der åbner i Excel">
+                  <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>Eksportér til Excel
+                </button>
+              </div>
+              <div id="time-table" class="time-table"></div>
+            </section>
+
+            <section class="box" aria-labelledby="time-settings-title">
+              <h3 id="time-settings-title" class="box__title">Tidsregistrering</h3>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-time">Registrér tid automatisk</span>
+                  <span class="setting__hint">Tæller, mens DaVinci Resolve er i forgrunden med et projekt åbent – fordelt på Edit, Color, Fusion osv.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="time_tracking_enabled" aria-checked="false" aria-labelledby="lbl-time"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <label class="setting__label" for="time-idle">Pause efter</label>
+                  <span class="setting__hint">Uden mus, tastatur eller afspilning i længere tid tæller pausen slet ikke med – kortere pauser tæller med.</span>
+                </div>
+                <label class="select">
+                  <select id="time-idle">
+                    <option value="5">5 min</option>
+                    <option value="10">10 min</option>
+                    <option value="15">15 min</option>
+                    <option value="20">20 min</option>
+                    <option value="30">30 min</option>
+                  </select>
+                  <svg class="icon select__chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+                </label>
+              </div>
+              <form id="time-sites-form" class="setting setting--stack" autocomplete="off">
+                <div class="setting__text">
+                  <label class="setting__label" for="time-sites">Musik- og lydsider</label>
+                  <span class="setting__hint">Tid i browseren på disse sider tæller med på det åbne Resolve-projekt som „Musik/lyd“. Adskil med komma.</span>
+                </div>
+                <div class="inline-form">
+                  <input id="time-sites" class="field" type="text" spellcheck="false" aria-describedby="time-sites-error">
+                  <button class="btn btn--secondary" type="submit">Gem</button>
+                </div>
+              </form>
+              <p id="time-sites-error" class="form-error" role="alert" hidden></p>
+            </section>
+            <p class="about">Tiden gemmes kun på denne computer. Der tages ingen skærmbilleder, og der gemmes ingen tastetryk – kun hvornår mus eller tastatur sidst blev brugt.</p>
+          </div>
+
+          <div id="panel-import" class="tabpanel" role="tabpanel" aria-labelledby="tab-import" hidden>
+            <section id="import-job" class="imp-job" aria-live="polite" hidden></section>
+
+            <div id="import-none" class="imp-none" hidden>
+              <div class="empty__icon" aria-hidden="true"><svg class="icon"><use href="#i-card"/></svg></div>
+              <p class="imp-none__title">Sæt et kort i kortlæseren</p>
+              <p class="imp-none__text">Projektsøg genkender kort fra FX9, FS7, A7S, DJI og GoPro og hjælper dig med at lægge klippene i det rigtige projekt.</p>
+            </div>
+
+            <div id="import-main" class="imp-main" hidden>
+              <div id="import-cardpick" class="seg" role="radiogroup" aria-label="Kort" hidden></div>
+              <section id="import-card" class="imp-card" aria-label="Kortet"></section>
+
+              <section class="box" aria-labelledby="import-where-title">
+                <h3 id="import-where-title" class="box__title">Hvor skal klippene hen?</h3>
+                <div id="import-choices" class="choices" role="radiogroup" aria-labelledby="import-where-title"></div>
+                <div class="imp-search">
+                  <svg class="icon" aria-hidden="true"><use href="#i-search"/></svg>
+                  <input id="import-search" class="field" type="text" placeholder="Søg efter et andet projekt …"
+                         aria-label="Søg efter et andet projekt" autocomplete="off" spellcheck="false">
+                </div>
+                <div id="import-results" class="choices" role="radiogroup" aria-label="Søgeresultater"></div>
+                <div class="choices">
+                  <button type="button" role="radio" class="choice" id="import-new-choice" data-import-choice="new" aria-checked="false">
+                    <span class="choice__radio" aria-hidden="true"></span>
+                    <span class="choice__text"><span class="choice__label">Nyt projekt</span><span class="choice__hint">Opretter projektmappen ud fra skabelonen 1. KUNDENAVN på den disk, du vælger.</span></span>
+                  </button>
+                </div>
+                <div id="import-new" class="imp-new" hidden>
+                  <label class="setting__label" for="import-name">Projektnavn</label>
+                  <input id="import-name" class="field" type="text" placeholder="Fx Mette Juhl - Portræt" autocomplete="off" spellcheck="false">
+                  <p class="setting__hint">Skriv „Kunde 2026\Projekt“ for at lægge projektet i en kundemappe.</p>
+                  <div id="import-disks" class="imp-disks" role="radiogroup" aria-label="Disk"></div>
+                </div>
+              </section>
+
+              <section class="box imp-target" aria-label="Overførsel">
+                <div id="import-target" class="imp-target__text"></div>
+                <button id="import-separate" class="switch-label" type="button" role="switch" aria-checked="false" hidden>
+                  <span class="switch" aria-hidden="true"><span class="switch__thumb"></span></span><span id="import-separate-label">Læg dem i en ny mappe</span>
+                </button>
+                <p id="import-error" class="form-error" role="alert" hidden></p>
+                <div class="imp-actions">
+                  <button id="import-copy" class="btn btn--primary" type="button">
+                    <svg class="icon" aria-hidden="true"><use href="#i-copy"/></svg>Kopiér og kontrollér
+                  </button>
+                  <button id="import-move" class="btn btn--secondary imp-move" type="button" title="Som Ctrl+X: alt kopieres og kontrolleres – først derefter slettes klippene fra kortet">
+                    <svg class="icon" aria-hidden="true"><use href="#i-card"/></svg><span id="import-move-label">Klip – flyt fra kortet</span>
+                  </button>
+                  <button id="import-prepare" class="btn btn--ghost" type="button" title="Opretter mappen og åbner kortet og mappen i Stifinder – du kopierer selv">
+                    <svg class="icon" aria-hidden="true"><use href="#i-open"/></svg>Kun opret mappen og åbn i Stifinder
+                  </button>
+                </div>
+                <p class="setting__hint">Klip sletter først klippene fra kortet, når alle filer er kopieret, kontrolleret og skrevet helt ned på disken.</p>
+              </section>
+            </div>
+
+            <section id="import-history-box" class="box" aria-labelledby="import-history-title" hidden>
+              <h3 id="import-history-title" class="box__title">Seneste importer</h3>
+              <ul id="import-history" class="imp-history"></ul>
+            </section>
+            <section class="box" aria-labelledby="import-settings-title">
+              <h3 id="import-settings-title" class="box__title">Import</h3>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-import-open">Vis Projektsøg, når et kort sættes i</span>
+                  <span class="setting__hint">Ellers kommer der kun en besked ved uret. Er kortet allerede overført, står det der også.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="import_auto_open" aria-checked="false" aria-labelledby="lbl-import-open"><span class="switch__thumb"></span></button>
+              </div>
+            </section>
+            <p class="about">Projektsøg kopierer kun nye klip og kontrollerer hver kopi mod kortet, før den får sit rigtige navn. Den overskriver aldrig noget, og kun Klip sletter fra kortet – efter kontrol.</p>
           </div>
         </div>
       </section>

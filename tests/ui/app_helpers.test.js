@@ -337,3 +337,166 @@ test('settings: sources grouped by computer, scan state and mode reason', () => 
   assert.equal(h.modeReason({ mode: 'auto', included: false, auto_reason: 'Ingen adgang' }), 'Ikke medtaget: Ingen adgang');
   assert.equal(h.modeReason({ mode: 'exclude', included: false }), 'Du har valgt aldrig at medtage den');
 });
+
+test('time tracking: durations, invoice hours and rounding up', () => {
+  assert.equal(h.formatDuration(0), '0:00');
+  assert.equal(h.formatDuration(1000), '0:17');           // 16 min 40 s, like the CSV's t:mm
+  assert.equal(h.formatDuration(167 * 60), '2:47');
+  assert.equal(h.durationWords(167 * 60), '2 t 47 min');
+  assert.equal(h.durationWords(120 * 60), '2 t');
+  assert.equal(h.durationWords(45 * 60), '45 min');
+  assert.equal(h.formatHours(2.75 * 3600), '2,75');
+  assert.equal(h.roundUpSeconds(1000, 15), 1800);          // 16:40 -> 0:30
+  assert.equal(h.roundUpSeconds(1800, 15), 1800);          // exact steps stay
+  assert.equal(h.roundUpSeconds(1000, 0), 1000);
+  assert.equal(h.roundUpSeconds(0, 15), 0);
+});
+
+test('time tracking: periods run Monday to Sunday and whole months', () => {
+  // NOW is Wednesday 30 Sep 2026
+  assert.deepEqual(h.periodRange('today', NOW), { from: '2026-09-30', to: '2026-09-30' });
+  assert.deepEqual(h.periodRange('yesterday', NOW), { from: '2026-09-29', to: '2026-09-29' });
+  assert.deepEqual(h.periodRange('week', NOW), { from: '2026-09-28', to: '2026-10-04' });
+  assert.deepEqual(h.periodRange('last-week', NOW), { from: '2026-09-21', to: '2026-09-27' });
+  assert.deepEqual(h.periodRange('month', NOW), { from: '2026-09-01', to: '2026-09-30' });
+  assert.deepEqual(h.periodRange('last-month', NOW), { from: '2026-08-01', to: '2026-08-31' });
+  const sunday = new Date(2026, 9, 4, 12).getTime();
+  assert.deepEqual(h.periodRange('week', sunday), { from: '2026-09-28', to: '2026-10-04' });
+  const january = new Date(2027, 0, 10).getTime();
+  assert.deepEqual(h.periodRange('last-month', january), { from: '2026-12-01', to: '2026-12-31' });
+  assert.equal(h.periodOf('2026-09-28', '2026-10-04', NOW), 'week');
+  assert.equal(h.periodOf('2026-09-02', '2026-09-03', NOW), 'custom');
+  assert.equal(h.parseIsoDate('2026-02-30'), null);
+  assert.equal(h.formatReportDay('2026-10-01'), 'tors. 1. okt.');
+});
+
+test('time tracking: the live line says what counts and why not', () => {
+  const since = new Date(2026, 8, 30, 10, 42).getTime() / 1000;
+  assert.deepEqual(h.timeStatusText({ state: 'recording', project: 'Rikke Lindholm - Testimonial', bucket: 'color',
+    bucket_label: 'Color', since }), { tone: 'rec', main: 'Registrerer: Rikke Lindholm - Testimonial', sub: 'Color siden 10.42' });
+  assert.equal(h.timeStatusText({ state: 'recording', project: 'X', bucket: 'musik', since: null }).sub, 'Musik/lyd i browseren');
+  assert.equal(h.timeStatusText({ state: 'recording', project: 'X', bucket: 'color', bucket_label: 'Color',
+    timeline: 'Teaser v2', since }).sub, 'Tidslinje „Teaser v2“ · Color siden 10.42');
+  assert.match(h.timeStatusText({ state: 'idle' }, 15).sub, /i over 15 min/);
+  const away = h.timeStatusText({ state: 'away', project: 'Rikke Lindholm - Testimonial', away_since: since,
+    away_until: since + 600 });
+  assert.deepEqual(away, { tone: 'away', main: 'Uden for Resolve – tæller stadig: Rikke Lindholm - Testimonial',
+    sub: 'Kommer du tilbage inden kl. 10.52, tæller pausen med. Ellers stopper tiden, fra da du forlod Resolve.' });
+  assert.equal(h.timeStatusText({ state: 'paused' }).main, 'Pause – DaVinci Resolve er ikke i forgrunden');
+  assert.equal(h.timeStatusText({ state: 'no-resolve' }).main, 'Venter på DaVinci Resolve');
+  assert.equal(h.timeStatusText({ state: 'off', enabled: false }).tone, 'off');
+});
+
+test('time tracking: the report table rounds like the CSV export', () => {
+  const report = {
+    buckets: { edit: 'Edit', cut: 'Cut', color: 'Color', musik: 'Musik/lyd' },
+    projects: [{
+      project: 'Rikke Lindholm - Testimonial', database: 'Kunder 2026', folder: 'Rikke Lindholm',
+      buckets: { edit: 3600, color: 1000 }, total_s: 4600,
+      days: { '2026-09-29': 3600, '2026-09-30': 1000 },
+      day_buckets: { '2026-09-29': { edit: 3600 }, '2026-09-30': { color: 1000 } },
+    }, {
+      project: 'Klar Tand - Skive', database: 'Kunder 2026', folder: null,
+      buckets: { musik: 600 }, total_s: 600, days: { '2026-09-30': 600 }, day_buckets: { '2026-09-30': { musik: 600 } },
+    }],
+  };
+  const table = h.timeTable(report, { roundMinutes: 15 });
+  assert.deepEqual(table.columns.map((c) => c.label), ['Edit', 'Color', 'Musik/lyd']);   // no empty Cut column
+  assert.deepEqual(table.rows.map((r) => [r.kind, r.total, r.rounded]),
+    [['project', 4600, 5400], ['project', 600, 900]]);
+  assert.deepEqual(table.sums, { buckets: { edit: 3600, color: 1000, musik: 600 }, total: 5200, rounded: 6300 });
+  const perDay = h.timeTable(report, { roundMinutes: 15, perDay: true });
+  assert.deepEqual(perDay.rows.map((r) => [r.kind, r.label || r.project, r.rounded]), [
+    ['project', 'Rikke Lindholm - Testimonial', 5400], ['day', 'tirs. 29. sep.', 3600], ['day', 'ons. 30. sep.', 1800],
+    ['project', 'Klar Tand - Skive', 900], ['day', 'ons. 30. sep.', 900]]);
+  assert.deepEqual(perDay.rows[2].buckets, { color: 1000 });
+  assert.equal(h.timeTable(null).rows.length, 0);
+  const timelines = { ...report, projects: [{ ...report.projects[0], timelines: [
+    { name: 'Testimonial v3', total_s: 3600, buckets: { edit: 3600 } },
+    { name: '', total_s: 1000, buckets: { color: 1000 } }] }] };
+  const perTimeline = h.timeTable(timelines, { roundMinutes: 15, perTimeline: true });
+  assert.deepEqual(perTimeline.rows.map((r) => [r.kind, r.label || r.project, r.rounded]), [
+    ['project', 'Rikke Lindholm - Testimonial', 5400], ['timeline', 'Testimonial v3', 3600],
+    ['timeline', 'Ukendt tidslinje', 1800]]);
+});
+
+test('time tracking: download names come from Content-Disposition', () => {
+  assert.equal(h.downloadName("attachment; filename=\"Projekts?g tid.csv\"; filename*=UTF-8''Projekts%C3%B8g%20tid.csv"),
+    'Projektsøg tid.csv');
+  assert.equal(h.downloadName('attachment; filename="tid.csv"'), 'tid.csv');
+  assert.equal(h.downloadName(null), '');
+});
+
+const FX9 = {
+  id: '7E3A91C4@E:', drive: 'E:', camera: 'FX9', model: 'PXW-FX9V', clips: 99, files: 297, stills: 0,
+  bytes: 77.7e9, first: at(2026, 8, 29, 21, 41), last: at(2026, 8, 29, 23, 11), found: { clips: 0, projects: [] },
+};
+
+test('import: a camera card is described in one line', () => {
+  assert.equal(h.cardTitle(FX9), 'FX9-kort i E:');
+  assert.equal(h.cardFacts(FX9, NOW), '99 klip · 72,4 GB · optaget 29. sep. 21.41–23.11');
+  const overnight = { ...FX9, stills: 12, last: at(2026, 8, 30, 1, 5) };
+  assert.equal(h.cardFacts(overnight, NOW), '99 klip · 12 fotos · 72,4 GB · optaget 29. sep. 21.41–30. sep. 01.05');
+  assert.deepEqual(h.cardStatus(FX9), { tone: 'new', text: 'Ikke overført før' });
+  const project = { name: 'Rikke Lindholm', path: 'C:\\K\\Rikke Lindholm', folder: 'C:\\K\\Rikke Lindholm\\Klip\\FX9' };
+  const found = (clips, files) => ({ clips, files, total: 297, complete: files === 297, projects: [project] });
+  assert.deepEqual(h.cardStatus({ ...FX9, found: found(40, 120) }),
+    { tone: 'part', text: '40 af 99 klip ligger allerede i Rikke Lindholm' });
+  assert.deepEqual(h.cardStatus({ ...FX9, found: found(99, 290) }),
+    { tone: 'part', text: 'Alle klip er overført til Rikke Lindholm, men 7 filer mangler' });
+  assert.deepEqual(h.cardStatus({ ...FX9, found: found(99, 297) }),
+    { tone: 'done', text: 'Alle 99 klip er overført til Rikke Lindholm' });
+  assert.deepEqual(h.cardStatus({ ...FX9, files: 0, clips: 0, bytes: 0 }), { tone: 'done', text: 'Kortet er tomt' });
+});
+
+test('import: progress, time left and the outcome', () => {
+  const job = { state: 'copying', current: 'FX9_9070.MXF', files_done: 12, files_total: 297, bytes_total: 1000,
+    copied: 500, verified: 300, speed: 420 * 1024 ** 2, eta_s: 190, target: 'F:\\K\\Mette\\Klip\\FX9', error: null };
+  assert.deepEqual(h.importProgress(job), { tone: 'busy', pct: 40, main: 'Kopierer FX9_9070.MXF – 12 af 297 filer',
+    sub: '420 MB/s · ca. 3 min tilbage' });
+  assert.equal(h.importProgress({ ...job, state: 'verifying' }).main, 'Kontrollerer FX9_9070.MXF – 12 af 297 filer');
+  assert.equal(h.formatEta(30), 'under 1 min');
+  assert.equal(h.formatEta(3900), 'ca. 1 t 5 min');
+  const done = h.importProgress({ ...job, state: 'done', files_done: 297, copied: 1000, verified: 1000, bytes_total: 77.7e9 });
+  assert.deepEqual([done.tone, done.pct, done.main], ['ok', 100, '297 filer (72,4 GB) er kopieret og kontrolleret']);
+  assert.equal(done.sub, 'I F:\\K\\Mette\\Klip\\FX9 – kortet kan tages ud.');
+  assert.equal(h.importProgress({ ...job, state: 'failed', error: 'Kortet blev taget ud' }).main, 'Kortet blev taget ud');
+  assert.equal(h.importProgress({ ...job, state: 'cancelled' }).main, 'Overførslen blev stoppet');
+  assert.equal(h.importProgress(null), null);
+});
+
+test('import: moving ("Klip") deletes from the card only at the end, and says what happened', () => {
+  const job = { mode: 'move', state: 'deleting', current: 'FX9_9070.MXF', files_done: 297, files_total: 297,
+    bytes_total: 1000, copied: 1000, verified: 1000, deleted: 120, kept: 0, speed: 0, eta_s: null,
+    target: 'F:\\K\\Mette\\Klip\\FX9', error: null };
+  assert.deepEqual(h.importProgress(job), { tone: 'busy', pct: 99,
+    main: 'Sletter fra kortet: FX9_9070.MXF – 120 af 297 filer', sub: 'Alle filer er kopieret og kontrolleret' });
+  const done = h.importProgress({ ...job, state: 'done', deleted: 297, bytes_total: 77.7e9 });
+  assert.equal(done.main, '297 filer (72,4 GB) er flyttet – kopieret, kontrolleret og slettet fra kortet');
+  assert.equal(h.importProgress({ ...job, state: 'done', deleted: 295, kept: 2 }).sub,
+    'I F:\\K\\Mette\\Klip\\FX9. 2 filer var i brug og ligger stadig på kortet.');
+  assert.match(h.importProgress({ ...job, state: 'failed', deleted: 0, error: 'Kopien af X er ikke identisk med kortet' }).sub,
+    /Intet er slettet fra kortet\.$/);
+  assert.match(h.importProgress({ ...job, state: 'cancelled', deleted: 120 }).sub,
+    /^120 filer er slettet fra kortet \(de er kontrolleret\) – resten ligger stadig på kortet\./);
+});
+
+test('import: the plan says where the clips go and what is new', () => {
+  const plan = { target: 'F:\\K\\Mette\\Klip\\FX9', target_exists: false, camera: 'FX9', files: 297, new_files: 290,
+    new_bytes: 70 * 1024 ** 3, already: 7, conflicts: 0, other_media: 0, separate: false, free: 7200 * 1024 ** 3, fits: true };
+  assert.deepEqual(h.planText(plan), { target: 'F:\\K\\Mette\\Klip\\FX9', creates: true, lines: [
+    '290 nye filer (70 GB) · 7 findes allerede og springes over', '7 TB fri på disken'] });
+  assert.deepEqual(h.planText({ ...plan, new_files: 0, already: 297, fits: false, free: 70 * 1024 ** 3 }).lines, [
+    'Alle 297 filer ligger der allerede.', 'Der er kun 70 GB fri på disken – vælg en anden']);
+  assert.equal(h.planText({ ...plan, other_media: 12 }).lines[1], 'FX9-mappen har allerede 12 andre klip.');
+  assert.match(h.planText({ ...plan, conflicts: 2, separate: true }).lines[1], /^2 klip med samme navn/);
+  assert.equal(h.planText(null), null);
+});
+
+test('Klippe plays: the line under "Vis legen nu"', () => {
+  assert.equal(h.petPlayText({ state: 'waiting' }), 'Slip musen … så kommer Klippe ud 🎈');
+  assert.equal(h.petPlayText({ state: 'out' }), 'Klippe leger – rør musen, så flyver den hjem 🏠');
+  assert.equal(h.petPlayText({ state: 'ready', message: 'Skærmen er låst' }), 'Skærmen er låst');
+  assert.equal(h.petPlayText({ state: 'ready', message: '' }), 'Klippe kommer ud, når du har sluppet musen et par sekunder.');
+  assert.equal(h.petPlayText(null), 'Klippe kommer ud, når du har sluppet musen et par sekunder.');
+});

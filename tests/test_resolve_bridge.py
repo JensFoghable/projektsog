@@ -1568,7 +1568,9 @@ class HelperProcessTests(unittest.TestCase):
             self.assertTrue(self.wait_for(lambda: bool(self.spawned)
                                           and not self.spawned[0].alive()),
                             "a helper stuck in a scripting call is killed")
-            self.assertEqual(bridge.state()["error"], rb.ERR_NO_RESPONSE)
+            # (the state is set right after the kill - wait for it rather than race it)
+            self.assertTrue(self.wait_for(lambda: bridge.state()["error"] == rb.ERR_NO_RESPONSE),
+                            bridge.state())
             self.change_world(on_poll=None)
             self.assertTrue(self.wait_for(lambda: bridge.state()["updated"] is not None),
                             bridge.state())

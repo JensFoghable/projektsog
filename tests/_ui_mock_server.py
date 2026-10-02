@@ -23,6 +23,16 @@ from ``--scenario`` / the ``PROJEKTSOG_UI_MOCK`` environment variable:
     resolve-off         Resolve is not running
     resolve-disabled    Resolve integration switched off
     resolve-empty       "Untitled Project" without clips
+    time-idle           time tracking pauses: no input for longer than the idle limit
+    time-paused         time tracking pauses: Resolve is not in front
+    time-away           in another program for 3 min: still counting (if back within 10 min)
+    card                an FX9 camera card is in E: (import helper, MockImporter)
+    card2               … and an A7S card in G: whose clips are imported already
+    import-fail         an import stops half-way ("Kortet blev taget ud …")
+
+Time tracking (/api/time…) is a real ``TimeTracker`` over an in-memory store with the fixed
+segments of ``TIME_SEGMENTS`` (today, yesterday and 40 days ago); it records "Color" on Rikke
+Lindholm unless ``resolve-off`` or a ``time-*`` flag says otherwise.
 
 Without flags: Resolve is connected to "Rikke Lindholm - Testimonial" (media match),
 2025Arkiv is being deep-scanned, and the disk '2024 Disk Sølv' is offline. The portable
@@ -60,11 +70,13 @@ import time
 import traceback
 import urllib.parse
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from projektsog import __version__, config, textutil
+from projektsog import __version__, config, importer, textutil, timetrack
 from projektsog.events import EventBus
+from projektsog.server import content_disposition, time_export, time_range
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB_DIR = os.path.join(REPO_ROOT, "projektsog", "web")
@@ -84,6 +96,9 @@ STATIC_FILES = {
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
+    "/widget.html": ("widget.html", "text/html; charset=utf-8"),
+    "/widget.js": ("widget.js", "text/javascript; charset=utf-8"),
+    "/widget.css": ("widget.css", "text/css; charset=utf-8"),
 }
 ASSET_TYPES = {".png": "image/png", ".ico": "image/x-icon", ".svg": "image/svg+xml"}
 HOTKEY_RE = re.compile(r"^((ctrl|alt|shift|win)\+)+(space|[a-z0-9]|f([1-9]|1[0-9]|2[0-4]))$")
@@ -404,6 +419,7 @@ class MockBackend:
         self._next_id = 100
         self.calls: list[dict[str, Any]] = []      # POST/DELETE requests
         self.requests: list[dict[str, Any]] = []   # every /api/ request (newest 1000)
+        self.pet_state = "ready"
         self.errors: list[str] = []                # tracebacks of 500 responses
         self.sse_generation = 0                    # bumped by /api/_mock/drop-events
         self.settings: dict[str, Any] = config.validate({**config.DEFAULTS, "hosts": list(HOSTS)})
@@ -413,6 +429,8 @@ class MockBackend:
         self.entries: list[Entry] = []
         _build_trees(self, self.started)
         _finish_entries(self.entries)
+        self.time = _make_time_tracker(self.settings)
+        self.importer = MockImporter(self.bus)
 
     def next_id(self) -> int:
         self._next_id += 1
@@ -737,6 +755,33 @@ class MockBackend:
                     best = (len(r), src)
         return best[1] if best else None
 
+    def time_status(self, flags: frozenset[str]) -> dict[str, Any]:
+        """TimeTracker.status(): recording Color on Rikke Lindholm (or what the flags say)."""
+        today = date.today()
+        status: dict[str, Any] = {
+            "state": "recording", "enabled": bool(self.settings["time_tracking_enabled"]),
+            "project": None, "bucket": None, "since": None,
+            "today_s": round(self.time.report(today, today)["total_s"])}
+        if not status["enabled"]:
+            status["state"] = "off"
+        elif "resolve-off" in flags:
+            status["state"] = "no-resolve"
+        elif "time-idle" in flags:
+            status["state"] = "idle"
+        elif "time-paused" in flags:
+            status["state"] = "paused"
+        elif "time-away" in flags:
+            project, database, _uid, folder = _TIME_RIKKE
+            since = time.time() - 3 * 60
+            status.update(state="away", project=project, database=database, bucket="edit", bucket_label="Edit",
+                          timeline="Testimonial v3", folder=folder, since=since - 1800, away_since=since,
+                          away_until=since + 600)
+        else:
+            project, database, _uid, folder = _TIME_RIKKE
+            status.update(project=project, database=database, bucket="color", bucket_label="Color",
+                          timeline="Testimonial v3", folder=folder, since=time.time() - 25 * 60)
+        return status
+
     # -- commands ----------------------------------------------------------------------
     def update_settings(self, changes: dict[str, Any]) -> None:
         if not isinstance(changes, dict):
@@ -763,6 +808,20 @@ class MockBackend:
 
     def publish_settings(self) -> None:
         self.bus.publish("settings", self.settings_payload(self.default_flags))
+
+    # -- Klippe plays (petplay.py) ---------------------------------------------------------
+    def pet_status(self) -> dict[str, Any]:
+        with self.lock:
+            return {"state": self.pet_state, "message": "", "enabled": self.settings["widget_play"]}
+
+    def pet_play_now(self) -> dict[str, Any]:
+        with self.lock:
+            if not self.settings["widget_enabled"]:
+                raise ValueError("Slå Klippe til først")
+            self.pet_state = "waiting"
+        status = self.pet_status()
+        self.bus.publish("pet", status)
+        return status
 
     def set_mode(self, source_id: int, mode: str, flags: frozenset[str]) -> dict[str, Any]:
         if mode not in ("auto", "include", "exclude"):
@@ -926,6 +985,233 @@ def _parse_flags(text: str | None) -> frozenset[str]:
     return frozenset(f.strip().lower() for f in (text or "").split(",") if f.strip())
 
 
+# (project, database, uid, folder) of the fixture time segments
+_TIME_RIKKE = ("Rikke Lindholm - Testimonial", "Kunder 2026 (Projektserver)", "u-rikke", "Rikke Lindholm")
+_TIME_KLAR = ("Klar Tand - Skive", "Kunder 2026 (Projektserver)", "u-klar", "Klar Tand - Skive")
+_TIME_VEST = ("Vestervang Kommune - Sommer 2026", "Kunder 2026 (Projektserver)", "u-vest",
+              "Vestervang Kommune - Sommer 2026")
+_TIME_SOL = ("Solkraft Midt - Solceller", "Kunder 2025", "u-sol", None)
+# (project, page, timeline, days before today, from, to) in local time. Today: Rikke 2:47
+# (Testimonial v3 2:22, Teaser 0:25), Klar Tand 0:45.
+TIME_SEGMENTS = (
+    (_TIME_RIKKE, "edit", "Testimonial v3", 0, "08:30", "10:00"),
+    (_TIME_RIKKE, "color", "Testimonial v3", 0, "10:00", "10:40"),
+    (_TIME_RIKKE, "musik", "Testimonial v3", 0, "10:40", "10:52"),
+    (_TIME_KLAR, "edit", "Skive 30 sek", 0, "11:00", "11:45"),
+    (_TIME_RIKKE, "fusion", "Teaser", 0, "13:00", "13:25"),
+    (_TIME_VEST, "edit", "Sommer 60 sek", 1, "09:00", "12:00"),
+    (_TIME_VEST, "color", "Sommer 60 sek", 1, "12:30", "14:00"),
+    (_TIME_RIKKE, "edit", "Testimonial v2", 1, "14:00", "15:00"),
+    (_TIME_SOL, "edit", "", 40, "09:00", "11:00"),
+    (_TIME_SOL, "deliver", "", 40, "11:00", "11:30"),
+)
+
+
+GIB = 1024 ** 3
+_IMPORT_ROOT = "C:\\Kunder 2026 (STUDIO)"
+_IMPORT_RIKKE = _IMPORT_ROOT + "\\Rikke Lindholm"
+_IMPORT_VEST = _IMPORT_ROOT + "\\Vestervang Kommune - Sommer 2026"
+# Disks with a "1. KUNDENAVN" template: C: is too full for the FX9 card (72 GiB), like on the real PC.
+_IMPORT_DISKS = (
+    {"path": _IMPORT_ROOT, "template": _IMPORT_ROOT + "\\1. KUNDENAVN", "name": "Kunder 2026 (STUDIO)",
+     "host": "STUDIO-PC", "kind": "local", "disk": "C:", "online": True, "free": 70 * GIB},
+    {"path": "F:\\Kunder 2026 ARKIV", "template": "F:\\Kunder 2026 ARKIV\\1. KUNDENAVN",
+     "name": "Kunder 2026 ARKIV", "host": "STUDIO-PC", "kind": "local", "disk": "ARKIV", "online": True,
+     "free": 7200 * GIB},
+    {"path": "\\\\GRAFIK-PC\\Kunder 2026 (Grafik)", "template": "\\\\GRAFIK-PC\\Kunder 2026 (Grafik)\\1. KUNDENAVN",
+     "name": "Kunder 2026 (Grafik)", "host": "GRAFIK-PC", "kind": "share", "disk": "GRAFIK-PC", "online": True,
+     "free": 1100 * GIB},
+)
+
+
+class MockImporter:
+    """In-memory imitation of importer.Importer (SPEC §17): it never touches a real disk.
+
+    Flags: ``card`` puts an FX9 card in E:, ``card2`` also an A7S card in G: (its clips are
+    in Rikke Lindholm already); ``import-fail`` stops a copy half-way ("Kortet blev taget ud …")."""
+
+    def __init__(self, bus: EventBus) -> None:
+        self.bus = bus
+        self.lock = threading.Lock()
+        self.job: dict[str, Any] | None = None
+        self.history: list[dict[str, Any]] = []
+        self.created: list[str] = []
+        self.cancelled = threading.Event()
+
+    @staticmethod
+    def _cards(flags: frozenset[str]) -> list[dict[str, Any]]:
+        yesterday = datetime.combine(date.today() - timedelta(days=1), datetime.min.time()).timestamp()
+        cards = []
+        if "card" in flags or "card2" in flags:
+            cards.append({"id": "7E3A91C4@E:", "drive": "E:", "serial": "7E3A91C4", "label": "",
+                          "volume_size": 128 * 10 ** 9, "kinds": ["xdcam"], "model": "PXW-FX9V",
+                          "camera": "FX9", "folder": "E:\\XDROOT\\Clip", "files": 297, "clips": 99,
+                          "stills": 0, "bytes": 77_700_000_000, "first": yesterday + 21 * 3600 + 41 * 60,
+                          "last": yesterday + 23 * 3600 + 11 * 60,
+                          "found": {"clips": 0, "files": 0, "total": 297, "complete": False, "projects": []},
+                          "inserted": time.time(), "dismissed": False})
+        if "card2" in flags:
+            cards.append({"id": "1A2B3C4D@G:", "drive": "G:", "serial": "1A2B3C4D", "label": "",
+                          "volume_size": 64 * 10 ** 9, "kinds": ["m4root", "stills"], "model": "ILCE-7SM3",
+                          "camera": "A7S", "folder": "G:\\PRIVATE\\M4ROOT\\CLIP", "files": 60, "clips": 24,
+                          "stills": 12, "bytes": 21_000_000_000, "first": yesterday + 10 * 3600,
+                          "last": yesterday + 15 * 3600,
+                          "found": {"clips": 24, "files": 60, "total": 60, "complete": True, "projects": [
+                              {"name": "Rikke Lindholm", "path": _IMPORT_RIKKE, "folder": _IMPORT_RIKKE + "\\Klip\\A7S",
+                               "clips": 24, "files": 60, "complete": True, "online": True}]},
+                          "inserted": time.time(), "dismissed": False})
+        return cards
+
+    def card(self, card_id: str, flags: frozenset[str]) -> dict[str, Any]:
+        for card in self._cards(flags):
+            if card["id"] == card_id:
+                return card
+        raise ValueError("Kortet er ikke sat i længere")
+
+    def state(self, flags: frozenset[str]) -> dict[str, Any]:
+        with self.lock:
+            return {"cards": self._cards(flags), "job": dict(self.job) if self.job else None,
+                    "history": list(reversed(self.history))[:8]}
+
+    def options(self, card_id: str, flags: frozenset[str]) -> dict[str, Any]:
+        card = self.card(card_id, flags)
+        suggestions = [{"path": p["path"], "name": p["name"],
+                        "reason": "Alle kortets filer ligger her" if p["complete"] else f"{p['clips']} af kortets klip ligger her",
+                        "online": True, "free": 70 * GIB} for p in card["found"]["projects"]]
+        if not suggestions:
+            suggestions.append({"path": _IMPORT_RIKKE, "name": "Rikke Lindholm", "reason": "Åben i DaVinci Resolve",
+                                "online": True, "free": 70 * GIB})
+        suggestions.append({"path": _IMPORT_VEST, "name": "Vestervang Kommune - Sommer 2026",
+                            "reason": "Arbejdet på i dag", "online": True, "free": 70 * GIB})
+        for path in self.created:
+            suggestions.append({"path": path, "name": path.rpartition("\\")[2], "reason": "Oprettet i dag",
+                                "online": True, "free": 7200 * GIB})
+        disks = [{**d, "fits": d["free"] >= card["bytes"] + 512 * 1024 ** 2} for d in _IMPORT_DISKS]
+        return {"card": card, "suggestions": suggestions, "disks": disks}
+
+    def plan(self, card_id: str, project: str, separate: bool, flags: frozenset[str]) -> dict[str, Any]:
+        card = self.card(card_id, flags)
+        project = importer._clean_dir(project)
+        disk = next((d for d in _IMPORT_DISKS if project.casefold().startswith(d["path"].casefold() + "\\")), None)
+        exists = project in (_IMPORT_RIKKE, _IMPORT_VEST) or project in self.created
+        others = 12 if project == _IMPORT_RIKKE and card["camera"] == "FX9" else 0
+        already = card["files"] if card["found"]["clips"] and project == _IMPORT_RIKKE else 0
+        target = f"{project}\\Klip\\{card['camera']}"
+        day_folder = None
+        if separate:
+            target, day_folder = f"{target} Dag 2", f"{card['camera']} Dag 2"
+            already = 0
+        new_bytes = 0 if already else card["bytes"]
+        free = disk["free"] if disk else 70 * GIB
+        return {"card": card_id, "project": project, "project_exists": exists, "target": target,
+                "target_exists": exists and not day_folder, "camera": card["camera"], "day_folder": day_folder,
+                "separate": bool(day_folder), "files": card["files"], "new_files": card["files"] - already,
+                "new_bytes": new_bytes, "already": already, "conflicts": 0, "other_media": others,
+                "suggest_separate": others > 0, "free": free, "fits": free >= new_bytes + 512 * 1024 ** 2}
+
+    def create_project(self, root: str, name: str) -> dict[str, Any]:
+        name = importer.validate_project_name(name)
+        if not any(d["path"] == root for d in _IMPORT_DISKS):
+            raise ValueError("Vælg en af diskene på listen")
+        path = f"{root}\\{name}"
+        if path in self.created or path in (_IMPORT_RIKKE, _IMPORT_VEST):
+            raise ValueError("Der findes allerede en mappe med det navn")
+        self.created.append(path)
+        return {"path": path, "name": path.rpartition("\\")[2]}
+
+    def start(self, card_id: str, project: str, separate: bool, mode: str,
+              flags: frozenset[str]) -> dict[str, Any]:
+        card = self.card(card_id, flags)
+        plan = self.plan(card_id, project, separate, flags)
+        if mode == "prepare":
+            with self.lock:
+                self.history.append({"at": time.time(), "mode": "prepare", "camera": card["camera"],
+                                     "project": plan["project"], "target": plan["target"], "files": 0, "bytes": 0})
+            return {"ok": True, "target": plan["target"]}
+        move = mode == "move"
+        files = plan["new_files"] + (plan["already"] if move else 0)
+        if not files:
+            raise ValueError("Alle klip ligger der allerede")
+        if plan["new_files"] and not plan["fits"]:
+            raise ValueError(f"Der er ikke plads nok på disken: kortet fylder {importer._gb(plan['new_bytes'])}, "
+                             f"der er {importer._gb(plan['free'])} fri")
+        with self.lock:
+            if self.job and self.job["state"] in ("copying", "verifying", "deleting"):
+                raise ValueError(importer.MSG_BUSY)
+            self.cancelled.clear()
+            self.job = {"id": f"{card_id}-1", "card": card_id, "drive": card["drive"], "camera": card["camera"],
+                        "target": plan["target"], "project": plan["project"],
+                        "project_name": plan["project"].rpartition("\\")[2], "mode": "move" if move else "copy",
+                        "state": "copying", "phase": "copy", "current": "FX9_9066.MXF", "files_total": files,
+                        "files_done": 0, "bytes_total": plan["new_bytes"] if not move else card["bytes"],
+                        "copied": 0, "verified": 0, "deleted": 0, "kept": 0, "speed": 0.0,
+                        "eta_s": None, "started": time.time(), "finished": None, "error": None}
+            job = dict(self.job)
+        threading.Thread(target=self._run, args=("import-fail" in flags, move), daemon=True).start()
+        return job
+
+    def _run(self, fail: bool, move: bool = False) -> None:
+        steps = 12
+        for step in range(1, steps + 1):
+            if self.cancelled.wait(0.12):
+                self._finish("cancelled")
+                return
+            with self.lock:
+                job = self.job
+                assert job is not None
+                part = step / steps
+                job.update(state="verifying" if step % 2 else "copying", copied=int(job["bytes_total"] * part),
+                           verified=int(job["bytes_total"] * max(0.0, part - 1 / steps)),
+                           files_done=int(job["files_total"] * max(0.0, part - 1 / steps)),
+                           current=f"FX9_{9066 + step:04d}.MXF", speed=420 * 1024 ** 2, eta_s=(steps - step) * 9)
+                snapshot = dict(job)
+            self.bus.publish("import", snapshot)
+            if fail and step == steps // 2:
+                self._finish("failed", importer.MSG_CARD_GONE)
+                return
+        with self.lock:
+            assert self.job is not None
+            self.job.update(copied=self.job["bytes_total"], verified=self.job["bytes_total"],
+                            files_done=self.job["files_total"])
+        if move:     # like the real job: the card is emptied only after everything is verified
+            for done in (self.job["files_total"] // 2, self.job["files_total"]):
+                if self.cancelled.wait(0.15):
+                    self._finish("cancelled")
+                    return
+                with self.lock:
+                    self.job.update(state="deleting", phase="delete", deleted=done, current="FX9_9100.MXF")
+                    snapshot = dict(self.job)
+                self.bus.publish("import", snapshot)
+        self._finish("done")
+
+    def _finish(self, state: str, error: str | None = None) -> None:
+        with self.lock:
+            assert self.job is not None
+            self.job.update(state=state, error=error, current=None, finished=time.time(), eta_s=None)
+            snapshot = dict(self.job)
+            if state == "done":
+                self.history.append({"at": time.time(), "mode": snapshot["mode"], "camera": snapshot["camera"],
+                                     "project": snapshot["project"], "target": snapshot["target"],
+                                     "files": snapshot["files_done"], "bytes": snapshot["bytes_total"]})
+        self.bus.publish("import", snapshot)
+
+
+def _make_time_tracker(settings: dict[str, Any]) -> timetrack.TimeTracker:
+    """A real TimeTracker (never started) over an in-memory store holding TIME_SEGMENTS."""
+    store = timetrack.TimeStore(":memory:")
+    today = date.today()
+
+    def at(days_ago: int, hhmm: str) -> float:
+        day = today - timedelta(days=days_ago)
+        hours, minutes = (int(part) for part in hhmm.split(":"))
+        return datetime(day.year, day.month, day.day, hours, minutes).timestamp()
+
+    for (project, database, uid, folder), page, timeline, days_ago, start, end in TIME_SEGMENTS:
+        store.insert((project, database, uid, page, timeline), folder, at(days_ago, start), at(days_ago, end),
+                     OWN_HOST)
+    return timetrack.TimeTracker(settings, None, store=store)
+
+
 # --------------------------------------------------------------------------------------
 # HTTP
 # --------------------------------------------------------------------------------------
@@ -954,11 +1240,14 @@ class MockHandler(BaseHTTPRequestHandler):
         port = self.server.server_address[1]
         return (self.headers.get("Host") or "") in (f"127.0.0.1:{port}", f"localhost:{port}")
 
-    def _send(self, status: int, body: bytes, content_type: str) -> None:
+    def _send(self, status: int, body: bytes, content_type: str,
+              headers: dict[str, str] | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -1050,6 +1339,27 @@ class MockHandler(BaseHTTPRequestHandler):
             self._json(backend.resolve_state(flags))
         elif route == "/api/settings":
             self._json({"settings": backend.settings_payload(flags)})
+        elif route == "/api/time":
+            self._delay(flags)
+            first, last = time_range(query)
+            self._json({"report": backend.time.report(first, last), "status": backend.time_status(flags)})
+        elif route == "/api/time/status":
+            self._json(backend.time_status(flags))
+        elif route == "/api/time/export":
+            result = time_export(backend.time, query)
+            self._send(200, result.data, result.content_type,
+                       {"Content-Disposition": content_disposition(result.filename)})
+        elif route == "/api/widget/play":
+            self._json(backend.pet_status())
+        elif route == "/api/messages":
+            self._json({"messages": []})
+        elif route == "/api/import":
+            self._json(backend.importer.state(flags))
+        elif route == "/api/import/options":
+            self._json(backend.importer.options(query.get("card", ""), flags))
+        elif route == "/api/import/plan":
+            self._json(backend.importer.plan(query.get("card", ""), query.get("project", ""),
+                                             query.get("separate") in ("1", "true"), flags))
         elif route == "/api/events":
             self._events(flags)
         else:
@@ -1105,6 +1415,22 @@ class MockHandler(BaseHTTPRequestHandler):
         elif (method, route) == ("POST", "/api/settings"):
             backend.update_settings(body)
             self._json({"settings": backend.settings_payload(flags)})
+        elif (method, route) == ("POST", "/api/import/project"):
+            self._json(backend.importer.create_project(str(body.get("root", "")), str(body.get("name", ""))))
+        elif (method, route) == ("POST", "/api/import/start"):
+            self._json(backend.importer.start(str(body.get("card", "")), str(body.get("project", "")),
+                                              bool(body.get("separate")), str(body.get("mode", "copy")), flags))
+        elif (method, route) == ("POST", "/api/import/cancel"):
+            backend.importer.cancelled.set()
+            self._json({"ok": True})
+        elif (method, route) == ("POST", "/api/import/dismiss"):
+            self._json({"ok": True})
+        elif (method, route) == ("POST", "/api/widget/play"):
+            self._json(backend.pet_play_now())
+        elif (method, route) == ("POST", "/api/widget/look"):
+            self._json({"ok": True})
+        elif (method, route) in (("POST", "/api/messages/click"), ("DELETE", "/api/messages")):
+            self._json({"ok": True})
         elif (method, route) in (("POST", "/api/window/hide"), ("POST", "/api/window/show")):
             self._json({"ok": True})
         elif (method, route) == ("POST", "/api/_mock/publish"):  # test control: push any SSE event
@@ -1235,6 +1561,8 @@ class MockServer:
         self._httpd.server_close()
         if self._thread is not None:
             self._thread.join(timeout=5)
+        if self.backend.time.store is not None:
+            self.backend.time.store.close()
 
     def __enter__(self) -> "MockServer":
         return self.start()

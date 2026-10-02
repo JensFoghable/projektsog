@@ -1,0 +1,376 @@
+/* Klippe – the pet widget (widget.html). Always dark: it lives beside the editing screen. */
+
+:root {
+  color-scheme: dark;
+  --font: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --bg: #151413;
+  --surface: #1f1e1c;
+  --surface-3: #33302d;
+  --line: rgba(255, 244, 232, 0.08);
+  --text: #eeeae5;
+  --text-2: #b3ada6;
+  --text-3: #837d76;
+  --accent: #f0a45b;
+  --ok: #5fcf8f;
+  --warn: #eab54f;
+  --danger: #ef7166;
+  --body: #2c3440;
+  --body-edge: #46536a;
+  --stripe-dark: #1b1b1d;
+  --stripe-light: #f3efe6;
+  --eye: #fbfaf7;
+  --pupil: #1d1b19;
+  --cheek: rgba(239, 113, 102, 0.45);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.4 var(--font);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.pet-app { display: flex; flex-direction: column; height: 100%; padding: 10px 12px 12px; }
+
+/* ---------------------------------------------------------------- header */
+.head { display: flex; align-items: center; gap: 6px; min-height: 22px; }
+.head__name { font: 600 15px/1.2 var(--font-display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.head__level {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(240, 164, 91, 0.14);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.head__streak { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--warn); white-space: nowrap; }
+
+/* ---------------------------------------------------------------- stage + bubble */
+/* The stage takes the room that is left (less while a transfer is shown): the pet scales to it. */
+.stage { position: relative; flex: 1 1 auto; min-height: 110px; display: flex; align-items: flex-end; justify-content: center; }
+.pet { height: 100%; max-height: 210px; width: auto; max-width: 100%; overflow: visible; cursor: pointer; }
+
+.bubble {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  right: 4px;
+  z-index: 2;
+  padding: 7px 10px;
+  border-radius: 12px;
+  background: #fbfaf7;
+  color: #1d1b19;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: center;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  animation: bubble-in 0.25s ease-out;
+}
+.bubble::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  border: 7px solid transparent;
+  border-bottom: 0;
+  border-top-color: #fbfaf7;
+  transform: translateX(-50%);
+}
+@keyframes bubble-in { from { opacity: 0; transform: translateY(6px) scale(0.96); } to { opacity: 1; transform: none; } }
+
+/* ---------------------------------------------------------------- the pet (SVG) */
+.pet__shadow { fill: rgba(0, 0, 0, 0.45); }
+.pet__glow { opacity: 0; transition: opacity 0.4s; }
+.slate { fill: var(--body); stroke: var(--body-edge); stroke-width: 3; }
+.slate__stick, .clapper__stick { stroke: #111; stroke-width: 1.5; }
+.clapper__hinge { fill: #9aa3b1; }
+.foot { fill: #222a34; }
+.arm { fill: none; stroke: var(--body-edge); stroke-width: 7; stroke-linecap: round; }
+.eye { fill: var(--eye); }
+.pupil { fill: var(--pupil); }
+.shine { fill: #fff; }
+.cheek { fill: var(--cheek); }
+.eyes-closed path, .eyes-happy path, .mouth--smile, .mouth--flat, .egg__crack {
+  fill: none; stroke: var(--pupil); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round;
+}
+.mouth--smile, .mouth--flat { stroke: #f3efe6; }
+.eyes-closed path, .eyes-happy path { stroke: #f3efe6; }
+.mouth--grin { fill: #7a2320; stroke: #f3efe6; stroke-width: 3; stroke-linejoin: round; }
+.mouth--o { fill: #7a2320; stroke: #f3efe6; stroke-width: 3; }
+.egg__shell { fill: #efe7d6; stroke: #cbbfa6; stroke-width: 3; }
+.egg__band { stroke: #111; stroke-width: 1; }
+.egg__crack { stroke: #8a7c63; stroke-width: 3; }
+.zzz text { fill: #9fb4ff; font: 700 18px var(--font-display); }
+.sweat { fill: #7fc4ff; }
+
+.body__inner, .egg, .clapper, .pupils, .zzz, .sweat, .arm { transform-box: fill-box; }
+.body, .egg { transform-origin: 100px 180px; transform-box: view-box; }
+.clapper { transform-origin: 0% 100%; }
+.arm--left { transform-origin: 100% 0%; }
+.arm--right { transform-origin: 0% 0%; }
+
+/* what is shown when */
+.eyes-closed, .eyes-happy, .mouth, .acc, .zzz, .sweat, .egg, .egg__eyes .pupil { display: none; }
+.eyes-open, .mouth--smile { display: inline; }
+[data-mood="sleeping"] .eyes-open, [data-mood="sleepy"] .eyes-open { display: none; }
+[data-mood="sleeping"] .eyes-closed, [data-mood="sleepy"] .eyes-closed { display: inline; }
+[data-mood="sleeping"] .mouth--smile, [data-mood="sleepy"] .mouth--smile,
+[data-mood="waiting"] .mouth--smile { display: none; }
+[data-mood="sleeping"] .mouth--flat { display: inline; }
+[data-mood="sleepy"] .mouth--o { display: inline; }
+[data-mood="waiting"] .mouth--flat { display: inline; }
+[data-mood="sleeping"] .zzz { display: inline; }
+[data-mood="waiting"] .sweat { display: inline; }
+.party .eyes-open, .party .mouth--smile, .party .mouth--flat, .party .mouth--o, .party .eyes-closed { display: none !important; }
+.party .eyes-happy, .party .mouth--grin { display: inline !important; }
+
+[data-outfit="color"] .acc--color, [data-outfit="fusion"] .acc--fusion,
+[data-outfit="audio"] .acc--audio, [data-outfit="deliver"] .acc--deliver { display: inline; }
+[data-stage="legend"]:not([data-outfit="fusion"]):not([data-outfit="deliver"]) .acc--crown { display: inline; }
+.acc--color rect { fill: #111; stroke: #3a3a3a; stroke-width: 2; }
+.acc__line { fill: none; stroke: #111; stroke-width: 4; stroke-linecap: round; }
+.acc--fusion path:first-child { fill: #6c4bd6; stroke: #4b31a6; stroke-width: 2; }
+.acc--fusion ellipse { fill: #4b31a6; }
+.acc__star { fill: #ffd56b; }
+.acc--audio rect { fill: #e2574c; stroke: #a8382f; stroke-width: 2; }
+.acc__band { fill: none; stroke: #e2574c; stroke-width: 7; stroke-linecap: round; }
+.acc--deliver path { fill: #2f8f5b; stroke: #1f6640; stroke-width: 2; }
+.acc--crown path { fill: #ffcf4a; stroke: #c9951c; stroke-width: 2; stroke-linejoin: round; }
+
+/* growth: an egg first, then bigger and bigger */
+[data-stage="egg"] .body { display: none; }
+[data-stage="egg"] .egg { display: inline; }
+[data-stage="egg"] .egg__eyes .pupil { display: inline; }
+[data-stage="baby"] .body { transform: scale(0.74); }
+[data-stage="junior"] .body { transform: scale(0.86); }
+[data-stage="pro"] .body { transform: scale(0.95); }
+[data-stage="legend"] .slate { stroke: #ffcf4a; }
+[data-stage="legend"] .pet__glow { opacity: 0.6; }
+
+/* moods */
+[data-mood="working"] .body__inner { animation: bob 0.9s ease-in-out infinite; }
+[data-mood="working"] .arm--left { animation: type-l 0.45s ease-in-out infinite; }
+[data-mood="working"] .arm--right { animation: type-r 0.45s ease-in-out infinite 0.22s; }
+[data-mood="working"] .egg { animation: wobble 1.4s ease-in-out infinite; }
+[data-mood="waiting"] .pupils { animation: look 2.4s ease-in-out infinite; }
+[data-mood="waiting"] .foot:first-child { animation: tap 0.5s ease-in-out infinite; transform-box: fill-box; transform-origin: 100% 100%; }
+[data-mood="sleeping"] .body__inner, [data-mood="sleepy"] .body__inner { animation: breathe 3.2s ease-in-out infinite; }
+[data-mood="sleeping"] .zzz text { animation: zzz 3s ease-in-out infinite; }
+[data-mood="sleeping"] .zzz text:nth-child(2) { animation-delay: 0.6s; }
+[data-mood="sleeping"] .zzz text:nth-child(3) { animation-delay: 1.2s; }
+[data-mood="chill"] .body__inner { animation: sway 3s ease-in-out infinite; }
+[data-mood="working"] .pet__glow { opacity: 0.35; }
+
+.clap .clapper { animation: clap 0.3s ease-in-out 3; }
+.jump .body, .jump .egg { animation: jump 0.7s cubic-bezier(.3, 1.6, .5, 1); }
+
+@keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+@keyframes type-l { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-14deg); } }
+@keyframes type-r { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(14deg); } }
+@keyframes look { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+@keyframes tap { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-12deg); } }
+@keyframes breathe { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(0.97); } }
+@keyframes sway { 0%, 100% { transform: rotate(-1.5deg); } 50% { transform: rotate(1.5deg); } }
+@keyframes wobble { 0%, 100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
+@keyframes zzz { 0% { opacity: 0; transform: translateY(6px); } 40% { opacity: 1; } 100% { opacity: 0; transform: translateY(-10px); } }
+@keyframes clap { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-26deg); } }
+@keyframes jump { 0% { translate: 0 0; } 35% { translate: 0 -26px; } 70% { translate: 0 0; } 85% { translate: 0 -6px; } 100% { translate: 0 0; } }
+
+.hearts { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.float {
+  position: absolute;
+  bottom: 30%;
+  font-size: 20px;
+  animation: float-up 1.6s ease-out forwards;
+}
+@keyframes float-up { from { opacity: 1; transform: translateY(0) scale(0.8); } to { opacity: 0; transform: translateY(-120px) scale(1.2); } }
+
+/* ---------------------------------------------------------------- texts and stats */
+.mood { margin: 2px 0 8px; min-height: 36px; color: var(--text-2); font-size: 12.5px; text-align: center; }
+.mood strong { color: var(--text); font-weight: 600; }
+
+.stats { display: grid; gap: 8px; }
+.stat__row { display: flex; align-items: baseline; gap: 6px; }
+.stat__label { color: var(--text-3); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.stat__value { margin-left: auto; font: 600 22px/1 var(--font-display); font-variant-numeric: tabular-nums; }
+.stat__goal { color: var(--text-3); font-size: 12px; }
+.stat__small { margin-left: auto; color: var(--text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.bar { height: 7px; margin-top: 4px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.bar__fill { height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--accent), #ffcf8a); transition: width 0.6s ease; }
+.bar--focus .bar__fill { background: linear-gradient(90deg, #7f9cff, #b59cff); }
+.goal-done .bar__fill { background: linear-gradient(90deg, var(--ok), #9cf0bf); }
+.grow { margin: 2px 0 0; color: var(--text-3); font-size: 11.5px; text-align: center; }
+
+/* ---------------------------------------------------------------- messages (SPEC §19)
+   From other programs – the Claude sessions' Resolve queue: "Mette vil bruge Resolve". */
+.messages { display: grid; gap: 6px; margin: 0 0 8px; }
+.message {
+  position: relative;
+  padding: 8px 30px 9px 10px;
+  border: 1px solid rgba(127, 156, 255, 0.5);
+  border-radius: 10px;
+  background: rgba(127, 156, 255, 0.12);
+  animation: message-in 0.3s ease-out;
+}
+.message.is-new { animation: message-in 0.3s ease-out, message-glow 1.2s ease-in-out 0.3s 3; }
+.message__title { margin: 0; font-size: 12.5px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.message__text { margin: 2px 0 0; color: var(--text-2); font-size: 11.5px; white-space: pre-line; overflow-wrap: anywhere; }
+.message__buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.message__button {
+  flex: 1 1 auto;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--surface-3);
+  color: var(--text);
+  font: 600 12px/1.2 var(--font);
+  cursor: pointer;
+}
+.message__button:first-child { background: #7f9cff; color: #0d1020; }
+.message__button:hover:not(:disabled) { filter: brightness(1.12); }
+.message__button:disabled { opacity: 0.55; cursor: default; }
+.message__close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.message__close:hover { background: var(--surface-3); color: var(--text); }
+.message.is-quiet { border-color: var(--line); background: var(--surface); }
+.message__text { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.message__pager { display: flex; align-items: center; justify-content: center; gap: 4px; margin-top: 6px; }
+.message__where { min-width: 38px; color: var(--text-3); font-size: 11px; text-align: center; font-variant-numeric: tabular-nums; }
+.message__step, .message__fold {
+  width: 24px;
+  height: 20px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.message__fold { margin-left: auto; }
+.message__step:hover, .message__fold:hover { color: var(--text); filter: brightness(1.15); }
+.messages__quiet {
+  width: 100%;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-2);
+  font: 600 11.5px/1.3 var(--font);
+  text-align: center;
+  cursor: pointer;
+}
+.messages__quiet:hover { color: var(--text); background: var(--surface-3); }
+@keyframes message-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@keyframes message-glow { 50% { box-shadow: 0 0 0 3px rgba(127, 156, 255, 0.45); } }
+
+/* ---------------------------------------------------------------- a card being transferred */
+.transfer {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(240, 164, 91, 0.35);
+  border-radius: 10px;
+  background: rgba(240, 164, 91, 0.08);
+}
+.transfer__row { display: flex; align-items: baseline; gap: 8px; }
+.transfer__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; }
+.transfer__pct { font: 600 16px/1 var(--font-display); font-variant-numeric: tabular-nums; color: var(--accent); }
+.transfer__sub { margin: 4px 0 0; color: var(--text-2); font-size: 11.5px; overflow-wrap: anywhere; }
+.bar--transfer .bar__fill { background: linear-gradient(90deg, var(--accent), #ffcf8a); }
+.transfer.is-done { border-color: rgba(95, 207, 143, 0.45); background: rgba(95, 207, 143, 0.08); }
+.transfer.is-done .transfer__pct { color: var(--ok); }
+.transfer.is-done .bar__fill { background: linear-gradient(90deg, var(--ok), #9cf0bf); }
+.transfer.is-failed { border-color: rgba(239, 113, 102, 0.5); background: rgba(239, 113, 102, 0.08); }
+.transfer.is-failed .transfer__pct { color: var(--danger); }
+.transfer.is-failed .bar__fill { background: var(--danger); }
+
+/* Klippe helps: carries film frames from the card (left) to the folder (right), checks them
+   with a magnifying glass, and empties the card when moving ("Klip"). */
+.carry, .carry__files, .carry__glass, .carry__checks { display: none; }
+[data-transfer] .carry { display: inline; }
+.carry__card path:first-child { fill: #3a3f4a; stroke: #9aa3b1; stroke-width: 2; }
+.carry__pins { fill: none; stroke: #ffcf4a; stroke-width: 2; }
+.carry__folder path { fill: #f0a45b; stroke: #c4610c; stroke-width: 2; }
+.carry__file rect { fill: #f3efe6; stroke: #1b1b1d; stroke-width: 1.5; }
+.carry__file path { fill: none; stroke: #1b1b1d; stroke-width: 1.5; }
+.carry__glass circle { fill: rgba(159, 180, 255, 0.25); stroke: #e8e4dc; stroke-width: 3.5; }
+.carry__glass path { fill: none; stroke: #8b5a2b; stroke-width: 6; stroke-linecap: round; }
+.carry__checks text { fill: var(--ok); font: 700 15px var(--font-display); opacity: 0; }
+
+[data-transfer="copy"] .carry__files { display: inline; }
+.carry__file { transform-box: fill-box; transform-origin: center; opacity: 0; animation: fly 1.5s ease-in-out infinite; }
+.carry__file:nth-child(2) { animation-delay: 0.5s; }
+.carry__file:nth-child(3) { animation-delay: 1s; }
+[data-transfer="copy"] .arm--left { transform: rotate(120deg); }
+[data-transfer="copy"] .arm--right { transform: rotate(-120deg); }
+[data-transfer] .body__inner { animation: bob 0.5s ease-in-out infinite; }
+
+[data-transfer="verify"] .carry__glass { display: inline; animation: inspect 1.2s ease-in-out infinite; transform-box: fill-box; transform-origin: 20% 20%; }
+[data-transfer="verify"] .carry__checks, [data-transfer="delete"] .carry__checks { display: inline; }
+[data-transfer="verify"] .carry__checks text, [data-transfer="delete"] .carry__checks text { animation: tick 1.6s ease-out infinite; }
+[data-transfer="verify"] .carry__checks text:nth-child(2), [data-transfer="delete"] .carry__checks text:nth-child(2) { animation-delay: 0.8s; }
+[data-transfer="verify"] .arm--right { transform: rotate(-70deg); }
+[data-transfer="delete"] .carry__card { animation: shake 0.4s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+
+@keyframes fly {
+  0% { transform: translate(0, 0) scale(0.6) rotate(0deg); opacity: 0; }
+  12% { opacity: 1; }
+  50% { transform: translate(70px, -96px) scale(1.05) rotate(160deg); }
+  88% { opacity: 1; }
+  100% { transform: translate(150px, 4px) scale(0.6) rotate(360deg); opacity: 0; }
+}
+@keyframes inspect { 0%, 100% { transform: translate(0, 0) rotate(0); } 50% { transform: translate(8px, 10px) rotate(8deg); } }
+@keyframes tick { 0% { opacity: 0; transform: translateY(6px); } 30% { opacity: 1; } 100% { opacity: 0; transform: translateY(-14px); } }
+@keyframes shake { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-8deg); } 75% { transform: rotate(8deg); } }
+
+/* ---------------------------------------------------------------- Klippe is out playing (petplay.py)
+   The pet has broken out through the box: only the hole is left until it is home again. */
+.hole { display: none; }
+[data-play="out"] .hole { display: inline; }
+[data-play="out"] .body, [data-play="out"] .egg, [data-play="out"] .zzz,
+[data-play="out"] .sweat, [data-play="out"] .carry { visibility: hidden; }
+.hole__gap { fill: #0b0b0c; stroke: #4a4540; stroke-width: 2; stroke-linejoin: round; }
+.hole__crack { fill: none; stroke: #5a554f; stroke-width: 2.5; stroke-linecap: round; }
+[data-play="out"] .hole { animation: hole-in 0.35s ease-out; transform-box: fill-box; transform-origin: center; }
+@keyframes hole-in { from { transform: scale(0.3); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* The sprite sheet (widget.html?sprites=…): every pose side by side on a transparent page,
+   nothing moving – headless Edge takes a screenshot of it for the games. */
+html.sprites, html.sprites body { background: transparent; }
+.sheet { display: flex; }
+.sprite { display: flex; flex: none; align-items: center; justify-content: center; }
+.sprite .pet { width: 200px; height: 200px; max-width: none; max-height: none; cursor: default; }
+.sprite .pet__shadow, .sprite .pet__glow, .sprite .carry, .sprite .zzz, .sprite .sweat, .sprite .hole { display: none !important; }
+html.sprites *, html.sprites *::before, html.sprites *::after { animation: none !important; transition: none !important; }
+[data-pose="cheer"] .arm--left { transform: rotate(80deg); }
+[data-pose="cheer"] .arm--right { transform: rotate(-80deg); }
+[data-pose="oops"] .mouth--smile { display: none; }
+[data-pose="oops"] .mouth--o { display: inline; }
+
+/* ---------------------------------------------------------------- effects */
+.fx { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }
+.flash { animation: flash 0.9s ease-out; }
+@keyframes flash { 0% { box-shadow: inset 0 0 0 0 rgba(240, 164, 91, 0); } 30% { box-shadow: inset 0 0 40px 6px rgba(240, 164, 91, 0.55); } 100% { box-shadow: inset 0 0 0 0 rgba(240, 164, 91, 0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+}

@@ -72,14 +72,38 @@ class SessionTests(unittest.TestCase):
     def test_poll(self) -> None:
         resolve = FakeResolve(project())
         session = self.session(resolve)
+        # The fakes have no page/timeline/render getters: those fields stay empty.
+        idle = {"page": "", "timeline": "", "timecode": "", "rendering": False}
         self.assertEqual(session.handle({"id": 2, "cmd": "poll"}), {
             "id": 2, "ok": True, "db": [DB["DbType"], DB["DbName"], DB["IpAddress"]],
-            "database": DB["DbName"], "project": "Projekt Ø", "uid": "uid-1"})
+            "database": DB["DbName"], "project": "Projekt Ø", "uid": "uid-1", **idle})
         resolve.pm.project = None
         resolve.pm.GetCurrentDatabase = lambda: None     # not a dict
         self.assertEqual(session.handle({"id": 3, "cmd": "poll"}),
                          {"id": 3, "ok": True, "db": ["", "", ""], "database": None,
-                          "project": None, "uid": ""})
+                          "project": None, "uid": "", **idle})
+
+    def test_poll_reports_what_the_editor_does(self) -> None:
+        # For the time tracker: the open page, the timeline, the playhead and whether a render runs.
+        proj = project()
+        timeline = type("Timeline", (), {"GetCurrentTimecode": lambda self: "01:00:12:05",
+                                         "GetName": lambda self: "Testimonial v3"})()
+        proj.GetCurrentTimeline = lambda: timeline
+        proj.IsRenderingInProgress = lambda: True
+        resolve = FakeResolve(proj)
+        resolve.GetCurrentPage = lambda: "color"
+        answer = self.session(resolve).handle({"id": 4, "cmd": "poll"})
+        self.assertEqual((answer["page"], answer["timeline"], answer["timecode"], answer["rendering"]),
+                         ("color", "Testimonial v3", "01:00:12:05", True))
+        # A timeline without a name getter still reports its playhead.
+        proj.GetCurrentTimeline = lambda: type("Timeline", (), {"GetCurrentTimecode": lambda self: "01:00:00:00"})()
+        answer = self.session(resolve).handle({"id": 5, "cmd": "poll"})
+        self.assertEqual((answer["timeline"], answer["timecode"]), ("", "01:00:00:00"))
+        proj.GetCurrentTimeline = lambda: None            # no timeline open
+        proj.IsRenderingInProgress = lambda: (_ for _ in ()).throw(RuntimeError("busy"))
+        answer = self.session(resolve).handle({"id": 6, "cmd": "poll"})
+        self.assertEqual((answer["page"], answer["timeline"], answer["timecode"], answer["rendering"]),
+                         ("color", "", "", False))
 
     def test_uid_through_a_fresh_proxy(self) -> None:
         resolve = FakeResolve(UnstableIdProject("P"))

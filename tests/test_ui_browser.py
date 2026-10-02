@@ -14,6 +14,7 @@ import time
 import unittest
 import urllib.parse
 import urllib.request
+from datetime import date, timedelta
 from typing import Any
 
 from tests._ui_browser import CDPError, Edge, Page, find_edge
@@ -1083,7 +1084,7 @@ class SettingsTests(UiCase):
         self.assertEqual(self.js("document.activeElement.id"), "tab-placeringer")
         self.page.key("Escape")  # closed again: the filters are back in the Tab order
         self.wait("document.querySelector('#settings').hidden && document.activeElement.id === 'q'")
-        for _ in range(3):  # #pill, #settings-button, the kind chips
+        for _ in range(4):  # #pill, #time-button, #settings-button, the kind chips
             self.page.key("Tab")
         self.assertEqual(self.js("document.activeElement.dataset.kind"), "all")
         self.assertFalse(self.requests("/api/open"))
@@ -1138,7 +1139,10 @@ class SettingsTests(UiCase):
         self.assertEqual(self.wait_request("/api/settings")["body"], {"hide_after_open": False})
         self.page.click("[data-setting=run_at_login]")
         self.assertEqual(self.wait_request("/api/settings", count=2)["body"], {"run_at_login": False})
-        self.js("document.querySelector('#hotkey-input').value = 'ctrl+'")
+        # Typed (an 'input' event marks the field as edited), so a late settings event from the
+        # two saves above cannot refill it with the saved hotkey before the submit.
+        self.js("const i = document.querySelector('#hotkey-input'); i.value = 'ctrl+';"
+                " i.dispatchEvent(new Event('input', {bubbles: true}))")
         self.page.click("#hotkey-form button[type=submit]")
         self.wait("!document.querySelector('#hotkey-error').hidden")
         self.assertTrue(self.text("#hotkey-error").startswith("Ugyldig genvejstast"))
@@ -1149,6 +1153,28 @@ class SettingsTests(UiCase):
         self.page.click("[data-follow=open]")
         self.assertEqual(self.wait_request("/api/settings", count=5)["body"], {"resolve_follow": "open"})
         self.wait("document.querySelector('[data-follow=open]').getAttribute('aria-checked') === 'true'")
+
+    def test_klippe_play_controls(self) -> None:
+        self.open(ready="!document.querySelector('#panel-generelt').hidden && document.querySelector('#hotkey-input').value",
+                  panel="settings", tab="generelt")
+        self.assertEqual(self.js("document.querySelector('[data-setting=widget_play]').getAttribute('aria-checked')"),
+                         "true")
+        self.assertEqual(self.js("document.querySelector('#pet-play-idle').value"), "5")
+        self.assertTrue(self.js("document.querySelector('#pet-play-now').disabled"))      # Klippe is off
+        self.page.click("[data-setting=widget_play]")
+        self.assertEqual(self.wait_request("/api/settings")["body"], {"widget_play": False})
+        self.js("const s = document.querySelector('#pet-play-idle'); s.value = '10';"
+                " s.dispatchEvent(new Event('change', {bubbles: true}))")
+        self.assertEqual(self.wait_request("/api/settings", count=2)["body"], {"widget_play_idle_minutes": 10})
+        self.page.click("[data-setting=widget_enabled]")
+        self.wait("!document.querySelector('#pet-play-now').disabled")
+        self.page.click("#pet-play-now")
+        self.wait_request("/api/widget/play")
+        self.wait("document.querySelector('#pet-play-state').textContent.includes('Slip musen')")
+        self.control("/api/_mock/publish", {"type": "pet", "data": {"state": "out"}})
+        self.wait("document.querySelector('#pet-play-state').textContent.includes('rør musen')")
+        self.control("/api/_mock/publish", {"type": "pet", "data": {"state": "ready", "message": "Skærmen blev låst"}})
+        self.wait("document.querySelector('#pet-play-state').textContent === 'Skærmen blev låst'")
 
     def test_theme_is_dark_by_default_and_follows_the_setting(self) -> None:
         # Dark even when Windows is light: the default "theme" setting is "dark".
@@ -1217,6 +1243,456 @@ class LayoutTests(UiCase):
         self.page.key(",", ctrl=True)
         self.wait("document.querySelectorAll('.src').length > 5")
         self.assertLessEqual(self.js("document.querySelector('.settings__body').scrollWidth"), 700)
+
+class TimeTabTests(UiCase):
+    """The Tid tab: today's time in the header, the report per period, rounding and export."""
+
+    TID_READY = "document.querySelector('.time-table__grid') && !document.querySelector('#panel-tid').hidden"
+    PROJECTS = ("[...document.querySelectorAll('.time-row:not(.time-row--day) .time-proj__name')]"
+                ".map(n => n.textContent)")
+    # Downloads would land in the real Overførsler folder: record them in the page instead.
+    STUB_DOWNLOADS = ("window.__downloads = []; HTMLAnchorElement.prototype.click = function () {"
+                      " if (this.download) window.__downloads.push(this.download); }")
+
+    def change(self, selector: str, value: str) -> None:
+        self.js(f"(() => {{ const n = document.querySelector({json.dumps(selector)}); n.value = {json.dumps(value)};"
+                " n.dispatchEvent(new Event('change', {bubbles: true})); })()")
+
+    def test_header_shows_today_and_opens_the_tab(self) -> None:
+        self.open()
+        self.wait("document.querySelector('#time-today').textContent === '3:32'")
+        self.assertEqual(self.js("document.querySelector('#time-button').dataset.state"), "rec")
+        self.page.click("#time-button")
+        self.wait(self.TID_READY)
+        self.assertEqual(self.text("#settings-title"), "Tid")
+        self.assertEqual(self.js("document.querySelector('#time-button').getAttribute('aria-expanded')"), "true")
+        self.assertEqual(self.text("#time-now-main"), "Registrerer: Rikke Lindholm - Testimonial")
+        self.assertTrue(self.text("#time-now-sub").startswith("Tidslinje „Testimonial v3“ · Color siden "))
+        self.assertEqual(self.js(self.PROJECTS), ["Rikke Lindholm - Testimonial", "Klar Tand - Skive"])
+        self.assertEqual(self.text("#time-report-title"), "2 projekter · 3 t 32 min")
+        # Columns only for the pages used; rounded up to 15 min (the default) in decimal hours.
+        heads = self.js("[...document.querySelectorAll('.time-table__grid thead th')].map(n => n.textContent)")
+        self.assertEqual(heads, ["Projekt", "Edit", "Color", "Fusion", "Musik/lyd", "I alt", "Afrundet (t)"])
+        self.assertEqual(self.js("[...document.querySelectorAll('tfoot td')].map(n => n.textContent)"),
+                         ["2:15", "0:40", "0:25", "0:12", "3:32", "3,75"])
+        self.page.click("#time-button")
+        self.wait("document.querySelector('#settings').hidden")
+        self.assertEqual(self.js("document.activeElement.id"), "q")
+
+    def test_periods_per_day_rounding_and_export(self) -> None:
+        self.open(ready=self.TID_READY, panel="settings", tab="tid")
+        self.js(self.STUB_DOWNLOADS)
+        today = date.today()
+        monday = today - timedelta(days=today.weekday())
+        sunday = monday + timedelta(days=6)
+        self.page.click("[data-period=week]")
+        request = self.wait_request("/api/time", "GET", where=lambda r: r["query"].get("from") == monday.isoformat())
+        self.assertEqual(request["query"]["to"], sunday.isoformat())
+        self.assertEqual(self.js("document.querySelector('#time-from').value"), monday.isoformat())
+        if today - timedelta(days=1) >= monday:   # the fixture's Vestervang (yesterday) is in this week
+            self.wait("document.querySelectorAll('.time-row:not(.time-row--day)').length === 3")
+        self.page.click("[data-detail=day]")
+        self.wait("document.querySelectorAll('.time-row--day').length >= 2")
+        self.change("#time-round", "30")
+        self.assertEqual(self.wait_request("/api/settings")["body"], {"time_round_minutes": 30})
+        self.wait("document.querySelector('.time-table__grid thead th:last-child').title.includes('30 min pr. dag')")
+        self.page.click("#time-export")
+        export = self.wait_request("/api/time/export", "GET")
+        self.assertEqual(export["query"], {"from": monday.isoformat(), "to": sunday.isoformat(),
+                                           "round": "30", "detail": "day"})
+        self.wait("window.__downloads.length === 1")
+        self.assertEqual(self.js("window.__downloads[0]"),
+                         f"Projektsøg tid {monday.isoformat()} til {sunday.isoformat()}.csv")
+
+    def test_time_per_timeline(self) -> None:
+        self.open(ready=self.TID_READY, panel="settings", tab="tid")
+        self.js(self.STUB_DOWNLOADS)
+        self.page.click("[data-detail=timeline]")
+        self.wait("document.querySelectorAll('.time-row--timeline').length === 3")
+        labels = self.js("[...document.querySelectorAll('.time-row--timeline th')].map(n => n.textContent)")
+        self.assertEqual(labels, ["Testimonial v3", "Teaser", "Skive 30 sek"])
+        hours = self.js("[...document.querySelectorAll('.time-row--timeline .time-table__total')].map(n => n.textContent)")
+        self.assertEqual(hours, ["2:22", "0:25", "0:45"])
+        self.page.click("#time-export")
+        self.assertEqual(self.wait_request("/api/time/export", "GET")["query"]["detail"], "timeline")
+        self.page.click("[data-detail='']")
+        self.wait("document.querySelectorAll('.time-row--timeline').length === 0")
+
+    def test_custom_dates_stay_in_order_and_find_opens_the_search(self) -> None:
+        self.open(ready=self.TID_READY, panel="settings", tab="tid")
+        forty = (date.today() - timedelta(days=40)).isoformat()
+        self.change("#time-from", forty)
+        self.wait_request("/api/time", "GET", where=lambda r: r["query"].get("from") == forty)
+        self.wait("document.querySelectorAll('.time-row').length === 4")   # + Solkraft Midt, 40 days ago
+        self.assertIsNone(self.js("document.querySelector('[data-period][aria-checked=true]')"))
+        # A start after the end moves the end along.
+        later = (date.today() + timedelta(days=2)).isoformat()
+        self.change("#time-from", later)
+        self.wait(f"document.querySelector('#time-to').value === '{later}'")
+        self.page.click("[data-period=today]")
+        self.wait("document.querySelectorAll('.time-row').length === 2")
+        self.page.click("[data-time-find='Rikke Lindholm']")
+        self.wait("document.querySelector('#settings').hidden"
+                  " && document.querySelector('#q').value === 'Rikke Lindholm'")
+
+    def test_tracking_settings(self) -> None:
+        self.open(ready=self.TID_READY, panel="settings", tab="tid")
+        self.assertEqual(self.js("document.querySelector('#time-idle').value"), "10")
+        self.change("#time-idle", "15")
+        self.assertEqual(self.wait_request("/api/settings")["body"], {"time_idle_minutes": 15})
+        self.assertIn("Artlist", self.js("document.querySelector('#time-sites').value"))
+        self.js("document.querySelector('#time-sites').value = 'Artlist, Epidemic Sound,  , Freesound'")
+        self.page.click("#time-sites-form button[type=submit]")
+        self.assertEqual(self.wait_request("/api/settings", count=2)["body"],
+                         {"time_music_sites": ["Artlist", "Epidemic Sound", "Freesound"]})
+        self.page.click("[data-setting=time_tracking_enabled]")
+        self.assertEqual(self.wait_request("/api/settings", count=3)["body"], {"time_tracking_enabled": False})
+        self.wait("document.querySelector('#time-now-main').textContent === 'Tidsregistrering er slået fra'")
+        self.wait("document.querySelector('#time-button').dataset.state === 'off'")
+
+
+class TimeAwayTests(UiCase):
+    scenario = "asked,time-away"
+
+    def test_another_program_is_a_pause_that_still_counts(self) -> None:
+        self.open(ready=TimeTabTests.TID_READY, panel="settings", tab="tid")
+        self.wait("document.querySelector('#time-now-main').textContent"
+                  " === 'Uden for Resolve – tæller stadig: Rikke Lindholm - Testimonial'")
+        self.assertTrue(self.text("#time-now-sub").startswith("Kommer du tilbage inden kl. "))
+        self.assertEqual(self.js("document.querySelector('#time-now').dataset.tone"), "away")
+        self.assertEqual(self.js("document.querySelector('#time-button').dataset.state"), "away")
+
+
+class TimeIdleTests(UiCase):
+    scenario = "asked,time-idle"
+
+    def test_pause_is_explained(self) -> None:
+        self.open(ready=TimeTabTests.TID_READY, panel="settings", tab="tid")
+        self.wait("document.querySelector('#time-now-main').textContent === 'Pause – ingen aktivitet'")
+        self.assertIn("i over 10 min", self.text("#time-now-sub"))
+        self.assertEqual(self.js("document.querySelector('#time-button').dataset.state"), "pause")
+
+
+IMPORT_READY = "!document.querySelector('#panel-import').hidden"
+CHOSEN = ("document.querySelector('#panel-import [data-import-choice][aria-checked=true]')"
+          "?.dataset.importChoice ?? null")
+RIKKE = "C:\\Kunder 2026 (STUDIO)\\Rikke Lindholm"
+
+
+class ImportTests(UiCase):
+    """The import helper: a camera card in the reader → where its clips go → copy (SPEC §17)."""
+    scenario = "asked,card"
+
+    def plan_for(self, project: str, separate: bool = False) -> dict[str, Any]:
+        return self.wait_request("/api/import/plan", "GET", where=lambda r: r["query"].get("project") == project
+                                 and bool(r["query"].get("separate")) == separate)
+
+    def test_a_card_shows_on_the_main_view_and_opens_the_import_tab(self) -> None:
+        self.open(ready=ROWS + " && document.querySelector('.card--camera')")
+        self.assertEqual(self.text(".card--camera .card__title"), "FX9-kort i E:")
+        self.assertIn("99 klip · 72,4 GB", self.text(".card--camera .card__text"))
+        self.assertIn("Ikke overført før", self.text(".card--camera .card__text"))
+        self.page.click(".card--camera .btn--primary")
+        self.wait(IMPORT_READY + " && document.querySelector('.imp-card__title')")
+        self.assertEqual(self.text("#settings-title"), "Import")
+        self.assertTrue(self.text(".imp-card__title").startswith("FX9-kort i E:"))
+        self.assertEqual(self.text(".imp-card__status"), "Ikke overført før")
+        # The project open in Resolve is suggested first; C: has too little room for the card.
+        self.wait(CHOSEN + f" === {json.dumps(RIKKE)}")
+        self.plan_for(RIKKE)
+        self.wait("document.querySelector('.imp-target__path')?.textContent.includes('Rikke Lindholm\\\\Klip\\\\FX9')")
+        self.assertIn("Der er kun 70 GB fri på disken", self.text("#import-target"))
+        self.assertTrue(self.js("document.querySelector('#import-copy').disabled"))
+        self.assertTrue(self.visible("#import-separate"))   # the FX9 folder holds another shoot
+        self.page.click("#import-separate")
+        self.plan_for(RIKKE, separate=True)
+        self.wait("document.querySelector('.imp-target__path').textContent.includes('FX9 Dag 2')")
+
+    def test_a_new_project_on_a_disk_with_room_then_copy(self) -> None:
+        self.open(ready=IMPORT_READY + " && document.querySelector('#import-choices .choice')",
+                  panel="settings", tab="import")
+        self.page.click("#import-new-choice")
+        self.wait("document.activeElement.id === 'import-name'")
+        # The first disk with room is chosen: not C: (too full), but F:.
+        self.assertEqual(self.js("document.querySelector('[data-import-root][aria-checked=true]').dataset.importRoot"),
+                         "F:\\Kunder 2026 ARKIV")
+        self.assertIn("for", self.js("document.querySelector('.imp-disk__free.is-short') ? 'for' : ''"))
+        self.page.type("Mette Juhl: test")
+        self.wait("document.querySelector('.imp-target__warn')?.textContent.startsWith('Navnet må ikke')")
+        self.js("const n = document.querySelector('#import-name'); n.value = ''")
+        self.page.type("Mette Juhl - Portræt")
+        project = "F:\\Kunder 2026 ARKIV\\Mette Juhl - Portræt"
+        self.plan_for(project)
+        self.wait("!document.querySelector('#import-copy').disabled")
+        self.assertIn("oprettes", self.text(".imp-target__path"))
+        self.page.key("Enter")                                   # Enter in the name field starts it
+        self.assertEqual(self.wait_request("/api/import/project")["body"],
+                         {"root": "F:\\Kunder 2026 ARKIV", "name": "Mette Juhl - Portræt"})
+        self.assertEqual(self.wait_request("/api/import/start")["body"],
+                         {"card": "7E3A91C4@E:", "project": project, "separate": False, "mode": "copy"})
+        self.wait("document.querySelector('#import-job .imp-job__title')?.textContent"
+                  " === 'Overfører FX9-kortet til Mette Juhl - Portræt'")
+        self.wait("document.querySelector('#import-job').dataset.tone === 'ok'", timeout=8)
+        self.assertEqual(self.text("#import-job .imp-job__main"), "297 filer (72,4 GB) er kopieret og kontrolleret")
+        self.wait("document.querySelector('#import-history .imp-history__path')?.textContent"
+                  " === 'Mette Juhl - Portræt'")
+        self.page.click("#import-job [data-import-action=open]")
+        self.assertEqual(self.wait_request("/api/open")["body"],
+                         {"path": project + "\\Klip\\FX9", "action": "folder"})
+
+    def test_search_for_another_project_and_only_prepare(self) -> None:
+        self.open(ready=IMPORT_READY + " && document.querySelector('#import-choices .choice')",
+                  panel="settings", tab="import")
+        self.page.click("#import-search")
+        self.page.type("klar tand")
+        self.wait("document.querySelectorAll('#import-results .choice').length > 0")
+        path = self.js("document.querySelector('#import-results .choice').dataset.importChoice")
+        self.page.click("#import-results .choice")
+        self.plan_for(path)
+        self.wait(CHOSEN + f" === {json.dumps(path)}")
+        self.wait("!document.querySelector('#import-prepare').disabled")
+        self.page.click("#import-prepare")
+        self.assertEqual(self.wait_request("/api/import/start")["body"]["mode"], "prepare")
+        self.wait("document.querySelector('#toast')?.textContent.includes('Mappen er klar')")
+
+    def test_stop_a_running_import(self) -> None:
+        self.open(ready=IMPORT_READY + " && document.querySelector('#import-choices .choice')",
+                  panel="settings", tab="import")
+        self.page.click("#import-new-choice")
+        self.page.type("Stop Test")
+        self.wait("!document.querySelector('#import-copy').disabled")
+        self.page.click("#import-copy")
+        self.wait("document.querySelector('#import-job [data-import-action=cancel]')")
+        self.page.click("#import-job [data-import-action=cancel]")
+        self.wait_request("/api/import/cancel")
+        self.wait("document.querySelector('#import-job .imp-job__main')?.textContent === 'Overførslen blev stoppet'")
+
+
+class ImportFocusTests(UiCase):
+    scenario = "asked,card2,nofocus"
+
+    def test_a_card_going_in_opens_the_import_tab_and_two_cards_can_be_picked(self) -> None:
+        self.open()
+        self.control("/api/_mock/publish", {"type": "focus", "data": {"reason": "card", "panel": "import"}})
+        self.wait(IMPORT_READY + " && document.querySelectorAll('#import-cardpick [data-import-card]').length === 2")
+        self.page.click("[data-import-card='1A2B3C4D@G:']")
+        self.wait("document.querySelector('.imp-card__status')?.textContent"
+                  " === 'Alle 24 klip er overført til Rikke Lindholm'")
+        self.assertIn("24 klip · 12 fotos", self.text(".imp-card__facts"))
+        self.assertIn("samme navn og størrelse", self.text(".imp-card__done"))
+        self.page.click(".imp-card [data-import-action=open]")
+        self.assertEqual(self.wait_request("/api/open")["body"],
+                         {"path": RIKKE + "\\Klip\\A7S", "action": "folder"})
+        # On the main view too (closing the panel shows the results again).
+        self.page.key("Escape")
+        self.wait("[...document.querySelectorAll('.card--camera .card__text')]"
+                  ".some(n => n.textContent.includes('Alle 24 klip er overført til Rikke Lindholm'))")
+
+
+class MoveImportTests(UiCase):
+    """"Klip": like Ctrl+X, confirmed with a second click, deletes only after verifying."""
+    scenario = "asked,card"
+
+    def test_move_needs_a_second_click_and_reports_the_emptied_card(self) -> None:
+        self.open(ready=IMPORT_READY + " && document.querySelector('#import-choices .choice')",
+                  panel="settings", tab="import")
+        self.page.click("#import-new-choice")
+        self.page.type("Klip Test")
+        self.wait("!document.querySelector('#import-move').disabled")
+        self.assertEqual(self.text("#import-move").strip(), "Klip – flyt fra kortet")
+        self.page.click("#import-move")
+        self.wait("document.querySelector('#import-move').textContent.includes('Bekræft')")
+        self.assertEqual(self.requests("/api/import/start", "POST"), [])     # nothing started yet
+        self.page.click("#import-move")
+        body = self.wait_request("/api/import/start")["body"]
+        self.assertEqual((body["mode"], body["project"]), ("move", "F:\\Kunder 2026 ARKIV\\Klip Test"))
+        self.wait("document.querySelector('#import-job .imp-job__main')?.textContent.startsWith('Sletter fra kortet')",
+                  timeout=8)
+        self.wait("document.querySelector('#import-job').dataset.tone === 'ok'", timeout=8)
+        self.assertIn("er flyttet – kopieret, kontrolleret og slettet fra kortet", self.text("#import-job .imp-job__main"))
+        self.assertEqual(self.text("#import-job .imp-job__title"), "FX9-kortet er flyttet til Klip Test")
+
+    def test_the_confirmation_lapses_when_the_target_changes(self) -> None:
+        self.open(ready=IMPORT_READY + " && document.querySelector('#import-choices .choice')",
+                  panel="settings", tab="import")
+        self.page.click("#import-new-choice")
+        self.page.type("Klip Test")
+        self.wait("!document.querySelector('#import-move').disabled")
+        self.page.click("#import-move")
+        self.wait("document.querySelector('#import-move').textContent.includes('Bekræft')")
+        self.page.click("[data-import-root='F:\\\\Kunder 2026 ARKIV']")
+        self.wait("!document.querySelector('#import-move').textContent.includes('Bekræft')")
+
+
+class WidgetTests(UiCase):
+    """Klippe, the pet widget (widget.html): follows the time tracking and celebrates."""
+
+    SAID = ("[document.querySelector('#bubble').textContent, ...window.__klippe.state.bubbles.map(b => b.text)]"
+            ".join(' | ')")
+
+    def open_widget(self) -> None:
+        self.page.set_viewport(260, 430)
+        self.page.navigate(self.server.url + "widget.html")
+        self.page.wait_for("document.querySelector('#app').dataset.mood === 'working'"
+                           " && document.querySelector('#pet-level').textContent.includes('Lv')")
+
+    def test_klippe_works_along_and_grows(self) -> None:
+        self.open_widget()
+        self.assertEqual(self.js("document.querySelector('#app').dataset.outfit"), "color")   # sunglasses
+        self.assertEqual(self.text("#mood"), "Gør Testimonial v3 smuk i Color 😎")
+        self.assertEqual(self.text("#today"), "3:32")
+        # 11 h 32 min logged in all (the mock's fixture): a baby; today and yesterday: 2 days in a row.
+        self.assertEqual(self.text("#pet-level"), "Baby · Lv 5")
+        self.assertEqual(self.js("document.querySelector('#app').dataset.stage"), "baby")
+        self.assertEqual(self.text("#pet-streak"), "🔥 2 dage")
+        self.page.click("#pet")
+        self.wait("document.querySelectorAll('#hearts .float').length > 0")
+
+    def test_it_celebrates_hours_and_cards(self) -> None:
+        self.open_widget()
+        self.js("window.__klippe.applyStatus({...window.__klippe.state.status, today_s: 4 * 3600 + 10})")
+        self.wait("document.querySelector('#app').classList.contains('party')")
+        self.assertIn("4", self.js(self.SAID))
+        self.wait("window.__klippe.fx.count() > 0")                    # confetti on the canvas
+        self.control("/api/_mock/publish", {"type": "import", "data": {
+            "id": "job-1", "state": "done", "mode": "move", "camera": "FX9"}})
+        self.wait(f"{self.SAID}.toLowerCase().includes('kortet')")
+
+    def test_klippe_does_the_transfer_job(self) -> None:
+        self.open_widget()
+        job = {"id": "job-7", "card": "7E3A91C4@E:", "state": "copying", "mode": "move", "camera": "FX9",
+               "project_name": "Rikke Lindholm", "files_done": 12, "files_total": 297, "bytes_total": 1000,
+               "copied": 400, "verified": 200, "eta_s": 300}
+        self.control("/api/_mock/publish", {"type": "cards", "data": {"cards": [
+            {"id": "7E3A91C4@E:", "camera": "FX9", "found": {"complete": False}}]}})
+        self.control("/api/_mock/publish", {"type": "import", "data": job})
+        self.wait("document.querySelector('#app').dataset.transfer === 'copy'")
+        self.assertFalse(self.js("document.querySelector('#transfer').hidden"))
+        self.assertEqual(self.text("#transfer-pct"), "30 %")
+        self.assertEqual(self.text("#transfer-title"), "Flytter FX9-kort → Rikke Lindholm")
+        self.assertEqual(self.text("#mood"), "Bærer FX9-filer over i Rikke Lindholm 📦")
+        self.assertTrue(self.js("getComputedStyle(document.querySelector('.carry__files')).display !== 'none'"))
+        self.control("/api/_mock/publish", {"type": "import", "data": {**job, "state": "verifying"}})
+        self.wait("document.querySelector('#app').dataset.transfer === 'verify'")
+        self.control("/api/_mock/publish", {"type": "import", "data": {**job, "state": "deleting", "deleted": 40}})
+        self.wait("document.querySelector('#app').dataset.transfer === 'delete'")
+        self.control("/api/_mock/publish", {"type": "import", "data": {
+            **job, "state": "done", "files_done": 297, "deleted": 297, "finished": time.time()}})
+        self.wait("!document.querySelector('#app').dataset.transfer"
+                  " && document.querySelector('#transfer').classList.contains('is-done')")
+        self.assertEqual(self.text("#transfer-title"), "FX9-kortet er flyttet ✓")
+        self.assertFalse(self.js("document.querySelector('#transfer').hidden"))   # the card is still in
+        self.wait(f"{self.SAID}.toLowerCase().includes('kortet')")
+        # Taking the card out clears the finished job's box (it would only take room).
+        self.control("/api/_mock/publish", {"type": "cards", "data": {"cards": []}})
+        self.wait("document.querySelector('#transfer').hidden")
+
+    def test_a_failure_stays_when_the_card_is_gone(self) -> None:
+        self.open_widget()
+        self.control("/api/_mock/publish", {"type": "import", "data": {
+            "id": "job-8", "card": "7E3A91C4@E:", "state": "failed", "mode": "copy", "camera": "FX9",
+            "project_name": "X", "files_done": 3, "files_total": 9, "bytes_total": 10, "copied": 3, "verified": 3,
+            "error": "Kortet blev taget ud under overførslen", "finished": time.time()}})
+        self.wait("document.querySelector('#transfer').classList.contains('is-failed')")
+        self.control("/api/_mock/publish", {"type": "cards", "data": {"cards": []}})
+        time.sleep(0.3)
+        self.assertFalse(self.js("document.querySelector('#transfer').hidden"))
+
+    def test_klippe_breaks_out_and_comes_home(self) -> None:
+        self.open_widget()
+        look = self.wait_request("/api/widget/look", where=lambda r: r["body"]["stage"] == "baby")["body"]
+        self.assertEqual(look["outfit"], "color")
+        self.assertEqual(look["view"], {"w": 260, "h": 430})
+        self.assertGreater(look["pet"]["w"], 100)
+        self.control("/api/_mock/publish", {"type": "pet", "data": {"state": "out"}})
+        self.wait("document.querySelector('#app').dataset.play === 'out'")
+        self.assertEqual(self.js("getComputedStyle(document.querySelector('#pet .body')).visibility"), "hidden")
+        self.assertNotEqual(self.js("getComputedStyle(document.querySelector('#pet .hole')).display"), "none")
+        self.assertIn("ude at lege", self.text("#mood"))
+        self.control("/api/_mock/publish", {"type": "pet", "data": {"state": "ready", "reason": "touched"}})
+        self.wait("!document.querySelector('#app').dataset.play")
+        self.wait(f"['tilbage', 'lånte', 'din tur'].some(w => {self.SAID}.includes(w))")
+        self.assertNotIn("ude at lege", self.text("#mood"))
+
+    def test_messages_from_the_claude_sessions_come_up_by_the_pet(self) -> None:
+        self.open_widget()
+        message = {"tag": "koe:Mette", "titel": "Mette vil bruge Resolve", "tekst": "Projekt: Portræt · ca. 10 min",
+                   "knapper": [{"tekst": "Byg nu", "uri": "resolvekoe:byg?navn=Mette&id=1"},
+                               {"tekst": "Ikke nu", "uri": "resolvekoe:senere?navn=Mette&id=1"}],
+                   "session": "Mette", "udloeber_ved": time.time() + 600}
+        self.control("/api/_mock/publish", {"type": "messages", "data": {"messages": [message]}})
+        self.wait("!document.querySelector('#messages').hidden")
+        self.assertEqual(self.text(".message__title"), "Mette vil bruge Resolve")
+        self.assertEqual(self.js("[...document.querySelectorAll('.message__button')].map(b => b.textContent)"),
+                         ["Byg nu", "Ikke nu"])
+        self.assertTrue(self.js("document.querySelector('.message').classList.contains('is-new')"))
+        # Always visible: inside the window, right under the pet.
+        self.assertTrue(self.js("""(() => { const m = document.querySelector('.message').getBoundingClientRect();
+            const p = document.querySelector('#pet').getBoundingClientRect();
+            return m.top >= p.bottom - 1 && m.bottom <= innerHeight; })()"""))
+        self.page.click(".message__button")
+        self.assertEqual(self.wait_request("/api/messages/click")["body"], {"tag": "koe:Mette", "knap": 0})
+        self.page.click(".message__close")
+        self.assertEqual(self.wait_request("/api/messages", method="DELETE")["body"], {"tag": "koe:Mette"})
+        # Several: one card at a time, ‹ 1/3 › to the others – never a long list.
+        many = [{**message, "tag": f"m{i}", "titel": f"Besked {i}", "udloeber_ved": time.time() + 600}
+                for i in range(3)]
+        self.control("/api/_mock/publish", {"type": "messages", "data": {"messages": many}})
+        self.wait("document.querySelectorAll('.message').length === 1"
+                  " && document.querySelector('.message__where')?.textContent === '1 / 3'")
+        self.assertEqual(self.text(".message__title"), "Besked 0")
+        self.page.click(".message__step[aria-label='Næste besked']")
+        self.wait("document.querySelector('.message__title').textContent === 'Besked 1'")
+        # A session that is done and needs no answer: quiet – only a small line, no card.
+        quiet = {**message, "tag": "koe:hook-Mette", "titel": "Mette er færdig", "knapper": [],
+                 "prioritet": "stille", "lyd": False, "udloeber_ved": time.time() + 600}
+        self.control("/api/_mock/publish", {"type": "messages", "data": {"messages": [quiet]}})
+        self.wait("document.querySelector('.messages__quiet')?.textContent === '📬 1 besked · vis'")
+        self.assertFalse(self.js("!!document.querySelector('.message')"))
+        self.page.click(".messages__quiet")
+        self.wait("document.querySelector('.message.is-quiet .message__title')?.textContent === 'Mette er færdig'")
+        self.page.click(".message__fold")
+        self.wait("!!document.querySelector('.messages__quiet')")
+        # Something that needs you goes in front of the quiet ones.
+        self.control("/api/_mock/publish", {"type": "messages", "data": {"messages": [quiet, many[0]]}})
+        self.wait("document.querySelector('.message__title')?.textContent === 'Besked 0'"
+                  " && document.querySelector('.message__where').textContent === '1 / 2'")
+        self.control("/api/_mock/publish", {"type": "messages", "data": {"messages": [
+            {**message, "udloeber_ved": time.time() - 1}]}})          # expired
+        self.wait("document.querySelector('#messages').hidden")
+
+    def test_the_sprite_sheet_for_the_games(self) -> None:
+        """widget.html?sprites=… rendered by headless Edge: every pose, on transparency."""
+        from projektsog import petplay, petplay_child as pc
+        with tempfile.TemporaryDirectory() as tmp:
+            sheets = petplay.SpriteSheets(self.server.url, os.path.join(tmp, "pet"),
+                                          profile_dir=os.path.join(tmp, "prof"))
+            path = sheets.ensure("legend", "audio")
+            self.assertIsNotNone(path)
+            with pc.GdiPlus():
+                sprites = pc.Sprites(path, list(petplay.POSES), petplay.CELL_CSS, petplay.SHEET_SCALE, 1.0)
+                try:
+                    self.assertTrue(all(sprites.boxes), sprites.boxes)               # every pose drawn
+                    self.assertTrue(60 < sprites.pet_h < 200, sprites.pet_h)
+                    self.assertAlmostEqual(sprites.anchor_units[0], 100, delta=4)     # in the middle
+                finally:
+                    sprites.close()
+
+    def test_away_and_asleep(self) -> None:
+        self.open_widget()
+        self.js("window.__klippe.applyStatus({state: 'away', enabled: true, project: 'X', bucket: 'edit', today_s: 100})")
+        self.assertEqual(self.js("document.querySelector('#app').dataset.mood"), "waiting")
+        self.js("window.__klippe.applyStatus({state: 'no-resolve', enabled: true, today_s: 100})")
+        self.assertEqual(self.js("document.querySelector('#app').dataset.mood"), "sleeping")
+        self.assertEqual(self.text("#mood"), "Klippe sover, til Resolve vågner 💤")
+
+
+class ImportNoCardTests(UiCase):
+    def test_without_a_card(self) -> None:
+        self.open(ready=IMPORT_READY, panel="settings", tab="import")
+        self.assertTrue(self.visible("#import-none"))
+        self.assertFalse(self.visible("#import-main"))
+        self.assertFalse(self.js("!!document.querySelector('.card--camera')"))
 
 
 if __name__ == "__main__":

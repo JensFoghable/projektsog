@@ -141,14 +141,15 @@ class FakeWorld:
         return sum(1 for p in list(self.probed) if os.path.normcase(p) == os.path.normcase(path))
 
     def volume(self, name: str, serial: str, *, label: str = "", drive: str = "X:",
-               hotplug: bool = False, fs: str = "NTFS", tree: list[str] = ()) -> dict:
+               hotplug: bool = False, fs: str = "NTFS", tree: list[str] = (),
+               size: int = 2_000_000_000_000) -> dict:
         """A new volume whose root is the folder ``base\\name`` (created with ``tree``)."""
         root = os.path.join(self.base, name)
         os.makedirs(root, exist_ok=True)
         make_tree(root, tree)
         vol = {"drive": drive, "root": root + "\\", "label": label, "serial": serial, "fs": fs,
                "drive_type": 2 if hotplug else 3, "is_system": False, "hotplug": hotplug,
-               "size": 2_000_000_000_000}
+               "size": size}
         self.volumes.append(vol)
         self.set_serial(root, serial)
         return vol

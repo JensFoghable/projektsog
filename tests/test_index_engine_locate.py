@@ -119,6 +119,23 @@ class LocateTest(EngineTestCase):
                          [("Klar Tand - Silkeborg", 1.0)])
         self.assertEqual(none, [])
 
+    def test_import_helper_queries(self):
+        """find_files / templates / projects_named answer from the index alone (SPEC §17)."""
+        with forbid_fs_calls():
+            found = self.ix.find_files(["fx9_7912.mxf", "FX9_7913.MXF", "FX9_9999.MXF"])
+            templates = self.ix.templates()
+            named = self.ix.projects_named(["rikke lindholm", "Ukendt"])
+        rikke = os.path.join(self.kunder, "Rikke Lindholm")
+        self.assertEqual(sorted(f["name"] for f in found), ["FX9_7912.MXF", "FX9_7913.MXF"])
+        self.assertEqual({f["project"]["path"] for f in found}, {rikke})
+        self.assertEqual(found[0]["folder"], os.path.join(rikke, "Klip", "FX9"))
+        self.assertTrue(found[0]["online"])
+        self.assertIsInstance(found[0]["size"], int)
+        self.assertEqual([(t["path"], t["parent"]) for t in templates],
+                         [(os.path.join(self.kunder, "1. KUNDENAVN"), self.kunder)])
+        self.assertEqual([(p["name"], p["path"]) for p in named], [("Rikke Lindholm", rikke)])
+        self.assertEqual(self.ix.find_files([]), [])
+
     def test_query_delegation(self):
         sid = self.source(self.ix, SHARE)["id"]
         recent = self.ix.recent_projects()

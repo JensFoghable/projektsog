@@ -35,7 +35,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -78,6 +78,8 @@ LOCAL_SHALLOW_LISTINGS = 2000
 NETWORK_SHALLOW_LISTINGS = 200
 DIR_COST_S = 0.02                   # deep-queue cost estimate per directory (no scan_seconds yet)
 SUGGEST_MIN_SCORE = 0.4
+PASSING_CARD_MAX_BYTES = 512 * 1024 ** 3   # a hot-plug volume this small is a memory card …
+PASSING_CARD_GRACE_S = 120.0       # … whose project-less sources are forgotten this long after
 SWAP_HOLD_S = 10.0                  # a scan that met another disk waits for rediscovery ...
 SWAP_HOLD_MAX_S = 30 * 60.0         # ... doubling each time it happens again, up to this
 
@@ -610,6 +612,14 @@ def name_similarity(query: str, name: str) -> float:
     if numbers_a and numbers_b and not numbers_a & numbers_b:
         score *= 0.6
     return round(min(1.0, score), 3)
+
+
+def _passing_card(src: "_Source") -> bool:
+    """A source on a memory card that just passes through (see _forget_passing_cards)."""
+    return (bool(src.hotplug) and src.mode == "auto" and not src.manual
+            and 0 < (src.volume_size or 0) <= PASSING_CARD_MAX_BYTES
+            and src.project_count == 0 and not src.root_is_project
+            and src.auto_reason != discovery.REASON_TEMPLATE)
 
 
 def _volume_rel(key: str) -> tuple[str, tuple[str, ...]] | None:
@@ -1411,6 +1421,69 @@ class Indexer:
 
     def path_missing(self, path: str) -> None:
         """A path from the index was not found: refresh its source (rate limited)."""
+        self._refresh_source_of(path, rate_limited=True)
+
+    def refresh_path(self, path: str) -> None:
+        """Something was created at ``path`` (a new project, imported clips): rescan its source."""
+        self._refresh_source_of(path, rate_limited=False)
+
+    def find_files(self, names: Collection[str]) -> list[dict[str, Any]]:
+        """Indexed files named exactly one of ``names`` (case-insensitive), with their project:
+        where the clips of a camera card already are."""
+        wanted = {n.casefold() for n in names if isinstance(n, str) and n}
+        view = self._snapshot()
+        readers = self._readers
+        if not wanted or readers is None:
+            return []
+        out: list[dict[str, Any]] = []
+        with readers.connection() as conn, db.read_snapshot(conn):
+            for row in db.files_named(conn, {textutil.fold(n) for n in wanted}):
+                src = view.sources.get(row["source_id"])
+                if src is None or row["name"].casefold() not in wanted:
+                    continue
+                project_rel = row["project_rel"]
+                if project_rel is None and self._root_project(src["root_is_project"],
+                                                              src["display_name"], src["key"]):
+                    project_rel = ""
+                out.append({"name": row["name"], "size": row["size"],
+                            "path": _join(src["path"], row["rel_path"]),
+                            "folder": _join(src["path"], row["parent_rel"]),
+                            "online": bool(src["online"]), "volume_serial": src["volume_serial"],
+                            "project": None if project_rel is None else _project_ref(src, project_rel)})
+        return out
+
+    def templates(self) -> list[dict[str, Any]]:
+        """The project templates ("1. KUNDENAVN") of included sources; their parent folders are
+        where new projects go."""
+        view = self._snapshot()
+        readers = self._readers
+        live = {sid: s for sid, s in view.sources.items() if s["included"]}
+        if readers is None or not live:
+            return []
+        with readers.connection() as conn, db.read_snapshot(conn):
+            rows = db.entries_of_kind(conn, (db.KIND_TEMPLATE,), list(live))
+        return [{"path": _join(live[r["source_id"]]["path"], r["rel_path"]),
+                 "parent": _join(live[r["source_id"]]["path"], r["parent_rel"]),
+                 "source": search.source_ref(live[r["source_id"]]),
+                 "online": bool(live[r["source_id"]]["online"])} for r in rows]
+
+    def projects_named(self, names: Collection[str]) -> list[dict[str, Any]]:
+        """Project folders named exactly one of ``names`` (case-insensitive), newest first."""
+        wanted = {n.casefold() for n in names if isinstance(n, str) and n}
+        view = self._snapshot()
+        readers = self._readers
+        live = {sid: s for sid, s in view.sources.items() if s["included"]}
+        if not wanted or readers is None or not live:
+            return []
+        with readers.connection() as conn, db.read_snapshot(conn):
+            rows = [r for r in db.entries_of_kind(conn, (db.KIND_PROJECT,), list(live))
+                    if r["name"].casefold() in wanted]
+        rows.sort(key=lambda r: -(r["mtime"] or 0))
+        return [{**_project_ref(live[r["source_id"]], r["rel_path"]),
+                 "source": search.source_ref(live[r["source_id"]]),
+                 "online": bool(live[r["source_id"]]["online"])} for r in rows]
+
+    def _refresh_source_of(self, path: str, *, rate_limited: bool) -> None:
         if not isinstance(path, str) or not path.strip():
             return
         view = self._snapshot()
@@ -1427,9 +1500,10 @@ class Indexer:
             src = self._sources.get(sid)
             if src is None or not src.online or not src.included:
                 return
-            if src.missing_at is not None and now - src.missing_at < self._base_interval(src):
-                return
-            src.missing_at = now
+            if rate_limited:
+                if src.missing_at is not None and now - src.missing_at < self._base_interval(src):
+                    return
+                src.missing_at = now
             self._request(src, "shallow", max_listings=self._shallow_listings(src))
             self._request_deep(src)
         self._wake.set()
@@ -2302,6 +2376,7 @@ class Indexer:
             self._note_system_volumes(volumes)
             self._apply_candidates(cands, auto_keys, unknown, lambda s: s.kind == "local", now,
                                    initial=initial)
+            self._forget_passing_cards(unknown, now)
             self._note_present_volumes({str(v["serial"]).upper() for v in volumes},
                                        initial=initial)
             self._note_volumes(volumes, cands)
@@ -2316,6 +2391,24 @@ class Indexer:
         if time.monotonic() - self._own_ips_at >= OWN_IPS_REFRESH_S:
             self._own_ips_at = time.monotonic()
             self._update_path_inputs(own_ips=list(env.resolve_host_ips(self._own)))
+
+    def _forget_passing_cards(self, unknown: set[str], now: float) -> None:
+        """Memory cards pass through (SPEC §15.13); lock held.
+
+        A source on a small hot-plug volume (≤ PASSING_CARD_MAX_BYTES: an SD card, a recorder's
+        card, a USB stick) that holds no project, was never chosen by the user and has been
+        offline for PASSING_CARD_GRACE_S (the card is out – or formatted: a new serial) is
+        forgotten. Every card, and every format of one, would otherwise leave one more offline
+        entry behind. Projects, templates, "Medtag altid"/"Medtag aldrig" and big disks stay."""
+        for src in list(self._sources.values()):
+            if (src.kind != "local" or src.online or src.key.casefold() in unknown
+                    or not _passing_card(src)):
+                continue
+            offline_at = src.offline_since if src.offline_since is not None else src.last_seen
+            if offline_at is not None and now - offline_at < PASSING_CARD_GRACE_S:
+                continue
+            log.info("%s was on a memory card that is gone – forgotten", src.display_name)
+            self._remove_source(src)
 
     def _volume_layouts(self) -> dict[str, str]:
         """The kept layout of every volume that has sources (SPEC §15.6); lock held.

@@ -60,6 +60,9 @@ DEFAULTS: dict[str, Any] = {
         "Config.Msi", "MSOCache", "OneDriveTemp", "Intel", "AMD", "NVIDIA", "inetpub",
         "Documents and Settings", "xampp", "Temp", "tmp",
     ],
+    # Top-level folders of camera cards: never root candidates on hot-plug volumes (cards pass
+    # through – the import helper copies them; their clips are found in the projects).
+    "skip_card_dirs": ["XDROOT", "PRIVATE", "DCIM", "MP_ROOT", "AVF_INFO", "CONTENTS"],
     # Folder names (case-insensitive, exact) that are skipped everywhere while scanning.
     "exclude_dir_names": [
         "$RECYCLE.BIN", "System Volume Information", ".Trashes", ".Trash", ".Spotlight-V100",
@@ -110,10 +113,48 @@ DEFAULTS: dict[str, Any] = {
     #   "notify" show it in the app + a tray notification
     #   "open"   also open the project folder in Explorer automatically
     "resolve_follow": "notify",
+    # --- Time tracking (projektsog/timetrack.py) -----------------------------------------
+    # Counts time per Resolve project and page while Resolve is in front (and on music sites
+    # below while a project is open). A pause longer than time_idle_minutes is not counted;
+    # a moving playhead counts as activity.
+    "time_tracking_enabled": True,
+    "time_idle_minutes": 10,
+    # Browser tab titles (case-insensitive substrings) that count as "Musik/lyd" work.
+    "time_music_sites": [
+        "Artlist", "Epidemic Sound", "Musicbed", "Soundstripe", "PremiumBeat", "Envato",
+        "Motion Array", "Audio Network", "Freesound", "Soundsnap",
+    ],
+    "time_round_minutes": 15,          # default rounding offered in the report (0 = none)
+    # Import helper (importer.py): camera cards (XDROOT, PRIVATE\M4ROOT, DJI, GoPro) are offered
+    # for import into a project's Klip\<camera> folder.
+    "import_enabled": True,
+    "import_auto_open": True,          # show the window when a card with new clips goes in
+    # "<model prefix>=<Klip subfolder>": the camera model from the clips' XML picks the folder.
+    "import_camera_folders": ["PXW-FX9=FX9", "PXW-FS7=FS7", "ILCE-7SM3=A7S", "ILCE-7M3=A7III",
+                              "ILME-FX3=FX3", "ILME-FX6=FX6", "ILME-FX30=FX30", "PXW-FX9V=FX9",
+                              "DJI=Drone", "GOPRO=GoPro"],
+    # New projects copy the "1. KUNDENAVN" template next to them; without one, these folders.
+    "import_project_dirs": ["Final", "Grafik", "Klip\\A7S", "Klip\\Drone", "Klip\\FX9", "Logo",
+                            "Musik", "Project", "Speak", "Tekst"],
+    # --- Klippe, the pet widget (projektsog/widget.py, web/widget.*) ---------------------
+    # A small always-on-top window at the side of the second monitor that follows the time
+    # tracking: happy while you work, celebrates milestones, grows with all time logged.
+    "widget_enabled": False,
+    "widget_on_top": True,
+    "widget_monitor": "auto",          # "auto" (the second monitor, else the main one) | "primary"
+    "widget_position": "",             # "x,y" where the user dragged it ("" = bottom right)
+    "widget_daily_goal_hours": 6,
+    "widget_pet_name": "Klippe",
+    # Klippe plays (petplay.py): after this long without mouse and keyboard it may break out of
+    # the widget and play with the mouse pointer on that monitor – never during playback in
+    # Resolve, a transfer, in full screen or on a locked screen; any touch ends the game.
+    "widget_play": True,
+    "widget_play_idle_minutes": 5,
 }
 
 VALID_RESOLVE_FOLLOW = ("off", "notify", "open")
 VALID_THEMES = ("dark", "light", "system")
+VALID_WIDGET_MONITORS = ("auto", "primary")
 
 
 # --------------------------------------------------------------------------------------
@@ -147,6 +188,13 @@ def log_dir() -> str:
 
 def edge_profile_dir() -> str:
     path = os.path.join(app_dir(), "edge-profile")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def widget_profile_dir() -> str:
+    """Its own Edge profile: the pet widget runs independently of the search window."""
+    path = os.path.join(app_dir(), "edge-widget")
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -275,6 +323,18 @@ def validate(changes: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("resolve_follow skal være off, notify eller open")
         if key == "theme" and value not in VALID_THEMES:
             raise ValueError("theme skal være dark, light eller system")
+        if key == "widget_monitor" and value not in VALID_WIDGET_MONITORS:
+            raise ValueError("widget_monitor skal være auto eller primary")
+        if key == "widget_daily_goal_hours" and not (1 <= value <= 16):
+            raise ValueError("Dagens mål skal være mellem 1 og 16 timer")
+        if key == "widget_pet_name":
+            value = value[:20] or "Klippe"
+        if key == "widget_play_idle_minutes" and not (1 <= value <= 60):
+            raise ValueError("Pausen før legen skal være mellem 1 og 60 minutter")
+        if key == "time_idle_minutes" and not (1 <= value <= 120):
+            raise ValueError("Pausegrænsen skal være mellem 1 og 120 minutter")
+        if key == "time_round_minutes" and value > 240:
+            raise ValueError("Afrunding må højst være 240 minutter")
         if key == "port" and not (1024 <= value <= 65535):
             raise ValueError("port skal være mellem 1024 og 65535")
         out[key] = value

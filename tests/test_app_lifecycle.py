@@ -396,8 +396,9 @@ class AppHarness:
         self.instance = FakeInstance(self.journal)
         components = app.Components(
             config=self._config, indexer=self._indexer, bridge=self._bridge,
-            controller=self._controller, server=self._server, window=self._window,
-            tray=self._tray, hotkeys=self._hotkeys)
+            tracker=self._tracker, importer=self._importer,
+            controller=self._controller, server=self._server, window=self._window, widget=self._widget,
+            petplay=self._petplay, tray=self._tray, hotkeys=self._hotkeys)
         self.app = app.App(app.parse_args(list(flags)), self.instance, components=components,
                            exit_deadline_s=exit_deadline_s, hotkey_recheck_s=hotkey_recheck_s)
         test.addCleanup(self.app.exit_sequence)     # stops the app's threads
@@ -417,6 +418,19 @@ class AppHarness:
         self.bridge = fakes.FakeBridge(self.journal, "bridge")
         return self.bridge
 
+    def _tracker(self, cfg, bridge) -> fakes.FakeTracker:
+        self.journal.append("tracker.create")
+        assert bridge is self.bridge                 # the tracker reads Resolve via the bridge
+        self.tracker = fakes.FakeTracker(self.journal, "tracker")
+        return self.tracker
+
+    def _importer(self, cfg, bus, indexer, bridge, tracker, controller) -> fakes.FakeImporter:
+        self.journal.append("importer.create")
+        assert (indexer, bridge, tracker, controller) == (self.indexer, self.bridge, self.tracker,
+                                                          self.controller)
+        self.importer = fakes.FakeImporter(self.journal, "importer")
+        return self.importer
+
     def _controller(self, cfg, bus, indexer, bridge, *, request_exit):
         self.journal.append("controller.create")
         self.controller = app.Controller(
@@ -428,8 +442,10 @@ class AppHarness:
             format_hotkey=lambda spec: spec.title())
         return self.controller
 
-    def _server(self, cfg, bus, indexer, bridge, controller, *, parse_hotkey):
+    def _server(self, cfg, bus, indexer, bridge, controller, *, parse_hotkey, tracker, importer):
         self.journal.append("server.create")
+        assert tracker is self.tracker               # the server reports the tracker's time
+        assert importer is self.importer             # and serves the import helper
         if self.server_error is not None:
             raise self.server_error
         self.server = fakes.FakeServer(self.journal, "server")
@@ -441,6 +457,19 @@ class AppHarness:
         self.instance_file_at_window = app.read_instance_file(config.instance_path())
         self.window = fakes.FakeWindow(self.journal, "window")
         return self.window
+
+    def _widget(self, cfg, url: str) -> fakes.FakeWidget:
+        self.journal.append("widget.create")
+        assert url.endswith("/widget.html")
+        self.widget = fakes.FakeWidget(self.journal, "widget")
+        return self.widget
+
+    def _petplay(self, cfg, bus, *, widget, bridge, importer, base_url: str) -> fakes.FakePetPlay:
+        self.journal.append("petplay.create")
+        assert (widget, bridge, importer) == (self.widget, self.bridge, self.importer)
+        assert base_url == "http://127.0.0.1:4711"
+        self.petplay = fakes.FakePetPlay(self.journal, "petplay")
+        return self.petplay
 
     def _tray(self, icon_path: str, tooltip: str, **callbacks) -> fakes.FakeTray:
         self.journal.append("tray.create")
@@ -486,8 +515,11 @@ class EventLog:
 
 class AppStartupTests(unittest.TestCase):
     STARTUP = ["config", "indexer.create", "indexer.start", "bridge.create", "bridge.start",
-               "controller.create", "server.create", "server.start", "window.create",
-               "tray.create", "tray.start", "hotkeys.create", "hotkeys.start"]
+               "tracker.create", "tracker.start",
+               "controller.create", "importer.create", "server.create", "server.start",
+               "window.create", "widget.create", "petplay.create", "widget.start", "petplay.start",
+               "tray.create", "tray.start", "hotkeys.create", "hotkeys.start",
+               "importer.start"]
 
     def test_startup_order_and_wiring(self) -> None:
         h = AppHarness(self)
@@ -682,8 +714,8 @@ class AppRuntimeTests(unittest.TestCase):
 
 
 class ExitSequenceTests(unittest.TestCase):
-    EXIT = ["hotkeys.stop", "tray.stop", "bridge.stop", "indexer.stop", "server.stop",
-            "window.close", "instance.release"]
+    EXIT = ["hotkeys.stop", "tray.stop", "importer.stop", "tracker.stop", "bridge.stop", "indexer.stop",
+            "server.stop", "petplay.close", "widget.close", "window.close", "instance.release"]
 
     def test_exit_order_and_cleanup(self) -> None:
         h = AppHarness(self)

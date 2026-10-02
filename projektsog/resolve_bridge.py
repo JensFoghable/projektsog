@@ -73,7 +73,10 @@ STAT_TIMEOUT_S = 3.0          # like Controller.open_path (SPEC §11)
 # The helper process.
 CHILD_READY_TIMEOUT_S = 10.0
 CHILD_CONNECT_TIMEOUT_S = 15.0
-CHILD_CALL_TIMEOUT_S = 10.0   # poll / uid
+# poll / uid. Resolve answers scripts slowly while its UI is busy (editing, Fusion, playback):
+# 10 s was too short (helpers were killed every 1-2 min while editing), and killing a helper
+# mid-call left Resolve refusing the next connections for a while. So: patience.
+CHILD_CALL_TIMEOUT_S = 60.0
 CHILD_WALK_MARGIN_S = 10.0    # walk: WALK_MAX_SECONDS + this
 CHILD_STOP_TIMEOUT_S = 0.5    # then it is killed
 CHILD_BACKOFF_S = (1.0, 2.0, 5.0, 15.0, 30.0, 60.0)   # restart delays after failures in a row
@@ -635,6 +638,7 @@ class ResolveBridge:
         self._thread: threading.Thread | None = None
         self._state: dict[str, Any] = _idle_state(bool(cfg.get("resolve_enabled")), False)
         self._state_uid = ""                  # unique id of the state's project (with _state)
+        self._activity: dict[str, Any] | None = None   # latest poll, for the time tracker
         self._refresh_requested = 0
         self._refresh_completed = 0
         self._window_shown = False
@@ -688,6 +692,28 @@ class ResolveBridge:
     def state(self) -> dict[str, Any]:
         with self._lock:
             return dict(self._state)
+
+    def activity(self, max_age: float = 15.0) -> dict[str, Any] | None:
+        """What the editor is doing in Resolve, from the latest poll, for the time tracker:
+        ``{"project", "database", "uid", "page", "timeline", "timecode", "rendering", "folder"}``.
+
+        None when Resolve is not running or the last poll is older than ``max_age`` seconds.
+        ``folder`` is the name of the project folder the media maps to (the primary), if known;
+        ``age`` how many seconds ago Resolve answered (it answers slowly while it is busy).
+        """
+        with self._lock:
+            act = self._activity
+            primary = self._state.get("primary")
+            state_project = self._state.get("project")
+        age = self._clock() - act["at"] if act is not None else None
+        if act is None or age > max_age:
+            return None
+        result = {k: v for k, v in act.items() if k != "at"}
+        result["age"] = max(0.0, age)
+        same_project = act["project"] is not None and act["project"] == state_project
+        result["folder"] = (primary.get("name") if same_project and isinstance(primary, dict)
+                            else None)
+        return result
 
     def refresh(self, wait: bool = True) -> dict[str, Any]:
         """Queue a media pool re-walk; with ``wait`` block ≤ 10 s for it. Returns state()."""
@@ -1015,6 +1041,8 @@ class ResolveBridge:
         """Gate, start the helper and connect. None when connected, else seconds until it is
         worth retrying."""
         if not self._call_quietly("process_running", RESOLVE_EXE):
+            with self._lock:
+                self._activity = None   # closed: no project open any more (time tracking)
             self._disconnect()
             self._stop_child()          # nothing of Resolve stays loaded while it is closed
             self._reset_gate()
@@ -1118,6 +1146,12 @@ class ResolveBridge:
         db_id = tuple(_text(v) for v in db)        # DbType, DbName, IpAddress
         database = db_id[1] or None
         name = answer.get("project")
+        activity = {"project": name if isinstance(name, str) else None, "database": database,
+                    "uid": _text(answer.get("uid")), "page": _text(answer.get("page")).lower(),
+                    "timeline": _text(answer.get("timeline")), "timecode": _text(answer.get("timecode")),
+                    "rendering": answer.get("rendering") is True, "at": self._clock()}
+        with self._lock:
+            self._activity = activity
         if name is None:
             return _Snapshot(db_id + ("", ""), None, database)
         if not isinstance(name, str):

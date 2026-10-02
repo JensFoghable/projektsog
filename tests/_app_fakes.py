@@ -260,6 +260,30 @@ class FakeServer(Fake):
     def stop(self) -> None: return self._call("stop")
 
 
+class FakeTracker(Fake):
+    """projektsog.timetrack.TimeTracker stand-in."""
+    def start(self) -> None: return self._call("start")
+    def stop(self, timeout: float = 2.0) -> None: return self._call("stop")
+
+
+class FakeImporter(Fake):
+    """projektsog.importer.Importer stand-in."""
+    def start(self) -> None: return self._call("start")
+    def stop(self, timeout: float = 2.0) -> None: return self._call("stop")
+
+
+class FakeWidget(Fake):
+    """projektsog.widget.PetWindow stand-in."""
+    def start(self) -> None: return self._call("start")
+    def close(self) -> None: return self._call("close")
+
+
+class FakePetPlay(Fake):
+    """projektsog.petplay.PetPlay stand-in."""
+    def start(self) -> None: return self._call("start")
+    def close(self) -> None: return self._call("close")
+
+
 class FakeTray(Fake):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

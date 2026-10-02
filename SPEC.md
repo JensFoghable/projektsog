@@ -875,6 +875,9 @@ class Server:
 | `POST /api/resolve/open` | | `bridge.open_primary()` (used by the Resolve menu script) |
 | `GET /api/settings` | | `{"settings": {…cfg.snapshot(), "run_at_login": bool}}` |
 | `POST /api/settings` | partial dict | same shape; 400 `{"error"}` on invalid |
+| `GET /api/time` | `?from&to` (local dates, default today) | `{"report": tracker.report(), "status": tracker.status()}` (§16) |
+| `GET /api/time/status` | | `tracker.status()` |
+| `GET /api/time/export` | `?from&to&round=<min ≤ 240>&detail=day` | CSV download (`Content-Disposition: attachment`) |
 | `POST /api/window/hide` | `{"restore_previous": true}` | `{"ok": true}` |
 | `POST /api/window/show` | | `{"ok": true}` |
 | `GET /api/events` | | SSE: `event: <type>\ndata: <json>\n\n` |
@@ -1094,3 +1097,200 @@ These override earlier sections where they conflict. Finding ids refer to
     * UI focus rules: settings tab panels are not focusable; while the settings panel is open no
       result key (↑/↓/Enter/PgUp/PgDn …) acts on the hidden result list and the covered content
       is `inert` (round 3, R3-UI-1/2).
+
+13. **Memory cards pass through** (2026-10-02): on hot-plug volumes the top-level folders in
+    `skip_card_dirs` (XDROOT, PRIVATE, DCIM, MP_ROOT, AVF_INFO, CONTENTS) are no candidates –
+    camera cards are the import helper's (§17). A local source with `hotplug`, mode `auto`, not
+    manual, `0 < volume_size ≤ 512 GiB`, no projects (and not a root project or template) that
+    has been offline for `PASSING_CARD_GRACE_S` (120 s; after a restart: since `last_seen`) is
+    forgotten like "Glem" (its entries deleted). Every card, and every format of one (a new
+    serial), would otherwise leave one more offline location. Stale volumes (presence unknown)
+    are left alone; included-by-choice, excluded-by-choice, project and big disks stay.
+
+## 16. Time tracking (`timetrack.py`, main process)
+
+`TimeTracker(cfg, bridge)` starts after the ResolveBridge and stops before it. Every `TICK_S`
+(5 s) it reads: the foreground window (`winui`), seconds since the last input
+(`GetLastInputInfo`) and `bridge.activity()` — `{project, database, uid, page, timecode,
+rendering, folder}` from the Resolve helper's poll (`GetCurrentPage`, the current timeline's
+`GetCurrentTimecode`, `IsRenderingInProgress`; `None` when older than 15 s).
+
+* **Counts** when `Resolve.exe` is in front with a project open (bucket = page), or a browser
+  whose title contains one of `time_music_sites` while a project is open (bucket `musik`).
+  Never for `Untitled Project…` or without a project.
+* **Activity** = input, or a playhead that moved since the last tick (not while rendering) — the
+  latter only while the last input is ≤ `PLAYBACK_MAX_S` (1 h) old.
+* A pause ≤ `time_idle_minutes` counts fully; a longer one is cut back to the last activity
+  + `GRACE_S`. Another program in front while a project is open is the same kind of pause
+  (state `away`, `away_since` = the segment's end when Resolve was left, `away_until`): back in
+  Resolve in time, the segment simply continues (the excursion counts); not back in time (or
+  Resolve closed meanwhile), it ends where Resolve was left. A gap > `GAP_S` between ticks
+  (sleep) ends it at its last saved end. Segments < 1 s are dropped.
+* Resolve answers scripts slowly while busy, so the tracker accepts its last answer for
+  `STALE_OK_S` (120 s; `activity(max_age)`, `age` in the answer). The bridge waits up to
+  `CHILD_CALL_TIMEOUT_S` (60 s) for a poll before it restarts the helper, and forgets the
+  activity when Resolve's process is gone.
+* Storage: `time.db` (local SQLite, WAL) table `segments(project, database, uid, folder, bucket,
+  start, end, host)`, epoch seconds; the running segment's end is saved every 30 s.
+* `report(first, last)`: per (project, database), sorted by total desc: `buckets`, `days`,
+  `day_buckets` (per local day, split at midnight), `total_s`, `folder`, `last`; plus `total_s`
+  and `buckets` (labels in display order). Includes the running segment.
+* `export_csv(first, last, round_minutes, per_day)`: UTF-8 BOM, `;`, decimal comma, hours with
+  two decimals; rounding is UP to whole steps, per row (per project, or per day with `per_day`).
+* `status()`: `{state: recording|idle|paused|no-resolve|off, enabled, project, bucket,
+  bucket_label, folder, since, today_s}`.
+* UI: header button (today's total; dot = recording) opens the settings panel's **Tid** tab
+  (live status, periods Monday–Sunday / whole months, per-day rows, rounding, export, the three
+  settings). Polls `/api/time/status` every 60 s while visible, the report every 10 s while the
+  tab is open; nothing while hidden.
+
+## 17. Import helper (`importer.py`, main process)
+
+`Importer(cfg, bus, indexer, bridge, tracker, controller)` is created after the Controller,
+started at the end of `App.start()` and stopped right after the tray (a running copy is
+cancelled and its temp file removed).
+
+* **Cards.** A watcher thread calls `winfs.list_volumes()` every `POLL_S` (2 s; ~2 ms). A
+  removable (`drive_type` 2) or hotplug volume that is not the system volume is a card when its
+  root holds `XDROOT\Clip` / `PRIVATE\XDROOT\Clip` (Sony XDCAM: FX9, FS7),
+  `PRIVATE\M4ROOT\CLIP` (Sony Alpha/Cinema Line, plus `DCIM\*MSDCF` stills), `DCIM\*MEDIA` /
+  `DCIM\DJI*` (DJI) or `DCIM\*GOPRO`. Card id = `<serial>@<drive>`. Files = everything in those
+  folders, flat. The model comes from the first clip's `…M01.XML` `modelName`
+  (`PXW-FX9V`, `PXW-FS7`, `ILCE-7SM3`); `import_camera_folders` (`"<model prefix>=<folder>"`,
+  longest prefix wins; else a folder named like the clip prefix; else the model) gives the
+  `Klip` subfolder. Recording span = `CreationDate` of the first/last clip (display only: camera
+  clocks can be wrong). Cards present at startup are listed but never announced.
+* **Already imported** = the same name AND size, for every file of the card (clips and their
+  XML/BIM sidecars). `Indexer.find_files` only nominates folders (never the card's own volume);
+  up to 8 of them are listed NOW (`call_with_timeout`), and only a folder that cannot be listed
+  is judged by the index. `found = {clips, files, total, complete, projects: [{name, path,
+  folder, clips, files, complete, online}]}`. Clip names repeat (camera counters wrap), so
+  never the name alone.
+* **Announcing** every card that goes in (also a fully imported one, which the UI reports as
+  "Alle klip er overført til …"): `controller.show_window(reason="card", panel="import")` when
+  `import_auto_open`, else a `notify` event. Bus events: `cards` (`{"cards": [...]}` on every
+  change) and `import` (job state, ≤ 4/s).
+* **Targets** (`options`): projects holding some of the card's clips, Resolve's `primary`, today's
+  imports, projects worked on today (`TimeTracker.folders_on` → `Indexer.projects_named`),
+  projects created here in the last 7 days; each with free space. **Disks** = parents of the
+  `KIND_TEMPLATE` folders (`Indexer.templates`) with free space and `fits` (card + 512 MiB).
+* **Plan**: `<project>\Klip` (existing casing, else created) `\<camera>`; files there with the
+  same name and size are skipped; a same-name/other-size file (a conflict) or `separate` moves the
+  target to the first free `<camera> Dag N` sibling. All file system work runs through
+  `call_with_timeout`.
+* **New project**: `validate_project_name` (≤ 2 parts, no `<>:"/\|?*`, no reserved names or
+  trailing dots), only under a listed disk, never over an existing folder; the template tree is
+  copied (files ≤ 50 MB), else `import_project_dirs` are made. `Indexer.refresh_path` rescans.
+* **Copy** (`ImportJob`, one at a time): per file a reader thread reads 8 MiB chunks and hashes
+  them (SHA-1) while the job thread writes `<name>.projektsog-tmp` (`xb`, fsync); then the temp
+  file is read back without the file cache (`FILE_FLAG_NO_BUFFERING`, aligned `VirtualAlloc`
+  buffer; buffered read as fallback) while, in parallel, the card file is read a second time
+  (also uncached). All three hashes must match; a mismatch is retried once, then the job fails
+  ("ikke identisk" for the copy, "læst forskelligt to gange" for the card). Only a verified file
+  gets its mtime and is renamed (`os.rename` never replaces). Cancel/errors remove the temp
+  file; finished files stay, so starting again resumes. Free space is checked first.
+  "prepare" only makes the target and opens the card's clip folder and the target in Explorer.
+* **Move** ("Klip", like Ctrl+X but checked): as copy, plus every card file that is already in
+  the target with the same name and size is compared by content (uncached hashes). Only when
+  EVERY file is verified: each copy made is fsynced (data, size, directory entry), the target
+  volume cache is flushed (best effort), and then per file - after checking that the copy still
+  has the same size and the card file the same size and mtime - the card file is deleted (an
+  in-use file stays and is counted as `kept`). A stop or failure before the deletion leaves the
+  card untouched; during it, the rest stays on the card. Only the listed files are deleted
+  (never folders, MEDIAPRO.XML or thumbnails). Afterwards the card is listed again.
+* **Manifest**: `imports\<date time> <camera> <drive>.jsonl` in the app dir, one JSON record per
+  line, flushed and fsynced per line: start, every verified file (`name, size, sha1, source,
+  copied`), every deletion, end - so after a crash it shows exactly what was verified and deleted.
+* History (`imports.json` in the app dir, last 300): imports `{at, mode, camera, model, serial,
+  project, target, files, bytes}` and created projects `{at, path}`.
+* API: `GET /api/import` → `{cards, job, history}`; `GET /api/import/options?card`;
+  `GET /api/import/plan?card&project&separate`; `POST /api/import/project {root, name}`;
+  `POST /api/import/start {card, project, separate, mode: copy|move|prepare}`;
+  `POST /api/import/cancel`; `POST /api/import/dismiss {card}`. Errors are 400 `{"error"}`.
+* UI: the settings panel's **Import** tab (card, suggestions + search + new project with disks,
+  target and what is new, Kopiér og kontrollér / Kun opret mappen) and a card above the results
+  per inserted card (progress while copying). "Klip" needs a second, confirming click.
+
+## 18. Klippe, the pet widget (`widget.py`, `web/widget.*`)
+
+* `PetWindow(cfg, url)` is created with the UI (`App.start`), closed with the main window on
+  exit. A thread follows `widget_enabled` (default off): on → Edge `--app=/widget.html` with its
+  own profile (`config.widget_profile_dir()`, independent of the search window), started
+  minimised without activation, found by its exact title `Klippe – Projektsøg`, placed at the
+  bottom right of `choose_monitor(monitors(), widget_monitor)` ("auto" = the first secondary
+  monitor left to right, else the primary) or at `widget_position` ("x,y", only while that
+  point is on a monitor), shown without activation, `HWND_TOPMOST` while `widget_on_top`; the
+  focus is handed back if Chromium took it. A position the user dragged it to is saved once it
+  stood still 3 s. Closed with X (not by us) → `widget_enabled` is switched off.
+* The page polls `/api/time/status` every 5 s and `/api/time` (last 400 days) every 10 min, and
+  listens to SSE `import`, `cards` and `settings`. Mood: recording → working, away → waiting,
+  idle → sleepy, paused → chill, off/no-resolve → sleeping. Outfit by bucket (color, fusion,
+  fairlight/musik → audio, deliver). Celebrations (once per day and key, kept in localStorage):
+  every whole hour today, `widget_daily_goal_hours`, 25/50/90 min of unbroken focus
+  (recording/away), a finished import (copy or move); break nudges at 90/150/210 min. What is
+  already reached when the page loads is not celebrated. Growth by all hours logged: egg (0),
+  baby (5), junior (25), pro (100), legend (300); level = 1 + ⌊√(2h)⌋; streak = days in a row
+  with ≥ 1 h (ending today, or yesterday while today is under an hour). Effects on a canvas;
+  `prefers-reduced-motion` shows only words and an emoji.
+
+### 18.4 Klippe plays (`petplay.py` main process, `petplay_child.py` helper)
+
+* `PetPlay(cfg, bus, widget=, bridge=, importer=, base_url=)` is created with the widget and
+  closed first on exit. A thread checks once a second (5×/s while "Vis legen nu" waits). A game
+  starts only when: `widget_enabled` and `widget_play` (default on) are on; the widget window is
+  shown; the widget page has reported its look (`POST /api/widget/look` `{stage, outfit, pet:
+  {x,y,w,h}, view: {w,h}}` in CSS px, on every change and every minute); nobody touched mouse or
+  keyboard for `widget_play_idle_minutes` (1–60, default 5; `GetLastInputInfo`, which
+  `SetCursorPos` does not change); this pause has not had its game yet (keyed by the last-input
+  tick); the screen is not locked (input desktop ≠ "Default"); "activate a window by hovering"
+  is off; no import job is copying/verifying/deleting; Resolve is not playing back (playhead
+  moved < 8 s ago, or its last answer is > 12 s old while not rendering — a render is fine);
+  nothing is full screen (`SHQueryUserNotificationState` busy/D3D/presentation, or the front
+  window covers the widget's monitor). Then a die decides once per pause: egg 0, baby 1,
+  junior ½, pro ⅕, legend ¼.
+* `POST /api/widget/play` ("Vis legen nu"): 400 unless `widget_enabled`; waits ≤ 20 s for the
+  mouse to be still 1.5 s and then plays regardless of pause, age (an egg plays as baby),
+  transfer, Resolve or full screen (locked screen and hover-activation still stop it).
+  `GET /api/widget/play` → `{state: ready|waiting|out, message, enabled}`. SSE `pet` carries the
+  same plus `reason` (done | touched | locked | quit | error).
+* Sprites: headless Edge renders `widget.html?sprites=normal,happy,cheer,oops&stage=&outfit=&cell=240`
+  (every pose in a 240-px cell, nothing animated, transparent background, 2×) to
+  `%LOCALAPPDATA%\Projektsog\pet\klippe-<stage>-<outfit>-<sig>.png`; `sig` hashes
+  widget.html/css/js, so a new drawing renders anew and old sheets are removed.
+* The helper (`pythonw -m projektsog.petplay_child`, per-monitor DPI aware) draws the pet with
+  GDI+ in a layered window (`WS_EX_LAYERED|TRANSPARENT|TOPMOST|TOOLWINDOW|NOACTIVATE`,
+  `HTTRANSPARENT`) that moves with it, and plays: shake + somersault out of the widget, fetch the
+  pointer (or reach over to the screen it is on and pull it here), 3 acts for a baby / 2 later
+  (ride, fly, throw, spin), give the pointer back exactly (or toss it back to its own screen),
+  fly home. The pointer stays inside the work area minus 36 px. It stops at once when the
+  last-input tick differs from the one the main process decided on, or the pointer is not
+  where it was put (± 2 px): the pointer goes back where the user left it and the pet flies home
+  without it. A locked screen, `quit`/stdin EOF or 90 s end it immediately. Never clicks,
+  scrolls or types. stdout: `{"event":"out"}`, then `{"event":"home","reason":…}`.
+
+## 19. Messages from other programs (`messages.py`)
+
+* `MessageBoard(cfg, bus, shown=)` is created in `App.start` (before the server starts). The
+  Claude sessions' Resolve queue (`koe.py`, outside this repo) is the sender: it finds the port
+  in `instance.json` and calls the API with `X-Projektsog: 1`.
+* `POST /api/messages` `{tag (≤ 80, required), titel (≤ 120), tekst (≤ 400, may hold "\n"),
+  knapper: [{tekst (≤ 40), uri}] (≤ 3), session (≤ 40), udloeber (s, 1–86400, default 3600),
+  lyd (bool, default true), visning ("kort" | "boble"), prioritet ("normal" | "stille")}` →
+  `{"ok": true, "vist": bool}`. `stille` (a session that is done and needs no answer) never
+  sounds and never opens a card by itself.
+  `vist` = Klippe is on (`widget_enabled`) and its window is shown – only then may the sender
+  skip its own notification. Same tag replaces; ≤ 20 messages (oldest dropped); expired ones
+  are pruned. A card: SSE `messages {"messages": [...]}` (newest first; `tid`, `udloeber_ved`,
+  `lyd` added) and, when shown and the title/text is new and `lyd`, Windows'
+  "SystemNotification" sound. `visning: "boble"` is a passing note: SSE `say {"tekst"}`,
+  nothing kept (a card with that tag is removed).
+* `DELETE /api/messages {tag}` → `{"ok": true}` (also for an unknown tag). `GET /api/messages`.
+* `POST /api/messages/click {tag, knap}` → the message is removed and its button's uri is
+  opened with `os.startfile` (ShellExecute → the scheme's registered handler; Projektsøg runs
+  no command itself). Only `URI_SCHEMES` (`resolvekoe`) are accepted at POST and click; no
+  spaces or control characters. An unknown tag/button → 400 "Beskeden er der ikke længere".
+* The widget shows ONE card at a time right under the pet, above a transfer, with its buttons,
+  × and – when there are more – "‹ 1 / 3 ›". Order: normal before quiet, newest first; a new
+  normal message comes to the front and makes Klippe jump and clap (not for `lyd: false`).
+  Quiet messages alone are folded into one line "📬 2 beskeder · vis" (click: the cards, ▾ folds
+  them again). Text is clamped to 4 lines. Messages are never shown in the search window.

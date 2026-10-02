@@ -479,8 +479,12 @@ def _volume_candidates(cfg: Any, vol: dict, root: str, facts: _VolumeFacts,
         return [_local_candidate(vol, root, [], own_host, pathmap)]
 
     paths: dict[tuple[str, ...], list[str]] = {}
+    # A camera card's folders are no sources: cards pass through (every card, and every
+    # format of one, has its own serial – each would leave one more offline entry behind).
+    cards = _names(cfg, "skip_card_dirs") if vol.get("hotplug") else frozenset()
     for name in _top_level_dirs(facts.dirs, cfg):
-        paths.setdefault((name.casefold(),), [name])
+        if _name_key(name) not in cards:
+            paths.setdefault((name.casefold(),), [name])
     # Hidden top-level folders are no new candidates (SPEC §15.8), but one that already is a
     # source (registered before that rule, R2-IDX-1) stays one: dropping it would leave an
     # offline ghost on a connected disk that nothing ever brings back or forgets.

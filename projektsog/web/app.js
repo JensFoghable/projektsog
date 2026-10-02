@@ -17,6 +17,9 @@
   const DAY_MONTH_YEAR = new Intl.DateTimeFormat(LOCALE, { day: 'numeric', month: 'short', year: 'numeric' });
   const RELATIVE = new Intl.RelativeTimeFormat(LOCALE, { numeric: 'always' });
   const COLLATOR = new Intl.Collator(LOCALE, { sensitivity: 'base', numeric: true });
+  const HOURS = new Intl.NumberFormat(LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const WEEKDAY_DAY = new Intl.DateTimeFormat(LOCALE, { weekday: 'short', day: 'numeric', month: 'short' });
+  const CLOCK = new Intl.DateTimeFormat(LOCALE, { hour: '2-digit', minute: '2-digit' });
   const MINUTE = 60e3;
   const HOUR = 60 * MINUTE;
   const DAY = 24 * HOUR;
@@ -26,7 +29,8 @@
   const KINDS = ['all', 'project', 'dir', 'file'];
   const KIND_LABELS = { all: 'Alle', project: 'Projekter', dir: 'Mapper', file: 'Filer' };
   const ACTION_LABELS = { folder: 'Åbn mappe', reveal: 'Vis i Stifinder', file: 'Åbn fil' };
-  const SETTINGS_TABS = ['placeringer', 'generelt', 'resolve'];
+  const SETTINGS_TABS = ['placeringer', 'generelt', 'resolve', 'tid', 'import'];
+  const TIME_PERIODS = ['today', 'yesterday', 'week', 'last-week', 'month', 'last-month'];
   const SCAN_VISIBLE_AFTER_MS = 1500;
 
   const FILE_TYPES = extensionMap({
@@ -454,6 +458,281 @@
       : `${what} – disken scannes, når den er tilsluttet igen.`;
   }
 
+  // ---------------------------------------------------------------- time tracking
+
+  /** "2:47" (hours:minutes, to the nearest minute) – like the CSV's "Total (t:mm)". */
+  function formatDuration(seconds) {
+    const minutes = Math.round(Math.max(0, Number(seconds) || 0) / 60);
+    return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}`;
+  }
+
+  /** "2 t 47 min", "47 min", "0 min" – for sentences and screen readers. */
+  function durationWords(seconds) {
+    const minutes = Math.round(Math.max(0, Number(seconds) || 0) / 60);
+    const hours = Math.floor(minutes / 60);
+    if (!hours) return `${minutes} min`;
+    return minutes % 60 ? `${hours} t ${minutes % 60} min` : `${hours} t`;
+  }
+
+  /** Decimal hours with a Danish comma, as on an invoice: "2,75". */
+  function formatHours(seconds) {
+    return HOURS.format(Math.max(0, Number(seconds) || 0) / 3600);
+  }
+
+  /** Rounded up to whole steps of `minutes` (0 = not rounded), like the CSV export. */
+  function roundUpSeconds(seconds, minutes) {
+    const value = Math.max(0, Number(seconds) || 0);
+    if (!minutes || !value) return value;
+    const step = minutes * 60;
+    return Math.ceil(value / step - 1e-9) * step;
+  }
+
+  /** "2026-10-01" for a local date. */
+  function isoDate(date) {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  }
+
+  /** A local Date from "2026-10-01" (null when invalid). */
+  function parseIsoDate(text) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(text || ''));
+    if (!m) return null;
+    const date = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return date.getMonth() === Number(m[2]) - 1 ? date : null;
+  }
+
+  /** The dates of a period button – weeks run Monday to Sunday. */
+  function periodRange(period, now = Date.now()) {
+    const today = new Date(now);
+    today.setHours(0, 0, 0, 0);
+    const day = (offset) => new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset);
+    const monday = -((today.getDay() + 6) % 7);
+    const y = today.getFullYear();
+    const m = today.getMonth();
+    const ranges = {
+      today: [today, today],
+      yesterday: [day(-1), day(-1)],
+      week: [day(monday), day(monday + 6)],
+      'last-week': [day(monday - 7), day(monday - 1)],
+      month: [new Date(y, m, 1), new Date(y, m + 1, 0)],
+      'last-month': [new Date(y, m - 1, 1), new Date(y, m, 0)],
+    };
+    const [first, last] = ranges[period] || ranges.today;
+    return { from: isoDate(first), to: isoDate(last) };
+  }
+
+  /** The period button matching from/to, or 'custom'. */
+  function periodOf(from, to, now = Date.now()) {
+    for (const period of TIME_PERIODS) {
+      const range = periodRange(period, now);
+      if (range.from === from && range.to === to) return period;
+    }
+    return 'custom';
+  }
+
+  /** "tor. 1. okt." for a report day ("2026-10-01"). */
+  function formatReportDay(iso) {
+    const date = parseIsoDate(iso);
+    return date ? WEEKDAY_DAY.format(date) : String(iso || '');
+  }
+
+  /** The live line of the Tid tab: what is counted right now, and why not when it isn't. */
+  function timeStatusText(status, idleMinutes = 10) {
+    const s = status || {};
+    if (s.enabled === false) {
+      return { tone: 'off', main: 'Tidsregistrering er slået fra', sub: 'Slå den til under Tidsregistrering herunder.' };
+    }
+    if (s.state === 'recording' && s.project) {
+      const since = s.since ? ` siden ${CLOCK.format(new Date(s.since * 1000))}` : '';
+      const where = s.bucket === 'musik' ? 'Musik/lyd i browseren' : (s.bucket_label || 'Resolve');
+      const timeline = s.timeline ? `Tidslinje „${s.timeline}“ · ` : '';
+      return { tone: 'rec', main: `Registrerer: ${s.project}`, sub: `${timeline}${where}${since}` };
+    }
+    if (s.state === 'away' && s.project) {
+      const until = s.away_until ? ` inden kl. ${CLOCK.format(new Date(s.away_until * 1000))}` : '';
+      return { tone: 'away', main: `Uden for Resolve – tæller stadig: ${s.project}`,
+        sub: `Kommer du tilbage${until}, tæller pausen med. Ellers stopper tiden, fra da du forlod Resolve.` };
+    }
+    if (s.state === 'idle') {
+      return { tone: 'pause', main: 'Pause – ingen aktivitet',
+        sub: `Ingen mus, tastatur eller afspilning i over ${idleMinutes} min. Tiden tæller igen, når du fortsætter.` };
+    }
+    if (s.state === 'paused') {
+      return { tone: 'pause', main: 'Pause – DaVinci Resolve er ikke i forgrunden',
+        sub: 'Tid i Resolve og på musik- og lydsider som Artlist tæller med.' };
+    }
+    if (s.state === 'no-resolve') {
+      return { tone: 'pause', main: 'Venter på DaVinci Resolve', sub: 'Tiden tæller, når et projekt er åbent i Resolve.' };
+    }
+    return { tone: 'off', main: 'Tidsregistrering starter …', sub: '' };   // switched on, first tick pending
+  }
+
+  /** The file name of a download from its Content-Disposition (RFC 6266 filename* first). */
+  function downloadName(disposition) {
+    const text = String(disposition || '');
+    const star = /filename\*=UTF-8''([^;]+)/i.exec(text);
+    if (star) {
+      try {
+        return decodeURIComponent(star[1].trim());
+      } catch { /* malformed: try the plain name */ }
+    }
+    const plain = /filename="([^"]*)"/i.exec(text);
+    return plain ? plain[1] : '';
+  }
+
+  /**
+   * The report as table rows: one per project (and per day or per timeline under it with
+   * `perDay` / `perTimeline`), each with its page times, total and rounded total; plus the
+   * page columns in use and the sums. Day and timeline rows are rounded each on their own –
+   * exactly like the CSV export's rows.
+   */
+  function timeTable(report, { roundMinutes = 0, perDay = false, perTimeline = false } = {}) {
+    const labels = (report && report.buckets) || {};
+    const projects = (report && report.projects) || [];
+    const columns = Object.keys(labels).filter((b) => projects.some((p) => p.buckets && p.buckets[b]));
+    const rows = [];
+    const sums = { buckets: {}, total: 0, rounded: 0 };
+    for (const p of projects) {
+      let parts = [];
+      if (perDay) {
+        parts = Object.entries(p.days || {}).map(([day, total]) => ({
+          kind: 'day', day, label: formatReportDay(day), buckets: (p.day_buckets || {})[day] || {},
+          total, rounded: roundUpSeconds(total, roundMinutes),
+        }));
+      } else if (perTimeline) {
+        parts = (p.timelines || []).map((t) => ({
+          kind: 'timeline', label: t.name || 'Ukendt tidslinje', buckets: t.buckets || {},
+          total: t.total_s, rounded: roundUpSeconds(t.total_s, roundMinutes),
+        }));
+      }
+      const rounded = parts.length ? parts.reduce((sum, d) => sum + d.rounded, 0) : roundUpSeconds(p.total_s, roundMinutes);
+      rows.push({ kind: 'project', project: p.project, folder: p.folder || null, database: p.database || null,
+        buckets: p.buckets || {}, total: p.total_s || 0, rounded });
+      rows.push(...parts);
+      for (const b of columns) sums.buckets[b] = (sums.buckets[b] || 0) + ((p.buckets || {})[b] || 0);
+      sums.total += p.total_s || 0;
+      sums.rounded += rounded;
+    }
+    return { columns: columns.map((key) => ({ key, label: labels[key] })), rows, sums };
+  }
+
+  // ---------------------------------------------------------------- import helper
+
+  /** "FX9-kort i E:" */
+  function cardTitle(card) {
+    return `${card.camera || 'Kamera'}-kort i ${card.drive}`;
+  }
+
+  /** "99 klip · 72,4 GB · optaget 29. sep. 21.41–23.11" */
+  function cardFacts(card, now = Date.now()) {
+    const parts = [plural(card.clips || card.files || 0, 'klip', 'klip')];
+    if (card.stills) parts.push(plural(card.stills, 'foto', 'fotos'));
+    parts.push(formatBytes(card.bytes || 0));
+    if (card.first) {
+      const first = new Date(card.first * 1000);
+      const last = new Date((card.last || card.first) * 1000);
+      const sameDay = first.toDateString() === last.toDateString();
+      parts.push(`optaget ${formatDay(card.first, now)} ${CLOCK.format(first)}–${sameDay ? '' : `${formatDay(card.last, now)} `}${CLOCK.format(last)}`);
+    }
+    return parts.join(' · ');
+  }
+
+  /** Whether the card's files are somewhere already: same name and size, checked on the disk.
+   *  "Alle klip er overført" only when every file is (the clips and their XML/BIM files). */
+  function cardStatus(card) {
+    const found = (card && card.found) || { clips: 0, files: 0, projects: [] };
+    const clips = card.clips || 0;
+    const where = found.projects && found.projects.length ? found.projects[0].name : null;
+    if (!card.files) return { tone: 'done', text: 'Kortet er tomt' };
+    if (found.complete) return { tone: 'done', text: `Alle ${plural(clips, 'klip', 'klip')} er overført${where ? ` til ${where}` : ''}` };
+    if (!found.clips && !found.files) return { tone: 'new', text: 'Ikke overført før' };
+    if (clips && found.clips >= clips) {
+      const missing = Math.max(0, (found.total || card.files) - (found.files || 0));
+      return { tone: 'part', text: `Alle klip er overført${where ? ` til ${where}` : ''}, men ${plural(missing, 'fil mangler', 'filer mangler')}` };
+    }
+    return { tone: 'part', text: `${found.clips} af ${clips} klip ligger allerede${where ? ` i ${where}` : ''}` };
+  }
+
+  /** "ca. 3 min", "under 1 min", "ca. 1 t 5 min" */
+  function formatEta(seconds) {
+    if (seconds == null || !Number.isFinite(seconds)) return '';
+    if (seconds < 60) return 'under 1 min';
+    return `ca. ${durationWords(seconds)}`;
+  }
+
+  /** The progress line of an import: percent, main text and detail. */
+  function importProgress(job) {
+    if (!job) return null;
+    const total = job.bytes_total || 0;
+    const work = total ? (job.copied + job.verified) / (2 * total) : 1;
+    const files = `${formatInt(job.files_done)} af ${plural(job.files_total, 'fil', 'filer')}`;
+    const move = job.mode === 'move';
+    const deleted = job.deleted || 0;
+    const cardNote = deleted
+      ? `${plural(deleted, 'fil', 'filer')} er slettet fra kortet (de er kontrolleret) – resten ligger stadig på kortet.`
+      : 'Intet er slettet fra kortet.';
+    if (job.state === 'deleting') {
+      return { tone: 'busy', pct: 99,
+        main: `Sletter fra kortet: ${job.current || ''} – ${formatInt(deleted)} af ${plural(job.files_total, 'fil', 'filer')}`,
+        sub: 'Alle filer er kopieret og kontrolleret' };
+    }
+    if (job.state === 'copying' || job.state === 'verifying') {
+      const doing = job.state === 'verifying' ? 'Kontrollerer' : 'Kopierer';
+      const speed = job.speed ? `${formatBytes(job.speed)}/s` : '';
+      return { tone: 'busy', pct: Math.min(99, Math.floor(work * 100)),
+        main: `${doing} ${job.current || ''} – ${files}`.trim(),
+        sub: [speed, formatEta(job.eta_s) ? `${formatEta(job.eta_s)} tilbage` : ''].filter(Boolean).join(' · ') };
+    }
+    if (job.state === 'done') {
+      if (move) {
+        const kept = job.kept ? ` ${plural(job.kept, 'fil', 'filer')} var i brug og ligger stadig på kortet.` : '';
+        return { tone: 'ok', pct: 100,
+          main: `${plural(deleted, 'fil', 'filer')} (${formatBytes(total)}) er flyttet – kopieret, kontrolleret og slettet fra kortet`,
+          sub: `I ${job.target}.${kept}` };
+      }
+      return { tone: 'ok', pct: 100, main: `${plural(job.files_done, 'fil', 'filer')} (${formatBytes(total)}) er kopieret og kontrolleret`,
+        sub: `I ${job.target} – kortet kan tages ud.` };
+    }
+    if (job.state === 'cancelled') {
+      return { tone: 'warn', pct: Math.floor(work * 100), main: 'Overførslen blev stoppet',
+        sub: move ? cardNote : `${files} nåede at blive kopieret og kontrolleret. Start igen for at overføre resten.` };
+    }
+    return { tone: 'warn', pct: Math.floor(work * 100), main: job.error || 'Overførslen stoppede',
+      sub: move ? `${files} er kopieret og kontrolleret. ${cardNote}` : `${files} er kopieret og kontrolleret. Start igen for at fortsætte.` };
+  }
+
+  /** What the chosen target means: where the clips go and what is new there. */
+  function planText(plan) {
+    if (!plan) return null;
+    const lines = [];
+    if (!plan.new_files) {
+      lines.push(`Alle ${plural(plan.files, 'fil', 'filer')} ligger der allerede.`);
+    } else {
+      lines.push(`${plural(plan.new_files, 'ny fil', 'nye filer')} (${formatBytes(plan.new_bytes)})`
+        + (plan.already ? ` · ${formatInt(plan.already)} findes allerede og springes over` : ''));
+    }
+    if (plan.conflicts) {
+      lines.push(`${plural(plan.conflicts, 'klip', 'klip')} med samme navn, men andet indhold, ligger i ${plan.camera} – derfor en ny mappe.`);
+    } else if (plan.other_media && !plan.separate) {
+      lines.push(`${plan.camera}-mappen har allerede ${plural(plan.other_media, 'andet klip', 'andre klip')}.`);
+    }
+    if (plan.free != null) {
+      lines.push(plan.fits ? `${formatBytes(plan.free)} fri på disken`
+        : `Der er kun ${formatBytes(plan.free)} fri på disken – vælg en anden`);
+    }
+    return { target: plan.target, creates: !plan.target_exists, lines };
+  }
+
+  const PET_PLAY_HINT = 'Klippe kommer ud, når du har sluppet musen et par sekunder.';
+
+  /** The line under "Vis legen nu" for a `pet` event (or the button's answer). */
+  function petPlayText(data) {
+    const d = data || {};
+    if (d.state === 'waiting') return 'Slip musen … så kommer Klippe ud 🎈';
+    if (d.state === 'out') return 'Klippe leger – rør musen, så flyver den hjem 🏠';
+    return d.message || PET_PLAY_HINT;
+  }
+
   const helpers = {
     itemVisual, isFolder, openAction, formatInt, plural, formatBytes, formatDay, relativeTime,
     modifiedText, highlightParts, itemLocation, sourceBadge, itemOnline, offlineHint, offlineSince,
@@ -461,6 +740,9 @@
     withResolvePassthrough, shouldAskResolveHotkey, typedSince, parseLaunchParams, joinWinPath,
     leafName, footerHint, groupSources, sourceScanState, modeReason, hostShareCount,
     removeHostQuestion, removedHostText, includeOutcome,
+    formatDuration, durationWords, formatHours, roundUpSeconds, isoDate, parseIsoDate, periodRange,
+    periodOf, formatReportDay, timeStatusText, timeTable, downloadName,
+    cardTitle, cardFacts, cardStatus, formatEta, importProgress, planText, petPlayText,
   };
   if (typeof module === 'object' && module.exports) module.exports = helpers;
   if (typeof document === 'undefined') return;
@@ -502,7 +784,23 @@
     hotkeyState: $('hotkey-state'), passthrough: $('passthrough-switch'), passthroughLabel: $('lbl-passthrough'),
     about: $('about'),
     resolveConnection: $('resolve-connection'), actions: $('actions'), hotkeyHint: $('hotkey-hint'),
-    toast: $('toast'), announcer: $('announcer'),
+    toast: $('toast'), announcer: $('announcer'), settingsTitle: $('settings-title'),
+    timeButton: $('time-button'), timeToday: $('time-today'), timeNow: $('time-now'),
+    timeNowMain: $('time-now-main'), timeNowSub: $('time-now-sub'), timeNowToday: $('time-now-today'),
+    timePeriods: $('time-periods'), timeFrom: $('time-from'), timeTo: $('time-to'),
+    timeReportTitle: $('time-report-title'), timeDetail: $('time-detail'), timeRound: $('time-round'),
+    timeExport: $('time-export'), timeTable: $('time-table'), timeIdle: $('time-idle'),
+    timeSitesForm: $('time-sites-form'), timeSites: $('time-sites'), timeSitesError: $('time-sites-error'),
+    petGoal: $('pet-goal'), petNameForm: $('pet-name-form'), petName: $('pet-name'),
+    petPlayIdle: $('pet-play-idle'), petPlayNow: $('pet-play-now'), petPlayState: $('pet-play-state'),
+    importJob: $('import-job'), importNone: $('import-none'), importMain: $('import-main'),
+    importCardpick: $('import-cardpick'), importCard: $('import-card'), importChoices: $('import-choices'),
+    importSearch: $('import-search'), importResults: $('import-results'), importNewChoice: $('import-new-choice'),
+    importNew: $('import-new'), importName: $('import-name'), importDisks: $('import-disks'),
+    importTarget: $('import-target'), importSeparate: $('import-separate'), importSeparateLabel: $('import-separate-label'),
+    importError: $('import-error'), importCopy: $('import-copy'), importPrepare: $('import-prepare'),
+    importMove: $('import-move'), importMoveLabel: $('import-move-label'),
+    importHistoryBox: $('import-history-box'), importHistory: $('import-history'),
   };
 
   const state = {
@@ -522,6 +820,13 @@
     apiReachable: true, eventsDownSince: null, eventSource: null, sseAttempt: 0, sseTimer: 0, sseNeedsResync: false,
     opening: false, menu: null, toastTimer: 0, announceTimer: 0, locationSignature: '', emptySignature: '',
     locationKeyAt: 0, locationPointer: false, firstPaint: null, renderToken: 0,
+    // detail: '' (one row per project), 'day' or 'timeline' (rows under each project)
+    time: { status: null, report: null, from: '', to: '', detail: '', seq: 0, timer: 0, signature: '',
+      sitesDirty: false, error: null },
+    // Import helper: cards, the running/last job, and the choices in the Import tab.
+    imp: { cards: [], job: null, history: [], cardId: null, options: null, choice: null, picked: [],
+      results: [], root: null, plan: null, planSeq: 0, optionsSeq: 0, searchSeq: 0, separate: false,
+      busy: false, timer: 0, searchTimer: 0, hidden: new Set(), confirmMove: false, confirmTimer: 0 },
   };
 
   // ------------------------------------------------------------------------------ DOM helpers
@@ -1643,6 +1948,7 @@
       type: 'button', class: 'btn btn--ghost btn--icon btn--sm card__close', title: label, 'aria-label': label,
       dataset: { cardFocus: `${card.id}:close` }, onclick: () => dismissCard(card),
     }, svgIcon('close'));
+    if (card.type === 'camera') return renderCameraCard(card, close);
     if (card.type === 'resolve-question') {
       return h('div', { class: 'card', role: 'region', 'aria-label': 'DaVinci Resolve og genvejstasten' },
         h('div', { class: 'card__icon', 'aria-hidden': 'true' }, svgIcon('resolve')),
@@ -1683,6 +1989,10 @@
 
   function dismissCard(card) {
     if (card.type === 'resolve-question') state.askDismissed = true;
+    if (card.type === 'camera') {
+      state.imp.hidden.add(card.card.id);   // until the card is taken out and put in again
+      api.post('/api/import/dismiss', { card: card.card.id }).catch(() => {});
+    }
     removeCard(card.id);
     focusSearch(true);
   }
@@ -1728,6 +2038,7 @@
     // Beyond SPEC §3.1: the tray's "Indstillinger …" shows the window with {"panel": "settings"}
     // (Controller.show_window(panel=...)) – the app window itself cannot be navigated.
     if (data && data.panel === 'settings') openSettings();
+    if (data && data.panel === 'import') openSettings('import');   // a camera card went in
     const spec = state.hotkey && state.hotkey.spec;
     if (!state.askDismissed && shouldAskResolveHotkey(data, state.settings, spec)) {
       addCard({ id: 'resolve-question', type: 'resolve-question' });
@@ -1773,6 +2084,10 @@
     hideFieldError(el.hostError, el.hostInput);
     hideFieldError(el.rootError, el.rootInput);
     hideFieldError(el.hotkeyError, el.hotkeyInput);
+    hideFieldError(el.timeSitesError, el.timeSites);
+    state.time.sitesDirty = false;
+    renderTimeButton();
+    scheduleTimePoll();
     if (focus) focusSearch(true);
     renderFooter();
   }
@@ -1799,8 +2114,21 @@
       $(button.getAttribute('aria-controls')).hidden = !active;
       if (active && focus) button.focus();
     }
+    setText(el.settingsTitle, { tid: 'Tid', import: 'Import' }[state.settingsTab] || 'Indstillinger');
+    if (state.settingsTab === 'import') {
+      renderImport();
+      loadImport().then(() => {
+        if (importTabOpen() && state.imp.cardId) loadImportOptions();
+      });
+    }
     if (state.settingsTab === 'placeringer') renderSourcesPanel();
     renderSettingControls();
+    renderTimeButton();
+    if (state.settingsTab === 'tid') {
+      renderTimeReport();
+      loadTimeReport();
+    }
+    scheduleTimePoll();
   }
 
   const hostGroups = new Map();
@@ -2189,6 +2517,12 @@
       choice.tabIndex = checked ? 0 : -1;
     }
     if (document.activeElement !== el.hotkeyInput && !state.hotkeyDirty) el.hotkeyInput.value = s.hotkey || '';
+    const goal = Number(s.widget_daily_goal_hours) || 6;
+    selectValue(el.petGoal, goal, `${goal} timer`);
+    if (document.activeElement !== el.petName) el.petName.value = s.widget_pet_name || 'Klippe';
+    const playIdle = Number(s.widget_play_idle_minutes) || 5;
+    selectValue(el.petPlayIdle, playIdle, `${playIdle} min`);
+    el.petPlayNow.disabled = !s.widget_enabled;
     const hk = state.hotkey;
     const label = (hk && hk.label) || 'Shift+Mellemrum';
     setText(el.passthroughLabel, `Lad DaVinci Resolve beholde ${label} (tryk to gange hurtigt for Projektsøg)`);
@@ -2203,6 +2537,7 @@
     const status = state.status;
     setText(el.about, status ? `Projektsøg ${status.version || ''} · ${status.hostname || ''}`.trim() : '');
     setText(el.resolveConnection, resolveConnectionText(state.resolve, s));
+    if (state.settingsTab === 'tid') renderTimeControls();
   }
 
   function resolveConnectionText(rs, settings) {
@@ -2226,6 +2561,21 @@
       renderSettingControls();
       return false;
     }
+  }
+
+  // ---------------------------------------------------------------- Klippe plays (petplay.py)
+
+  async function playPetNow() {
+    try {
+      applyPetPlay(await api.post('/api/widget/play'));
+    } catch (err) {
+      toast(err.message, 'warn');
+    }
+  }
+
+  function applyPetPlay(data) {
+    setText(el.petPlayState, petPlayText(data));
+    el.petPlayNow.classList.toggle('is-busy', Boolean(data && (data.state === 'waiting' || data.state === 'out')));
   }
 
   // ---------------------------------------------------------------- theme
@@ -2269,6 +2619,14 @@
     if (settings.resolve_hotkey_asked) removeCard('resolve-question');
     const offlineChanged = previous && previous.show_offline !== settings.show_offline;
     if (offlineChanged && (state.onlineOnly === null || !state.query.trim())) runView('refresh');
+    if (previous && previous.time_tracking_enabled !== settings.time_tracking_enabled) {
+      // The tracker acts on its next tick (≤ 5 s): show the switch at once, the new state soon after.
+      if (timeTabOpen()) loadTimeReport();
+      else loadTimeStatus();
+      scheduleTimePoll(6000);
+    } else if (timeTabOpen()) {
+      renderTimeReport();   // rounding or pause limit changed
+    }
   }
 
   async function submitHotkey(event) {
@@ -2283,6 +2641,695 @@
       renderSettingControls();
       toast('Genvejstasten er gemt', 'ok', spec);
     }
+  }
+
+  // ------------------------------------------------------------------------------ time tracking (Tid)
+
+  const TIME_POLL_MS = { open: 10e3, closed: 60e3 };
+
+  function timeTabOpen() {
+    return state.settingsOpen && state.settingsTab === 'tid';
+  }
+
+  /** Poll the tracker while the window is visible: the open Tid tab often, the header button rarely. */
+  function scheduleTimePoll(delay) {
+    clearTimeout(state.time.timer);
+    if (document.visibilityState === 'hidden') return;
+    state.time.timer = setTimeout(() => {
+      (timeTabOpen() ? loadTimeReport() : loadTimeStatus()).finally(() => scheduleTimePoll());
+    }, delay ?? (timeTabOpen() ? TIME_POLL_MS.open : TIME_POLL_MS.closed));
+  }
+
+  function ensureTimeRange() {
+    if (!state.time.from || !state.time.to) Object.assign(state.time, periodRange('today'));
+  }
+
+  async function loadTimeStatus() {
+    try {
+      applyTimeStatus(await api.get('/api/time/status'));
+    } catch {
+      // Not reachable: the pill says so; the button keeps its last state.
+    }
+  }
+
+  async function loadTimeReport() {
+    ensureTimeRange();
+    const seq = ++state.time.seq;
+    try {
+      const data = await api.get('/api/time', { from: state.time.from, to: state.time.to });
+      if (seq !== state.time.seq) return;
+      state.time.error = null;
+      state.time.report = data.report;
+      applyTimeStatus(data.status);
+    } catch (err) {
+      if (seq !== state.time.seq) return;
+      state.time.error = err.message;
+    }
+    renderTimeReport();
+  }
+
+  function applyTimeStatus(status) {
+    if (!status) return;
+    state.time.status = status;
+    renderTimeButton();
+    if (timeTabOpen()) renderTimeNow();
+  }
+
+  function renderTimeButton() {
+    const s = state.time.status;
+    const today = (s && s.today_s) || 0;
+    const off = !s || s.enabled === false || s.state === 'off';
+    const recording = !off && s.state === 'recording';
+    const away = !off && s.state === 'away';
+    el.timeButton.dataset.state = off ? 'off' : recording ? 'rec' : away ? 'away' : 'pause';
+    el.timeButton.setAttribute('aria-expanded', String(timeTabOpen()));
+    setText(el.timeToday, today >= 60 ? formatDuration(today) : 'Tid');
+    const what = off ? ' – registrering slået fra' : recording ? ` – registrerer ${s.project}`
+      : away ? ` – uden for Resolve, tæller stadig ${s.project}` : ' – pause';
+    el.timeButton.title = `Tid på projekter i dag: ${durationWords(today)}${s ? what : ''}`;
+    el.timeButton.setAttribute('aria-label', `Tid i dag: ${durationWords(today)}${s ? what : ''}`);
+  }
+
+  function renderTimeNow() {
+    const s = state.time.status;
+    const text = timeStatusText(s, (state.settings && state.settings.time_idle_minutes) || 10);
+    el.timeNow.dataset.tone = text.tone;
+    setText(el.timeNowMain, text.main);
+    setText(el.timeNowSub, text.sub);
+    setText(el.timeNowToday, formatDuration(s ? s.today_s : 0));
+  }
+
+  /** A setting's value in a select, adding an option for a value set outside the UI. */
+  function selectValue(select, value, label) {
+    const text = String(value);
+    if (![...select.options].some((option) => option.value === text)) select.append(new Option(label, text));
+    select.value = text;
+  }
+
+  function renderTimeControls() {
+    ensureTimeRange();
+    const period = periodOf(state.time.from, state.time.to);
+    const buttons = [...el.timePeriods.querySelectorAll('[data-period]')];
+    for (const button of buttons) {
+      const checked = button.dataset.period === period;
+      button.setAttribute('aria-checked', String(checked));
+      button.tabIndex = checked || (period === 'custom' && button === buttons[0]) ? 0 : -1;
+    }
+    if (document.activeElement !== el.timeFrom) el.timeFrom.value = state.time.from;
+    if (document.activeElement !== el.timeTo) el.timeTo.value = state.time.to;
+    for (const button of el.timeDetail.querySelectorAll('[data-detail]')) {
+      const checked = button.dataset.detail === state.time.detail;
+      button.setAttribute('aria-checked', String(checked));
+      button.tabIndex = checked ? 0 : -1;
+    }
+    const s = state.settings;
+    if (!s) return;
+    const round = Number(s.time_round_minutes) || 0;
+    selectValue(el.timeRound, round, `Afrund til ${round} min`);
+    const idle = Number(s.time_idle_minutes) || 10;
+    selectValue(el.timeIdle, idle, `${idle} min`);
+    if (document.activeElement !== el.timeSites && !state.time.sitesDirty) {
+      el.timeSites.value = (s.time_music_sites || []).join(', ');
+    }
+  }
+
+  function timeRoundMinutes() {
+    return Number(state.settings && state.settings.time_round_minutes) || 0;
+  }
+
+  function renderTimeReport() {
+    renderTimeControls();
+    renderTimeNow();
+    const report = state.time.report;
+    const roundMinutes = timeRoundMinutes();
+    let content;
+    let title = 'Projekter';
+    if (!report) {
+      content = h('p', { class: 'time-table__empty' }, state.time.error || 'Henter …');
+    } else if (!report.projects.length) {
+      const off = state.time.status && state.time.status.enabled === false;
+      content = h('p', { class: 'time-table__empty' }, off
+        ? 'Ingen tid i perioden – tidsregistreringen er slået fra.'
+        : 'Ingen tid registreret i perioden. Tiden tæller, mens et projekt er åbent i DaVinci Resolve.');
+    } else {
+      const table = timeTable(report, { roundMinutes, perDay: state.time.detail === 'day',
+        perTimeline: state.time.detail === 'timeline' });
+      title = `${plural(report.projects.length, 'projekt', 'projekter')} · ${durationWords(table.sums.total)}`;
+      content = timeTableNode(table, roundMinutes);
+    }
+    el.timeExport.disabled = !(report && report.projects.length);
+    setText(el.timeReportTitle, title);
+    // Polling re-sends the same report most of the time: keep the table (focus, scroll) as it is.
+    const signature = `${roundMinutes}|${state.time.detail}|${content.outerHTML}`;
+    if (signature === state.time.signature) return;
+    state.time.signature = signature;
+    const active = document.activeElement;
+    const find = active && el.timeTable.contains(active) ? active.dataset.timeFind : null;
+    el.timeTable.replaceChildren(content);
+    if (find != null) {
+      const again = [...el.timeTable.querySelectorAll('[data-time-find]')].find((b) => b.dataset.timeFind === find);
+      if (again) again.focus();
+    }
+  }
+
+  function timeTableNode(table, roundMinutes) {
+    const cells = (row) => [
+      ...table.columns.map((c) => h('td', { class: 'num' }, row.buckets[c.key] ? formatDuration(row.buckets[c.key]) : '–')),
+      h('td', { class: 'num time-table__total' }, formatDuration(row.total)),
+      h('td', { class: 'num time-table__hours' }, formatHours(row.rounded)),
+    ];
+    const hoursTitle = roundMinutes
+      ? `Timer til fakturaen – afrundet opad til ${roundMinutes} min ${{ day: 'pr. dag', timeline: 'pr. tidslinje' }[state.time.detail] || 'pr. projekt'}`
+      : 'Timer til fakturaen (decimaltimer)';
+    const rows = table.rows.map((row) => {
+      if (row.kind !== 'project') {   // a day or a timeline under its project
+        return h('tr', { class: `time-row time-row--day time-row--${row.kind}` },
+          h('th', { scope: 'row', title: row.label }, row.label), cells(row));
+      }
+      const where = [row.folder && row.folder !== row.project ? row.folder : null, row.database].filter(Boolean).join(' · ');
+      const target = row.folder || row.project;
+      return h('tr', { class: 'time-row' },
+        h('th', { scope: 'row' },
+          h('div', { class: 'time-proj' },
+            h('div', { class: 'time-proj__text' },
+              h('span', { class: 'time-proj__name', title: row.project }, row.project),
+              where ? h('span', { class: 'time-proj__where', title: where }, where) : null),
+            h('button', { type: 'button', class: 'btn btn--ghost btn--icon btn--sm time-proj__find',
+              title: 'Find projektmappen i Projektsøg', 'aria-label': `Find ${target}`, dataset: { timeFind: target } },
+            svgIcon('search')))),
+        cells(row));
+    });
+    return h('table', { class: 'time-table__grid' },
+      h('thead', null, h('tr', null,
+        h('th', { scope: 'col' }, 'Projekt'),
+        table.columns.map((c) => h('th', { scope: 'col', class: 'num' }, c.label)),
+        h('th', { scope: 'col', class: 'num' }, 'I alt'),
+        h('th', { scope: 'col', class: 'num', title: hoursTitle }, roundMinutes ? 'Afrundet (t)' : 'Timer'))),
+      h('tbody', null, rows),
+      h('tfoot', null, h('tr', null,
+        h('th', { scope: 'row' }, 'I alt'),
+        table.columns.map((c) => h('td', { class: 'num' }, formatDuration(table.sums.buckets[c.key] || 0))),
+        h('td', { class: 'num time-table__total' }, formatDuration(table.sums.total)),
+        h('td', { class: 'num time-table__hours' }, formatHours(table.sums.rounded)))));
+  }
+
+  function setTimeRange(from, to) {
+    state.time.from = from;
+    state.time.to = to;
+    state.time.report = null;
+    state.time.signature = '';
+    renderTimeReport();
+    loadTimeReport();
+  }
+
+  /** A date typed or picked in Fra/Til; the other end follows so the range stays valid. */
+  function onTimeDateChange(changed) {
+    const from = parseIsoDate(el.timeFrom.value);
+    const to = parseIsoDate(el.timeTo.value);
+    if (!from || !to) return; // half-typed: wait for a whole date
+    let first = isoDate(from);
+    let last = isoDate(to);
+    if (first > last) {
+      if (changed === 'from') last = first;
+      else first = last;
+    }
+    setTimeRange(first, last);
+  }
+
+  /** A setting changed from the Tid tab: show it at once, save it, re-render with the answer. */
+  function saveTimeSetting(key, value) {
+    if (state.settings) state.settings = { ...state.settings, [key]: value };
+    renderTimeReport();
+    saveSettings({ [key]: value });
+  }
+
+  async function submitTimeSites(event) {
+    event.preventDefault();
+    const sites = el.timeSites.value.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
+    if (await saveSettings({ time_music_sites: sites }, { errorNode: el.timeSitesError, input: el.timeSites })) {
+      state.time.sitesDirty = false;
+      renderTimeControls();
+      toast('Musik- og lydsiderne er gemt', 'ok');
+    }
+  }
+
+  function findTimeProject(name) {
+    closeSettings({ focus: false });
+    setQuery(name);
+    renderFooter();
+    runView('query');
+    focusSearch(true);
+  }
+
+  /** Download the period as CSV (fetched first, so an error becomes a message, not a file). */
+  async function exportTime() {
+    ensureTimeRange();
+    const params = new URLSearchParams({ from: state.time.from, to: state.time.to, round: String(timeRoundMinutes()) });
+    if (state.time.detail) params.set('detail', state.time.detail);
+    el.timeExport.disabled = true;
+    try {
+      let response;
+      try {
+        response = await fetch(`/api/time/export?${params}`, { cache: 'no-store' });
+      } catch {
+        throw new Error('Projektsøg svarer ikke');
+      }
+      if (!response.ok) {
+        let message = `Eksporten mislykkedes (${response.status})`;
+        try {
+          const data = await response.json();
+          if (data && data.error) message = data.error;
+        } catch { /* not JSON */ }
+        throw new Error(message);
+      }
+      const name = downloadName(response.headers.get('Content-Disposition')) || 'Projektsøg tid.csv';
+      const url = URL.createObjectURL(await response.blob());
+      const link = h('a', { href: url, download: name, hidden: true });
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60e3);
+      toast('Tiden er eksporteret', 'ok', name);
+    } catch (err) {
+      toast(err.message, 'warn');
+    } finally {
+      el.timeExport.disabled = !(state.time.report && state.time.report.projects.length);
+    }
+  }
+
+  // ------------------------------------------------------------------------------ import helper (Import)
+
+  const PROJECT_NAME_INVALID = /[<>:"|?*\x00-\x1f]/;
+
+  function importTabOpen() {
+    return state.settingsOpen && state.settingsTab === 'import';
+  }
+
+  function jobRunning() {
+    const job = state.imp.job;
+    return Boolean(job && (job.state === 'copying' || job.state === 'verifying' || job.state === 'deleting'));
+  }
+
+  async function loadImport() {
+    try {
+      const data = await api.get('/api/import');
+      state.imp.history = data.history || [];
+      applyImportJob(data.job, { reload: false });
+      applyCards(data.cards || []);
+    } catch {
+      // Not reachable: the pill says so.
+    }
+  }
+
+  function applyCards(cards) {
+    const imp = state.imp;
+    imp.cards = cards;
+    const current = cards.find((c) => c.id === imp.cardId);
+    if (!current) {
+      imp.cardId = cards.length ? cards[0].id : null;
+      Object.assign(imp, { options: null, plan: null, planError: null, choice: null, picked: [], separate: false });
+      if (imp.cardId && importTabOpen()) loadImportOptions();
+    } else if (imp.options) {
+      imp.options.card = current;   // fresh "found" after an import
+    }
+    renderCameraCards();
+    if (importTabOpen()) renderImport();
+  }
+
+  function applyImportJob(job, { reload = true } = {}) {
+    const before = state.imp.job;
+    state.imp.job = job || null;
+    renderCameraCards();
+    if (importTabOpen()) {
+      renderImportJob();
+      renderImportTarget();
+    }
+    if (reload && job && before && before.state !== job.state && !jobRunning()) {
+      loadImport();                       // history and "already imported"
+      if (importTabOpen()) schedulePlan();
+    }
+  }
+
+  /** The cards of inserted camera cards (and a running import) above the results. */
+  function renderCameraCards() {
+    const imp = state.imp;
+    const wanted = imp.cards.filter((c) => !imp.hidden.has(c.id)).map((c) => ({
+      id: `camera:${c.id}`, type: 'camera', card: c, job: imp.job && imp.job.card === c.id ? imp.job : null }));
+    const signature = JSON.stringify(wanted.map((w) => {
+      const p = w.job ? importProgress(w.job) : null;
+      return [w.id, w.card.found, p && [p.tone, p.pct, p.main]];
+    }));
+    if (signature === imp.cardsSignature) return;
+    imp.cardsSignature = signature;
+    state.cards = [...wanted, ...state.cards.filter((c) => c.type !== 'camera')];
+    renderCards();
+  }
+
+  function renderCameraCard(entry, close) {
+    const card = entry.card;
+    const progress = entry.job ? importProgress(entry.job) : null;
+    const busy = Boolean(progress && progress.tone === 'busy');
+    const status = cardStatus(card);
+    const title = busy ? `${cardTitle(card)} – ${entry.job.mode === 'move' ? 'flytter' : 'overfører'} ${progress.pct} %` : cardTitle(card);
+    const complete = !progress && Boolean(card.found && card.found.complete && card.found.projects.length);
+    const text = progress ? `${progress.main}${progress.sub ? ` · ${progress.sub}` : ''}`
+      : `${cardFacts(card)} · ${status.text}${complete ? ' – kortet kan tages ud' : ''}`;
+    const done = Boolean(progress && progress.tone === 'ok');
+    const folder = done ? entry.job.target : complete ? card.found.projects[0].folder : null;
+    return h('div', { class: 'card card--camera', role: 'region', 'aria-label': cardTitle(card) },
+      h('div', { class: 'card__icon', 'aria-hidden': 'true' }, svgIcon('card')),
+      h('div', { class: 'card__body' },
+        h('p', { class: 'card__title' }, title),
+        h('p', { class: 'card__text' }, text),
+        busy ? h('div', { class: 'imp-bar' }, h('div', { class: 'imp-bar__fill', style: `width: ${progress.pct}%` })) : null,
+        h('div', { class: 'card__actions' },
+          h('button', { type: 'button', class: done ? 'btn btn--secondary btn--sm' : 'btn btn--primary btn--sm',
+            dataset: { cardFocus: `${entry.id}:open` }, onclick: () => openSettings('import') },
+          busy || done ? 'Vis' : status.tone === 'done' ? 'Vis kortet' : 'Importér'),
+          folder ? h('button', { type: 'button', class: 'btn btn--primary btn--sm', dataset: { cardFocus: `${entry.id}:folder` },
+            onclick: () => openImportFolder(folder) }, 'Åbn mappen') : null)),
+      busy ? null : close('Skjul'));
+  }
+
+  async function openImportFolder(path) {
+    try {
+      const result = await api.post('/api/open', { path, action: 'folder' });
+      if (result && result.ok === false) toast(result.error, 'warn');
+    } catch (err) {
+      toast(err.message, 'warn');
+    }
+  }
+
+  async function loadImportOptions() {
+    const imp = state.imp;
+    const cardId = imp.cardId;
+    if (!cardId) return;
+    const seq = ++imp.optionsSeq;
+    try {
+      const options = await api.get('/api/import/options', { card: cardId });
+      if (seq !== imp.optionsSeq || cardId !== imp.cardId) return;
+      imp.options = options;
+      if (imp.choice == null) imp.choice = options.suggestions.length ? options.suggestions[0].path : 'new';
+      if (!imp.root || !options.disks.some((d) => d.path === imp.root)) {
+        const disk = options.disks.find((d) => d.online && d.fits) || options.disks.find((d) => d.online);
+        imp.root = disk ? disk.path : null;
+      }
+    } catch (err) {
+      if (seq !== imp.optionsSeq) return;
+      imp.planError = err.message;
+    }
+    if (importTabOpen()) renderImport();
+    schedulePlan();
+  }
+
+  /** The project folder the clips go to (for "Nyt projekt": root\name, not made yet). */
+  function importProject() {
+    const imp = state.imp;
+    if (imp.choice !== 'new') return imp.choice;
+    const name = el.importName.value.trim().replace(/\//g, '\\');
+    return imp.root && name ? `${imp.root}\\${name}` : null;
+  }
+
+  function newNameError() {
+    const parts = el.importName.value.trim().replace(/\//g, '\\').split('\\').map((p) => p.trim());
+    if (parts.length > 2 || parts.some((p) => !p)) return 'Højst én kundemappe, fx „Kunde 2026\\Kunde - Projekt“';
+    if (parts.some((p) => PROJECT_NAME_INVALID.test(p))) return 'Navnet må ikke indeholde < > : " | ? *';
+    if (parts.some((p) => p.endsWith('.'))) return 'Et mappenavn kan ikke slutte med punktum';
+    return null;
+  }
+
+  function schedulePlan(delay = 0) {
+    clearTimeout(state.imp.timer);
+    state.imp.timer = setTimeout(loadImportPlan, delay);
+  }
+
+  async function loadImportPlan() {
+    const imp = state.imp;
+    const project = importProject();
+    const seq = ++imp.planSeq;
+    imp.plan = null;
+    imp.planError = imp.choice === 'new' && el.importName.value.trim() ? newNameError() : null;
+    if (!project || !imp.cardId || imp.planError) {
+      renderImportTarget();
+      return;
+    }
+    renderImportTarget();
+    try {
+      const plan = await api.get('/api/import/plan', { card: imp.cardId, project, separate: imp.separate ? 1 : '' });
+      if (seq !== imp.planSeq) return;
+      imp.plan = plan;
+    } catch (err) {
+      if (seq !== imp.planSeq) return;
+      imp.planError = err.message;
+    }
+    renderImportTarget();
+  }
+
+  /** "Klip" asks for a second click; any change of the target withdraws the question. */
+  function resetMoveConfirm() {
+    clearTimeout(state.imp.confirmTimer);
+    if (!state.imp.confirmMove) return;
+    state.imp.confirmMove = false;
+    renderImportTarget();
+  }
+
+  function onMoveClick() {
+    const imp = state.imp;
+    if (!imp.confirmMove) {
+      imp.confirmMove = true;
+      renderImportTarget();
+      clearTimeout(imp.confirmTimer);
+      imp.confirmTimer = setTimeout(resetMoveConfirm, 10e3);
+      return;
+    }
+    clearTimeout(imp.confirmTimer);
+    imp.confirmMove = false;
+    startImport('move');
+  }
+
+  function chooseImport(path, picked) {
+    const imp = state.imp;
+    if (picked && !imp.picked.some((p) => p.path === path)) imp.picked.push(picked);
+    imp.choice = path;
+    imp.separate = false;
+    resetMoveConfirm();
+    hideFieldError(el.importError);
+    renderImportChoices();
+    if (path === 'new' && !el.importName.value) el.importName.focus();
+    schedulePlan();
+  }
+
+  function scheduleImportSearch() {
+    clearTimeout(state.imp.searchTimer);
+    state.imp.searchTimer = setTimeout(runImportSearch, 150);
+  }
+
+  async function runImportSearch() {
+    const imp = state.imp;
+    const q = el.importSearch.value.trim();
+    const seq = ++imp.searchSeq;
+    if (!q) {
+      imp.results = [];
+      renderImportChoices();
+      return;
+    }
+    try {
+      const data = await api.get('/api/search', { q, kind: 'project', limit: 8 });
+      if (seq !== imp.searchSeq) return;
+      imp.results = (data.results || []).filter((r) => r.kind !== 'group' && r.path)
+        .slice(0, 6).map((r) => ({ path: r.path, name: r.name, online: r.online !== false }));
+    } catch {
+      if (seq !== imp.searchSeq) return;
+      imp.results = [];
+    }
+    renderImportChoices();
+  }
+
+  async function startImport(mode) {
+    const imp = state.imp;
+    const plan = imp.plan;
+    if (!plan || imp.busy) return;
+    imp.busy = true;
+    hideFieldError(el.importError);
+    renderImportTarget();
+    try {
+      let project = plan.project;
+      if (imp.choice === 'new') {
+        const created = await api.post('/api/import/project', { root: imp.root, name: el.importName.value });
+        project = created.path;
+        imp.picked.push({ path: project, name: created.name });
+        imp.choice = project;
+        el.importName.value = '';
+      }
+      const result = await api.post('/api/import/start', { card: imp.cardId, project, separate: Boolean(plan.separate), mode });
+      if (mode === 'prepare') {
+        toast('Mappen er klar – kortet og mappen er åbnet i Stifinder', 'ok', result.target);
+        loadImport();
+      } else {
+        applyImportJob(result, { reload: false });
+      }
+    } catch (err) {
+      showFieldError(el.importError, err.message);
+    } finally {
+      imp.busy = false;
+      renderImportChoices();
+      schedulePlan();
+    }
+  }
+
+  function renderImport() {
+    const imp = state.imp;
+    const card = imp.cards.find((c) => c.id === imp.cardId) || null;
+    el.importNone.hidden = Boolean(card) || jobRunning();
+    el.importMain.hidden = !card;
+    renderImportJob();
+    renderImportHistory();
+    if (!card) return;
+    el.importCardpick.hidden = imp.cards.length < 2;
+    el.importCardpick.replaceChildren(...(imp.cards.length < 2 ? [] : imp.cards.map((c) => h('button', {
+      type: 'button', role: 'radio', class: 'seg__item', 'aria-checked': String(c.id === imp.cardId),
+      tabindex: c.id === imp.cardId ? '0' : '-1', dataset: { importCard: c.id } }, cardTitle(c)))));
+    const status = cardStatus(card);
+    const complete = Boolean(card.found && card.found.complete && card.found.projects.length);
+    const where = complete ? card.found.projects[0] : null;
+    el.importCard.classList.toggle('is-done', complete);
+    el.importCard.replaceChildren(
+      h('div', { class: 'imp-card__icon', 'aria-hidden': 'true' }, svgIcon(complete ? 'check' : 'card')),
+      h('div', { class: 'imp-card__text' },
+        h('p', { class: 'imp-card__title' }, cardTitle(card), card.model ? h('span', { class: 'tag' }, card.model) : null),
+        h('p', { class: 'imp-card__facts' }, cardFacts(card)),
+        h('p', { class: `imp-card__status is-${status.tone}` }, status.text),
+        where ? h('p', { class: 'imp-card__done' }, `Alle ${plural(card.found.total || card.files, 'fil', 'filer')} findes med `
+          + `samme navn og størrelse i ${where.folder} – kortet kan tages ud.`) : null,
+        where ? h('div', { class: 'imp-actions' }, h('button', { type: 'button', class: 'btn btn--secondary btn--sm',
+          dataset: { importAction: 'open', path: where.folder } }, svgIcon('open'), 'Åbn mappen')) : null));
+    renderImportChoices();
+    renderImportTarget();
+  }
+
+  function importChoice(path, label, hint, tag, online = true) {
+    const checked = state.imp.choice === path;
+    return h('button', { type: 'button', role: 'radio', class: 'choice', 'aria-checked': String(checked),
+      tabindex: checked ? '0' : '-1', disabled: !online, dataset: { importChoice: path } },
+    h('span', { class: 'choice__radio', 'aria-hidden': 'true' }),
+    h('span', { class: 'choice__text' },
+      h('span', { class: 'choice__label' }, label, tag),
+      h('span', { class: 'choice__hint imp-path', title: path }, online ? hint : `${hint} – offline`)));
+  }
+
+  function renderImportChoices() {
+    const imp = state.imp;
+    const options = imp.options;
+    const shown = new Set();
+    const list = [];
+    if (options) {
+      for (const s of options.suggestions) {
+        shown.add(s.path);
+        const free = s.free != null ? ` · ${formatBytes(s.free)} fri` : '';
+        list.push(importChoice(s.path, s.name, `${s.path}${free}`, h('span', { class: 'tag tag--accent' }, s.reason), s.online));
+      }
+      for (const p of imp.picked) {
+        if (shown.has(p.path)) continue;
+        shown.add(p.path);
+        list.push(importChoice(p.path, p.name, p.path, h('span', { class: 'tag' }, 'Valgt')));
+      }
+    }
+    el.importChoices.replaceChildren(...(list.length ? list : [h('p', { class: 'setting__hint' },
+      options ? 'Ingen forslag – søg efter projektet, eller opret et nyt.' : 'Finder forslag …')]));
+    el.importResults.replaceChildren(...imp.results.filter((r) => !shown.has(r.path))
+      .map((r) => importChoice(r.path, r.name, r.path, null, r.online)));
+    const isNew = imp.choice === 'new';
+    el.importNewChoice.setAttribute('aria-checked', String(isNew));
+    el.importNewChoice.tabIndex = isNew ? 0 : -1;
+    el.importNew.hidden = !isNew;
+    const disks = (options && options.disks) || [];
+    el.importDisks.replaceChildren(...(disks.length ? disks.map((d) => h('button', {
+      type: 'button', role: 'radio', class: 'imp-disk', 'aria-checked': String(imp.root === d.path),
+      tabindex: imp.root === d.path ? '0' : '-1', disabled: !d.online, dataset: { importRoot: d.path } },
+    h('span', { class: 'choice__radio', 'aria-hidden': 'true' }),
+    h('span', { class: 'imp-disk__text' },
+      h('span', { class: 'imp-disk__name' }, d.name, d.kind === 'share' && d.host ? h('span', { class: 'imp-disk__host' }, d.host) : null),
+      h('span', { class: 'imp-disk__path', title: d.path }, d.path)),
+    h('span', { class: d.fits ? 'imp-disk__free' : 'imp-disk__free is-short' },
+      !d.online ? 'offline' : d.free == null ? '–' : `${formatBytes(d.free)} fri`))) : [h('p', { class: 'setting__hint' },
+      'Ingen tilsluttet disk har skabelonen 1. KUNDENAVN.')]));
+  }
+
+  function renderImportTarget() {
+    const imp = state.imp;
+    const plan = imp.plan;
+    const text = planText(plan);
+    let content;
+    if (imp.planError) {
+      content = [h('p', { class: 'imp-target__warn' }, imp.planError)];
+    } else if (!importProject()) {
+      content = [h('p', { class: 'setting__hint' }, imp.choice === 'new' ? 'Skriv projektets navn, og vælg en disk.' : 'Vælg, hvor klippene skal hen.')];
+    } else if (!text) {
+      content = [h('p', { class: 'setting__hint' }, 'Ser på mappen …')];
+    } else {
+      content = [
+        h('p', { class: 'imp-target__path' }, svgIcon('arrow-right'), h('span', { title: text.target }, text.target),
+          text.creates ? h('span', { class: 'tag' }, 'oprettes') : null),
+        ...text.lines.map((line) => h('p', { class: 'imp-target__line' }, line))];
+    }
+    el.importTarget.replaceChildren(...content);
+    const separable = Boolean(plan && (plan.suggest_separate || plan.separate) && !imp.planError);
+    el.importSeparate.hidden = !separable;
+    el.importSeparate.setAttribute('aria-checked', String(Boolean(plan && plan.separate)));
+    el.importSeparate.disabled = Boolean(plan && plan.conflicts);
+    setText(el.importSeparateLabel, plan && plan.day_folder ? `Læg dem i en ny mappe: ${plan.day_folder}`
+      : `Læg dem i en ny mappe (${plan ? plan.camera : 'FX9'} Dag 2)`);
+    const usable = Boolean(plan && !imp.planError && !imp.busy);
+    el.importCopy.disabled = !(usable && plan.new_files > 0 && plan.fits && !jobRunning());
+    el.importPrepare.disabled = !usable;
+    // "Klip" also empties a card whose files are there already (compared by content first).
+    el.importMove.disabled = !(usable && !jobRunning() && (plan.new_files > 0 ? plan.fits : plan.already > 0));
+    if (el.importMove.disabled) imp.confirmMove = false;
+    el.importMove.classList.toggle('is-confirm', imp.confirmMove);
+    setText(el.importMoveLabel, imp.confirmMove ? 'Bekræft: slet fra kortet efter kontrol' : 'Klip – flyt fra kortet');
+  }
+
+  function renderImportJob() {
+    const job = state.imp.job;
+    const progress = importProgress(job);
+    const recent = job && job.finished && Date.now() / 1000 - job.finished < 6 * 3600;
+    const show = Boolean(progress && (progress.tone === 'busy' || recent));
+    el.importJob.hidden = !show;
+    if (!show) return;
+    const busy = progress.tone === 'busy';
+    el.importJob.dataset.tone = progress.tone;
+    const move = job.mode === 'move';
+    const title = busy ? `${move ? 'Flytter' : 'Overfører'} ${job.camera}-kortet til ${job.project_name}`
+      : job.state === 'done' ? `${job.camera}-kortet er ${move ? 'flyttet' : 'overført'} til ${job.project_name}`
+        : `${job.camera}-kortet → ${job.project_name}`;
+    const active = document.activeElement;
+    const hadFocus = active && el.importJob.contains(active) ? active.dataset.importAction : null;
+    el.importJob.replaceChildren(
+      h('div', { class: 'imp-job__head' },
+        h('p', { class: 'imp-job__title' }, title),
+        busy ? h('span', { class: 'imp-job__pct' }, `${progress.pct} %`) : null),
+      h('div', { class: 'imp-bar' }, h('div', { class: 'imp-bar__fill', style: `width: ${progress.pct}%` })),
+      h('p', { class: 'imp-job__main' }, progress.main),
+      progress.sub ? h('p', { class: 'imp-job__sub' }, progress.sub) : null,
+      h('div', { class: 'imp-actions' },
+        busy ? h('button', { type: 'button', class: 'btn btn--secondary btn--sm', dataset: { importAction: 'cancel' } }, 'Stop overførslen')
+          : h('button', { type: 'button', class: 'btn btn--secondary btn--sm', dataset: { importAction: 'open', path: job.target } },
+            svgIcon('open'), 'Åbn mappen')));
+    if (hadFocus) {
+      const again = el.importJob.querySelector(`[data-import-action="${hadFocus}"]`);
+      if (again) again.focus();
+    }
+  }
+
+  function renderImportHistory() {
+    const items = state.imp.history || [];
+    el.importHistoryBox.hidden = !items.length;
+    el.importHistory.replaceChildren(...items.slice(0, 6).map((item) => h('li', { class: 'imp-history__item' },
+      h('span', { class: 'imp-history__when' }, relativeTime(item.at)),
+      h('span', { class: 'imp-history__what' }, item.mode === 'prepare'
+        ? `${item.camera}: mappe oprettet` : `${item.camera}: ${plural(item.files, 'fil', 'filer')} · ${formatBytes(item.bytes)}`),
+      h('button', { type: 'button', class: 'link imp-history__path', title: item.target,
+        dataset: { importAction: 'open', path: item.target } }, leafName(item.project || item.target)))));
   }
 
   // ------------------------------------------------------------------------------ data loading & events
@@ -2438,6 +3485,9 @@
     focus: onFocusEvent,
     settings: applySettings,
     hotkey: setHotkey,
+    cards: (data) => applyCards((data && data.cards) || []),
+    import: (data) => applyImportJob(data),
+    pet: (data) => applyPetPlay(data),
   };
 
   function connectEvents() {
@@ -2490,6 +3540,8 @@
     loadStatus();
     loadSettings();
     loadSources();
+    loadTimeStatus();
+    loadImport();
     runView('refresh');
   }
 
@@ -2506,6 +3558,7 @@
     state.hiddenAt = Date.now();
     state.valueAtHide = el.input.value;
     state.projectAtHide = resolveProject();
+    clearTimeout(state.time.timer);   // no polling while nobody looks
     closeMenu();
     hideToast();
   }
@@ -2517,6 +3570,9 @@
     const hiddenFor = Date.now() - state.hiddenAt;
     state.hiddenAt = null;
     if (state.sourcesDirty) loadSources(); // `sources` events while hidden only marked them stale
+    if (timeTabOpen()) loadTimeReport();
+    else loadTimeStatus();
+    scheduleTimePoll();
     const typed = typedSince(state.valueAtHide, el.input.value);
     if (hiddenFor >= QUERY_LIFETIME_MS || resolveProject() !== state.projectAtHide) {
       resetSession(typed || '');
@@ -2721,6 +3777,7 @@
     });
 
     el.pill.addEventListener('click', () => openSettings('placeringer'));
+    el.timeButton.addEventListener('click', () => (timeTabOpen() ? closeSettings() : openSettings('tid')));
     el.settingsButton.addEventListener('click', toggleSettings);
     el.settingsClose.addEventListener('click', () => closeSettings());
 
@@ -2892,6 +3949,114 @@
     });
     el.hostInput.addEventListener('input', () => hideFieldError(el.hostError, el.hostInput));
     el.rootInput.addEventListener('input', () => hideFieldError(el.rootError, el.rootInput));
+
+    const periodButtons = [...el.timePeriods.querySelectorAll('[data-period]')];
+    const choosePeriod = (button) => {
+      const range = periodRange(button.dataset.period);
+      setTimeRange(range.from, range.to);
+    };
+    el.timePeriods.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-period]');
+      if (button) choosePeriod(button);
+    });
+    el.timePeriods.addEventListener('keydown', (event) => onRovingKeys(event, periodButtons, choosePeriod));
+    el.timeFrom.addEventListener('change', () => onTimeDateChange('from'));
+    el.timeTo.addEventListener('change', () => onTimeDateChange('to'));
+    const detailButtons = [...el.timeDetail.querySelectorAll('[data-detail]')];
+    const chooseDetail = (button) => {
+      state.time.detail = button.dataset.detail;
+      renderTimeReport();
+    };
+    el.timeDetail.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-detail]');
+      if (button) chooseDetail(button);
+    });
+    el.timeDetail.addEventListener('keydown', (event) => onRovingKeys(event, detailButtons, chooseDetail));
+    el.timeRound.addEventListener('change', () => saveTimeSetting('time_round_minutes', Number(el.timeRound.value) || 0));
+    el.timeIdle.addEventListener('change', () => saveTimeSetting('time_idle_minutes', Number(el.timeIdle.value) || 10));
+    el.timeExport.addEventListener('click', exportTime);
+    el.timeTable.addEventListener('click', (event) => {
+      const find = event.target.closest('[data-time-find]');
+      if (find) findTimeProject(find.dataset.timeFind);
+    });
+    el.timeSitesForm.addEventListener('submit', submitTimeSites);
+    el.petGoal.addEventListener('change', () => saveSettings({ widget_daily_goal_hours: Number(el.petGoal.value) || 6 }));
+    el.petPlayIdle.addEventListener('change', () => saveSettings({ widget_play_idle_minutes: Number(el.petPlayIdle.value) || 5 }));
+    el.petPlayNow.addEventListener('click', playPetNow);
+    el.petNameForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (await saveSettings({ widget_pet_name: el.petName.value.trim() || 'Klippe' })) {
+        toast(`Kæledyret hedder nu ${state.settings.widget_pet_name}`, 'ok');
+      }
+    });
+
+    const panelImport = $('panel-import');
+    panelImport.addEventListener('click', (event) => {
+      const choice = event.target.closest('[data-import-choice]');
+      if (choice) {
+        const inResults = el.importResults.contains(choice);
+        const label = choice.querySelector('.choice__label');
+        chooseImport(choice.dataset.importChoice, inResults
+          ? { path: choice.dataset.importChoice, name: label ? label.textContent : choice.dataset.importChoice } : null);
+        return;
+      }
+      const root = event.target.closest('[data-import-root]');
+      if (root) {
+        resetMoveConfirm();
+        state.imp.root = root.dataset.importRoot;
+        renderImportChoices();
+        schedulePlan();
+        return;
+      }
+      const pick = event.target.closest('[data-import-card]');
+      if (pick) {
+        resetMoveConfirm();
+        Object.assign(state.imp, { cardId: pick.dataset.importCard, options: null, plan: null, planError: null,
+          choice: null, picked: [], separate: false });
+        renderImport();
+        loadImportOptions();
+        return;
+      }
+      const action = event.target.closest('[data-import-action]');
+      if (action && action.dataset.importAction === 'cancel') {
+        api.post('/api/import/cancel').catch((err) => toast(err.message, 'warn'));
+      } else if (action && action.dataset.importAction === 'open') {
+        openImportFolder(action.dataset.path);
+      }
+    });
+    panelImport.addEventListener('keydown', (event) => {
+      const choices = [...panelImport.querySelectorAll('[data-import-choice]:not(:disabled)')];
+      if (choices.includes(event.target)) {
+        onRovingKeys(event, choices, (choice) => choice.click());
+        return;
+      }
+      const disks = [...el.importDisks.querySelectorAll('[data-import-root]:not(:disabled)')];
+      if (disks.includes(event.target)) onRovingKeys(event, disks, (disk) => disk.click());
+    });
+    el.importSeparate.addEventListener('click', () => {
+      resetMoveConfirm();
+      state.imp.separate = !(state.imp.plan && state.imp.plan.separate);
+      schedulePlan();
+    });
+    el.importCopy.addEventListener('click', () => startImport('copy'));
+    el.importPrepare.addEventListener('click', () => startImport('prepare'));
+    el.importMove.addEventListener('click', onMoveClick);
+    el.importName.addEventListener('input', () => {
+      resetMoveConfirm();
+      hideFieldError(el.importError);
+      schedulePlan(250);
+    });
+    el.importName.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !el.importCopy.disabled) {
+        event.preventDefault();
+        startImport('copy');
+      }
+    });
+    el.importSearch.addEventListener('input', scheduleImportSearch);
+    el.timeSites.addEventListener('input', () => {
+      state.time.sitesDirty = true;
+      hideFieldError(el.timeSitesError, el.timeSites);
+    });
   }
 
   function init() {
@@ -2910,6 +4075,9 @@
     runView('query');
     loadSettings();
     loadSources();
+    loadTimeStatus();
+    scheduleTimePoll();
+    loadImport();
     connectEvents();
     if (launch.panel === 'settings') openSettings(launch.tab || 'placeringer');
   }

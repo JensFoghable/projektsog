@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Klippe – Projektsøg</title>
+  <link rel="icon" href="/assets/icon.png">
+  <link rel="stylesheet" href="/widget.css">
+  <script src="/widget.js" defer></script>
+</head>
+<body>
+  <main class="pet-app" id="app" data-mood="sleeping" data-outfit="none" data-stage="egg">
+    <header class="head">
+      <span class="head__name" id="pet-name">Klippe</span>
+      <span class="head__level" id="pet-level" title="Vokser med al den tid, du har registreret">Æg</span>
+      <span class="head__streak" id="pet-streak" title="Dage i træk med mindst 1 times arbejde" hidden></span>
+    </header>
+
+    <section class="stage" id="stage" aria-label="Klippe">
+      <div class="bubble" id="bubble" role="status" aria-live="polite" hidden></div>
+      <svg class="pet" id="pet" viewBox="0 0 200 200" aria-hidden="true">
+        <defs>
+          <pattern id="stripes" width="22" height="22" patternUnits="userSpaceOnUse" patternTransform="skewX(-30)">
+            <rect width="11" height="22" fill="var(--stripe-dark)"/>
+            <rect x="11" width="11" height="22" fill="var(--stripe-light)"/>
+          </pattern>
+          <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="var(--accent)" stop-opacity=".35"/>
+            <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <ellipse class="pet__glow" cx="100" cy="120" rx="90" ry="80" fill="url(#glow)"/>
+        <ellipse class="pet__shadow" cx="100" cy="184" rx="46" ry="7"/>
+
+        <!-- while Klippe is out playing: the hole it broke out through -->
+        <g class="hole">
+          <path class="hole__gap" d="M68 128 L82 104 L94 118 L108 96 L122 114 L134 102 L140 134 L128 162 L104 170 L82 164 L66 148 Z"/>
+          <path class="hole__crack" d="M68 128 L50 120 M82 104 L76 84 M108 96 L112 74 M134 102 L152 92 M140 134 L160 140 M128 162 L140 178 M82 164 L70 178"/>
+        </g>
+
+        <!-- the egg (until 5 hours have been logged) -->
+        <g class="egg">
+          <path class="egg__shell" d="M100 52 C 136 52 156 104 156 132 C 156 164 132 182 100 182 C 68 182 44 164 44 132 C 44 104 64 52 100 52 Z"/>
+          <path class="egg__band" d="M47 120 L153 120 L155 136 L45 136 Z" fill="url(#stripes)"/>
+          <path class="egg__crack" d="M70 96 L80 104 L74 112 L86 118"/>
+          <g class="egg__eyes">
+            <ellipse class="eye" cx="84" cy="150" rx="7" ry="8"/><circle class="pupil" cx="84" cy="151" r="3.5"/>
+            <ellipse class="eye" cx="116" cy="150" rx="7" ry="8"/><circle class="pupil" cx="116" cy="151" r="3.5"/>
+          </g>
+        </g>
+
+        <!-- the clapper creature -->
+        <g class="body">
+          <g class="body__inner">
+            <rect class="foot" x="70" y="164" width="22" height="14" rx="7"/>
+            <rect class="foot" x="108" y="164" width="22" height="14" rx="7"/>
+            <path class="arm arm--left" d="M50 132 Q 36 138 34 150"/>
+            <path class="arm arm--right" d="M150 132 Q 164 138 166 150"/>
+            <rect class="slate" x="48" y="82" width="104" height="88" rx="18"/>
+            <rect class="slate__stick" x="48" y="80" width="104" height="12" rx="4" fill="url(#stripes)"/>
+            <g class="clapper">
+              <rect class="clapper__stick" x="46" y="62" width="108" height="14" rx="4" fill="url(#stripes)"/>
+              <circle class="clapper__hinge" cx="52" cy="78" r="4"/>
+            </g>
+            <g class="face">
+              <g class="eyes-open">
+                <ellipse class="eye" cx="80" cy="120" rx="12" ry="14"/>
+                <ellipse class="eye" cx="120" cy="120" rx="12" ry="14"/>
+                <g class="pupils">
+                  <circle class="pupil" cx="81" cy="122" r="6.5"/><circle class="shine" cx="84" cy="118" r="2.2"/>
+                  <circle class="pupil" cx="121" cy="122" r="6.5"/><circle class="shine" cx="124" cy="118" r="2.2"/>
+                </g>
+              </g>
+              <g class="eyes-closed">
+                <path d="M69 122 Q 80 128 91 122"/><path d="M109 122 Q 120 128 131 122"/>
+              </g>
+              <g class="eyes-happy">
+                <path d="M69 124 Q 80 110 91 124"/><path d="M109 124 Q 120 110 131 124"/>
+              </g>
+              <ellipse class="cheek" cx="66" cy="140" rx="8" ry="5"/>
+              <ellipse class="cheek" cx="134" cy="140" rx="8" ry="5"/>
+              <path class="mouth mouth--smile" d="M88 142 Q 100 154 112 142"/>
+              <path class="mouth mouth--grin" d="M86 140 Q 100 160 114 140 Z"/>
+              <path class="mouth mouth--flat" d="M90 146 L 110 146"/>
+              <ellipse class="mouth mouth--o" cx="100" cy="148" rx="5" ry="6"/>
+            </g>
+          </g>
+
+          <!-- outfits -->
+          <g class="acc acc--color">
+            <rect x="64" y="110" width="30" height="18" rx="6"/><rect x="106" y="110" width="30" height="18" rx="6"/>
+            <path d="M94 116 L106 116" class="acc__line"/><path d="M64 116 L52 112 M136 116 L148 112" class="acc__line"/>
+          </g>
+          <g class="acc acc--fusion">
+            <path d="M70 66 L104 6 L134 66 Z"/>
+            <path class="acc__star" d="M104 30 l3 7 7 1 -5 5 1 7 -6 -3 -6 3 1 -7 -5 -5 7 -1 Z"/>
+            <ellipse cx="102" cy="66" rx="40" ry="7"/>
+          </g>
+          <g class="acc acc--audio">
+            <path class="acc__band" d="M44 112 Q 44 40 100 40 Q 156 40 156 112"/>
+            <rect x="34" y="104" width="18" height="30" rx="8"/><rect x="148" y="104" width="18" height="30" rx="8"/>
+          </g>
+          <g class="acc acc--deliver">
+            <path d="M58 64 Q 100 26 142 64 Z"/><path d="M134 62 L 168 66 L 140 70 Z"/>
+          </g>
+          <g class="acc acc--crown">
+            <path d="M70 60 L76 34 L90 50 L100 28 L110 50 L124 34 L130 60 Z"/>
+          </g>
+        </g>
+
+        <!-- while a card is transferred: Klippe carries the files from the card to the folder -->
+        <g class="carry">
+          <g class="carry__card">
+            <path d="M10 140 h18 l6 6 v26 a3 3 0 0 1 -3 3 h-21 a3 3 0 0 1 -3 -3 v-29 a3 3 0 0 1 3 -3 z"/>
+            <path class="carry__pins" d="M13 140 v6 M18 140 v6 M23 140 v6"/>
+          </g>
+          <g class="carry__folder">
+            <path d="M164 148 h10 l4 4 h14 a3 3 0 0 1 3 3 v18 a3 3 0 0 1 -3 3 h-28 a3 3 0 0 1 -3 -3 v-22 a3 3 0 0 1 3 -3 z"/>
+          </g>
+          <g class="carry__files">
+            <g class="carry__file"><rect x="14" y="146" width="14" height="11" rx="2"/><path d="M16 148 h2 M16 154 h2 M24 148 h2 M24 154 h2"/></g>
+            <g class="carry__file"><rect x="14" y="146" width="14" height="11" rx="2"/><path d="M16 148 h2 M16 154 h2 M24 148 h2 M24 154 h2"/></g>
+            <g class="carry__file"><rect x="14" y="146" width="14" height="11" rx="2"/><path d="M16 148 h2 M16 154 h2 M24 148 h2 M24 154 h2"/></g>
+          </g>
+          <g class="carry__glass">
+            <circle cx="150" cy="108" r="13"/><path d="M159 118 L172 132"/>
+          </g>
+          <g class="carry__checks">
+            <text x="170" y="140">✓</text><text x="182" y="132">✓</text>
+          </g>
+        </g>
+        <g class="zzz"><text x="150" y="70">z</text><text x="162" y="52">z</text><text x="172" y="34">Z</text></g>
+        <path class="sweat" d="M156 96 Q 162 106 156 112 Q 150 106 156 96 Z"/>
+      </svg>
+      <div class="hearts" id="hearts" aria-hidden="true"></div>
+    </section>
+
+    <p class="mood" id="mood">Sover …</p>
+
+    <section class="messages" id="messages" aria-label="Beskeder" aria-live="assertive" hidden></section>
+
+    <section class="transfer" id="transfer" aria-live="polite" hidden>
+      <div class="transfer__row">
+        <span class="transfer__title" id="transfer-title"></span>
+        <span class="transfer__pct" id="transfer-pct"></span>
+      </div>
+      <div class="bar bar--transfer"><div class="bar__fill" id="transfer-bar"></div></div>
+      <p class="transfer__sub" id="transfer-sub"></p>
+    </section>
+
+    <section class="stats">
+      <div class="stat">
+        <div class="stat__row"><span class="stat__label">I dag</span><span class="stat__value" id="today">0:00</span><span class="stat__goal" id="goal">/ 6 t</span></div>
+        <div class="bar"><div class="bar__fill" id="today-bar"></div></div>
+      </div>
+      <div class="stat">
+        <div class="stat__row"><span class="stat__label">Fokus i træk</span><span class="stat__small" id="focus">–</span></div>
+        <div class="bar bar--focus"><div class="bar__fill" id="focus-bar"></div></div>
+      </div>
+      <p class="grow" id="grow"></p>
+    </section>
+  </main>
+  <canvas class="fx" id="fx" aria-hidden="true"></canvas>
+</body>
+</html>

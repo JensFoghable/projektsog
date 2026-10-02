@@ -15,7 +15,8 @@ JSON lines (ASCII), one answer per request, in order; the request's ``id`` is ec
     <- {"id": 1, "ok": false, "error": "module" | "refused" | "failed", "detail": "..."}
     -> {"id": 2, "cmd": "poll"}
     <- {"id": 2, "ok": true, "db": [DbType, DbName, IpAddress], "database": DbName | null,
-        "project": str | null, "uid": str}
+        "project": str | null, "uid": str,
+        "page": "edit" | "color" | ... | "", "timeline": str, "timecode": str, "rendering": bool}
     -> {"id": 3, "cmd": "uid"}        (the current project's unique id, through a fresh proxy)
     <- {"id": 3, "ok": true, "project": str | null, "uid": str}
     -> {"id": 4, "cmd": "walk", "max_clips": 50000, "max_seconds": 20.0}
@@ -243,13 +244,45 @@ class Session:
         db_id = [_text(db.get("DbType")), _text(db.get("DbName")), _text(db.get("IpAddress"))]
         answer = {"ok": True, "db": db_id, "database": db_id[1] or None, "project": None,
                   "uid": ""}
+        answer.update(self._activity(None))
         project = manager.GetCurrentProject()
         if project is None:
             return answer
         name = project.GetName()
         if not isinstance(name, str):
             raise _Unavailable(f"Project.GetName() returned {name!r}")
-        return {**answer, "project": name, "uid": _call_text(project.GetUniqueId)}
+        return {**answer, "project": name, "uid": _call_text(project.GetUniqueId),
+                **self._activity(project)}
+
+    def _activity(self, project: Any) -> dict[str, Any]:
+        """What the editor is doing, for the time tracker: the open page, the playhead and
+        whether a render runs. Each getter is optional - a failure leaves its field empty."""
+        page = ""
+        if self._resolve is not None:
+            try:   # (older Resolve versions or test fakes may lack a getter)
+                page = _text(self._resolve.GetCurrentPage())
+            except Exception:
+                page = ""
+        timecode, timeline_name, rendering = "", "", False
+        if project is not None:
+            try:
+                timeline = project.GetCurrentTimeline()
+            except Exception:
+                timeline = None
+            if timeline is not None:
+                try:
+                    timecode = _call_text(timeline.GetCurrentTimecode)
+                except Exception:
+                    timecode = ""
+                try:
+                    timeline_name = _call_text(timeline.GetName)
+                except Exception:
+                    timeline_name = ""
+            try:
+                rendering = bool(project.IsRenderingInProgress())
+            except Exception:
+                rendering = False
+        return {"page": page, "timeline": timeline_name, "timecode": timecode, "rendering": rendering}
 
     def _uid(self, message: Mapping[str, Any]) -> dict[str, Any]:
         project = self._project_manager().GetCurrentProject()
