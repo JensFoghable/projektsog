@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from .resolve_bridge import ResolveBridge
     from .importer import Importer
     from .achievements import PetProgress
+    from .updater import Updater
     from .messages import MessageBoard
     from .petplay import PetPlay
     from .timetrack import TimeTracker
@@ -134,6 +135,7 @@ class Server:
         self.petplay: "PetPlay | None" = None     # set by the app once the widget exists
         self.messages: "MessageBoard | None" = None
         self.progress: "PetProgress | None" = None
+        self.updater: "Updater | None" = None
         self.web_dir = web_dir or os.path.join(package_dir, "web")
         self.assets_dir = assets_dir or os.path.join(package_dir, "assets")
         self.sse_heartbeat_s = sse_heartbeat_s
@@ -283,6 +285,9 @@ class Server:
             ("POST", r"/api/widget/look", self._pet_look),
             ("GET", r"/api/pet", self._pet_progress),
             ("POST", r"/api/pet/equip", self._pet_equip),
+            ("GET", r"/api/update", self._update_state),
+            ("POST", r"/api/update/check", self._update_check),
+            ("POST", r"/api/update/install", self._update_install),
             ("GET", r"/api/messages", self._messages_list),
             ("POST", r"/api/messages", self._messages_post),
             ("DELETE", r"/api/messages", self._messages_remove),
@@ -449,6 +454,21 @@ class Server:
 
     def _pet_equip(self, req: _Request) -> Any:
         return self._wardrobe().equip(req.body.get("slot"), req.body.get("item"))
+
+    # -- new versions from GitHub (SPEC §20) --------------------------------------------------
+    def _updates(self) -> "Updater":
+        if self.updater is None:
+            raise ValueError("Opdateringer er ikke startet")
+        return self.updater
+
+    def _update_state(self, req: _Request) -> Any:
+        return self._updates().state()
+
+    def _update_check(self, req: _Request) -> Any:
+        return self._updates().request_check()
+
+    def _update_install(self, req: _Request) -> Any:
+        return self._updates().request_update()
 
     # -- messages from other programs (SPEC §19) ---------------------------------------------
     def _board(self) -> "MessageBoard":

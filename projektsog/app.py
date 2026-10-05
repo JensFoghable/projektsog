@@ -42,6 +42,7 @@ from .server import HOST, Server
 from .importer import Importer
 from .achievements import PetProgress
 from .messages import MessageBoard
+from .updater import Updater
 from .petplay import PetPlay, window_shown
 from .widget import PetWindow
 from .timetrack import TimeTracker
@@ -619,6 +620,7 @@ class Components:
     petplay: Callable[..., PetPlay] = PetPlay
     messages: Callable[..., MessageBoard] = MessageBoard
     progress: Callable[..., PetProgress] = PetProgress
+    updater: Callable[..., Updater] = Updater
     tray: Callable[..., TrayIcon] = TrayIcon
     hotkeys: Callable[..., HotkeyManager] = HotkeyManager
 
@@ -699,6 +701,7 @@ class App:
         self.petplay: PetPlay | None = None
         self.messages: MessageBoard | None = None
         self.progress: PetProgress | None = None
+        self.updater: Updater | None = None
         self.tray: TrayIcon | None = None
         self._actions: _ActionRunner | None = None
         self._notify_queue: queue.Queue | None = None
@@ -759,6 +762,10 @@ class App:
         self.progress = c.progress(cfg, bus, tracker=self.tracker, importer=self.importer,
                                    path=os.path.join(config.app_dir(), "pet.json"))
         self.server.progress = self.progress
+        # New versions from GitHub with one button (updater.py, Indstillinger ▸ Generelt).
+        self.updater = c.updater(cfg, bus, repo_dir=REPO_DIR, data_dir=config.app_dir(),
+                                 autostart=self.controller.get_run_at_login)
+        self.server.updater = self.updater
         port = self.server.start(args.port)
         self._instance_file = config.instance_path()
         write_instance_file(self._instance_file, os.getpid(), port)
@@ -781,6 +788,7 @@ class App:
                 self._start_hotkeys(self._hotkey_settings)
         self.importer.start()      # camera cards: a card going in may show the window
         self.progress.start()
+        self.updater.start()
         self._spawn(self._maintenance_loop, "app-maintenance")
         if with_ui:
             if args.background:
@@ -841,7 +849,8 @@ class App:
         if self.server is not None:
             steps["server"] = self.server.stop
         # A game ends first: the helper puts the pointer back where it was.
-        windows = [w.close for w in (self.petplay, self.progress, self.widget, self.window) if w is not None]
+        windows = [w.close for w in (self.petplay, self.progress, self.updater, self.widget, self.window)
+                   if w is not None]
         if windows:
             steps["window"] = lambda: [close() for close in windows]
         for name, budget in budgets.items():

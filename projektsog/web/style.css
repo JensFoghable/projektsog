@@ -260,7 +260,20 @@ kbd {
 .btn.is-busy .icon { animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.top__settings { height: 32px; }
+.top__settings { height: 32px; position: relative; }
+/* A new version is ready (Indstillinger ▸ Generelt ▸ Opdatering). */
+.top__settings.has-update::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--bg-elev);
+  border-radius: 50%;
+  background: var(--accent);
+  box-sizing: content-box;
+}
 .top__settings .icon { width: 17px; height: 17px; }
 
 /* Today's tracked time; the dot shows whether time counts right now. */

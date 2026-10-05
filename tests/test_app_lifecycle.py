@@ -374,6 +374,17 @@ class FakeInstance:
         self.journal.append("instance.release")
 
 
+class FakeUpdater:
+    def __init__(self) -> None:
+        self.started = self.closed = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class AppHarness:
     """An App whose collaborators are fakes that write into one shared journal."""
 
@@ -398,7 +409,7 @@ class AppHarness:
             config=self._config, indexer=self._indexer, bridge=self._bridge,
             tracker=self._tracker, importer=self._importer,
             controller=self._controller, server=self._server, window=self._window, widget=self._widget,
-            petplay=self._petplay, tray=self._tray, hotkeys=self._hotkeys)
+            petplay=self._petplay, tray=self._tray, hotkeys=self._hotkeys, updater=self._updater)
         self.app = app.App(app.parse_args(list(flags)), self.instance, components=components,
                            exit_deadline_s=exit_deadline_s, hotkey_recheck_s=hotkey_recheck_s)
         test.addCleanup(self.app.exit_sequence)     # stops the app's threads
@@ -470,6 +481,11 @@ class AppHarness:
         assert base_url == "http://127.0.0.1:4711"
         self.petplay = fakes.FakePetPlay(self.journal, "petplay")
         return self.petplay
+
+    def _updater(self, cfg, bus, *, repo_dir: str, data_dir: str, autostart) -> "FakeUpdater":
+        assert repo_dir == app.REPO_DIR and autostart == self.controller.get_run_at_login
+        self.updater = FakeUpdater()          # never asks GitHub from a test
+        return self.updater
 
     def _tray(self, icon_path: str, tooltip: str, **callbacks) -> fakes.FakeTray:
         self.journal.append("tray.create")
@@ -722,9 +738,11 @@ class ExitSequenceTests(unittest.TestCase):
         h.app.start()
         h.wait_for("bridge.on_window_shown")
         mark = len(h.journal)
+        self.assertTrue(h.updater.started)
         h.app.request_exit()
         h.app.exit_sequence()
         self.assertEqual(h.journal[mark:], self.EXIT)
+        self.assertTrue(h.updater.closed)
         (_, kwargs), = h.indexer.called("stop")
         self.assertAlmostEqual(kwargs["timeout"], 1.5)
         self.assertIsNone(h.controller.hotkeys)

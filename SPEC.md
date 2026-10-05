@@ -1326,3 +1326,40 @@ cancelled and its temp file removed).
   normal message comes to the front and makes Klippe jump and clap (not for `lyd: false`).
   Quiet messages alone are folded into one line "📬 2 beskeder · vis" (click: the cards, ▾ folds
   them again). Text is clamped to 4 lines. Messages are never shown in the search window.
+
+## 20. New versions from GitHub (`updater.py`)
+
+* `Updater(cfg, bus, repo_dir=REPO_DIR, data_dir=app_dir(), autostart=controller.get_run_at_login)`
+  is created in `App.start` and closed with the windows. The source is the public repo
+  `JensFoghable/projektsog`, branch `main`. Its thread checks 20 s after the start (it first
+  shows a pending "Projektsøg er opdateret" notification), then every 6 h and on request.
+  Nothing is installed without the button.
+* A downloaded folder (no `.git`): `GET api.github.com/…/commits?sha=main&per_page=1` and
+  `…/git/trees/<sha>?recursive=1`; every file of that tree is compared with the folder by its git
+  blob hash (also after CRLF → LF, for autocrlf copies). Identical → the folder *is* that version:
+  `update.json` remembers `installed {sha, date}` and its `files`. Install: the zip of exactly that
+  sha from codeload.github.com (≤ 64 MB) must be whole (`testzip`), have one top folder, no path
+  outside it, `Projektsøg.pyw`, `install.ps1`, `projektsog/__init__.py`, `projektsog/app.py`, and
+  every `.py`/`.pyw` must compile – otherwise nothing is touched. Then each differing file is
+  written as `<file>.ny` and `os.replace`d, the old one copied to `update-backup\`; files in the
+  previous `files` list that the new version lacks are removed (backed up too). Any error puts
+  every file back. Files the updater never listed are never removed.
+* A git working copy: `git fetch --no-tags <repo url> main` (no prompt, no window), then
+  `HEAD == FETCH_HEAD` or FETCH_HEAD an ancestor → up to date; HEAD not an ancestor → blocked
+  "Mappen har sine egne commits …"; a changed tracked file → blocked "Der er ændrede filer …";
+  no git → blocked. Install = `git merge --ff-only FETCH_HEAD`.
+* Then `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File install.ps1
+  [-Python <python.exe next to sys.executable>] [-NoAutostart when "Start med Windows" is off]`,
+  detached (breaks away from a job when allowed), output in `logs\opdatering.log`. It stops this
+  app (`POST /api/quit`) and starts the new version; still running after 120 s → the error
+  "Projektsøg blev ikke genstartet …" (the files are new; the next start runs them).
+* `GET /api/update` → `{mode: "zip"|"git", installed: {sha, date}|null, latest: {sha, date,
+  title}|null, available, blocked: str|null, busy: null|"checking"|"downloading"|"installing"|
+  "restarting", checked, error}`; every change → SSE `update` (same dict).
+  `POST /api/update/check` → the state (busy "checking"). `POST /api/update/install` → the state
+  (busy "downloading"); 400 "Der er ingen ny version", the `blocked` text, "Søger efter en ny
+  version – vent et øjeblik" or "Opdateringen er allerede i gang".
+* UI: Indstillinger ▸ Generelt ▸ **Opdatering** (above the version line): "Du har den nyeste
+  version · Version fra 5. okt. · tjekket for 5 minutter siden" + [Søg efter opdatering]; "Ny
+  version klar · Fra 5. okt.: <commit title>" + [Opdater nu] (primary) and an accent dot on ⚙;
+  busy texts with the button disabled; `blocked`/`error` as a warning hint.

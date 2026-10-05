@@ -733,6 +733,62 @@
     return d.message || PET_PLAY_HINT;
   }
 
+  // New versions (updater.py, SPEC §20): the Opdatering box in Indstillinger ▸ Generelt.
+  const UPDATE_BUSY = {
+    checking: 'Søger efter en ny version …',
+    downloading: 'Henter den nye version …',
+    installing: 'Installerer den nye version …',
+    restarting: 'Projektsøg genstarter med den nye version …',
+  };
+
+  function isoSeconds(iso) {
+    const ms = Date.parse(iso || '');
+    return Number.isFinite(ms) ? ms / 1000 : null;
+  }
+
+  /** The Opdatering box: { label, hint, warn, button, primary, disabled } for an updater state. */
+  function updateView(u, now = Date.now()) {
+    const view = { label: 'Opdatering', hint: 'Projektsøg søger selv efter nye versioner et par gange om dagen',
+      warn: false, button: 'Søg efter opdatering', primary: false, disabled: false };
+    if (!u) return view;
+    const day = (iso) => { const s = isoSeconds(iso); return s == null ? '' : formatDay(s, now); };
+    if (u.busy) {
+      view.label = UPDATE_BUSY[u.busy] || 'Opdaterer …';
+      view.hint = u.busy === 'restarting' ? 'Vinduet lukker et øjeblik – tryk Shift+Mellemrum igen om lidt' : '';
+      view.disabled = true;
+      return view;
+    }
+    const latest = u.latest;
+    const installed = u.installed;
+    if (u.available && latest) {
+      const from = day(latest.date);
+      if (u.blocked) {
+        view.label = from ? `Ny version fra ${from}` : 'Ny version';
+        view.hint = u.blocked;
+        view.warn = true;
+      } else {
+        view.label = 'Ny version klar';
+        view.hint = [from && `Fra ${from}`, latest.title].filter(Boolean).join(': ');
+        view.button = 'Opdater nu';
+        view.primary = true;
+      }
+    } else if (latest) {
+      view.label = 'Du har den nyeste version';
+      const from = day((installed && installed.date) || latest.date);
+      view.hint = [from && `Version fra ${from}`, u.checked && `tjekket ${relativeTime(u.checked, now)}`]
+        .filter(Boolean).join(' · ');
+    } else if (u.blocked) {
+      view.hint = u.blocked;
+      view.warn = true;
+    }
+    if (u.error) {
+      if (!latest) view.label = 'Kunne ikke søge efter en ny version';
+      view.hint = u.error;
+      view.warn = true;
+    }
+    return view;
+  }
+
   const helpers = {
     itemVisual, isFolder, openAction, formatInt, plural, formatBytes, formatDay, relativeTime,
     modifiedText, highlightParts, itemLocation, sourceBadge, itemOnline, offlineHint, offlineSince,
@@ -742,7 +798,7 @@
     removeHostQuestion, removedHostText, includeOutcome,
     formatDuration, durationWords, formatHours, roundUpSeconds, isoDate, parseIsoDate, periodRange,
     periodOf, formatReportDay, timeStatusText, timeTable, downloadName,
-    cardTitle, cardFacts, cardStatus, formatEta, importProgress, planText, petPlayText,
+    cardTitle, cardFacts, cardStatus, formatEta, importProgress, planText, petPlayText, updateView,
   };
   if (typeof module === 'object' && module.exports) module.exports = helpers;
   if (typeof document === 'undefined') return;
@@ -782,7 +838,7 @@
     rootList: $('root-list'), rootForm: $('root-form'), rootInput: $('root-input'), rootError: $('root-error'),
     hotkeyForm: $('hotkey-form'), hotkeyInput: $('hotkey-input'), hotkeyError: $('hotkey-error'),
     hotkeyState: $('hotkey-state'), passthrough: $('passthrough-switch'), passthroughLabel: $('lbl-passthrough'),
-    about: $('about'),
+    about: $('about'), updateLabel: $('update-label'), updateHint: $('update-hint'), updateButton: $('update-button'),
     resolveConnection: $('resolve-connection'), actions: $('actions'), hotkeyHint: $('hotkey-hint'),
     toast: $('toast'), announcer: $('announcer'), settingsTitle: $('settings-title'),
     timeButton: $('time-button'), timeToday: $('time-today'), timeNow: $('time-now'),
@@ -813,7 +869,7 @@
     searchTimer: 0, inflight: null, inflightReason: null, requestSeq: 0, loadbarTimer: 0,
     lastInteraction: 0, lastRefresh: 0, refreshPending: false, refreshTimer: 0,
     hiddenAt: null, valueAtHide: '', projectAtHide: null,
-    cards: [], askDismissed: false,
+    cards: [], askDismissed: false, update: null,
     settingsOpen: false, settingsTab: 'placeringer', hotkeyDirty: false, confirmForget: null, confirmTimer: 0,
     confirmHost: null, hostRefusal: null, removingHost: null, revealExcluded: false,
     resolveExpanded: false, resolveAnimate: false, resolveBusy: false,
@@ -2578,6 +2634,47 @@
     el.petPlayNow.classList.toggle('is-busy', Boolean(data && (data.state === 'waiting' || data.state === 'out')));
   }
 
+  // ---------------------------------------------------------------- new versions (updater.py, SPEC §20)
+
+  function applyUpdate(data) {
+    if (!data || typeof data !== 'object') return;
+    state.update = data;
+    renderUpdate();
+  }
+
+  function renderUpdate() {
+    const u = state.update;
+    const view = updateView(u);
+    setText(el.updateLabel, view.label);
+    setText(el.updateHint, view.hint);
+    el.updateHint.classList.toggle('is-warn', view.warn);
+    setText(el.updateButton, view.button);
+    el.updateButton.classList.toggle('btn--primary', view.primary);
+    el.updateButton.classList.toggle('btn--secondary', !view.primary);
+    el.updateButton.disabled = view.disabled;
+    const ready = Boolean(u && u.available && !u.blocked && !u.busy);
+    el.settingsButton.classList.toggle('has-update', ready);
+    el.settingsButton.title = ready ? 'Indstillinger – ny version klar (Ctrl+,)' : 'Indstillinger (Ctrl+,)';
+  }
+
+  async function loadUpdate() {
+    try {
+      applyUpdate(await api.get('/api/update'));
+    } catch {
+      // An older server or none yet: the box keeps its default text.
+    }
+  }
+
+  async function pressUpdate() {
+    const u = state.update;
+    const install = Boolean(u && u.available && !u.blocked);
+    try {
+      applyUpdate(await api.post(install ? '/api/update/install' : '/api/update/check'));
+    } catch (err) {
+      toast(err.message, 'warn');
+    }
+  }
+
   // ---------------------------------------------------------------- theme
 
   const THEME_COLORS = { dark: '#1a1918', light: '#fbfaf9' };
@@ -3488,6 +3585,7 @@
     cards: (data) => applyCards((data && data.cards) || []),
     import: (data) => applyImportJob(data),
     pet: (data) => applyPetPlay(data),
+    update: applyUpdate,
   };
 
   function connectEvents() {
@@ -3542,6 +3640,7 @@
     loadSources();
     loadTimeStatus();
     loadImport();
+    loadUpdate();
     runView('refresh');
   }
 
@@ -3983,6 +4082,7 @@
     el.petGoal.addEventListener('change', () => saveSettings({ widget_daily_goal_hours: Number(el.petGoal.value) || 6 }));
     el.petPlayIdle.addEventListener('change', () => saveSettings({ widget_play_idle_minutes: Number(el.petPlayIdle.value) || 5 }));
     el.petPlayNow.addEventListener('click', playPetNow);
+    el.updateButton.addEventListener('click', pressUpdate);
     el.petNameForm.addEventListener('submit', async (event) => {
       event.preventDefault();
       if (await saveSettings({ widget_pet_name: el.petName.value.trim() || 'Klippe' })) {
@@ -4078,6 +4178,7 @@
     loadTimeStatus();
     scheduleTimePoll();
     loadImport();
+    loadUpdate();
     connectEvents();
     if (launch.panel === 'settings') openSettings(launch.tab || 'placeringer');
   }

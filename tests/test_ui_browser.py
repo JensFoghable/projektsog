@@ -1176,6 +1176,26 @@ class SettingsTests(UiCase):
         self.control("/api/_mock/publish", {"type": "pet", "data": {"state": "ready", "message": "Skærmen blev låst"}})
         self.wait("document.querySelector('#pet-play-state').textContent === 'Skærmen blev låst'")
 
+    def test_update_box_and_button(self) -> None:
+        label = "document.querySelector('#update-label').textContent"
+        self.open(ready=f"!document.querySelector('#panel-generelt').hidden && {label} === 'Du har den nyeste version'",
+                  panel="settings", tab="generelt")
+        self.assertFalse(self.js("document.querySelector('#settings-button').classList.contains('has-update')"))
+        self.page.click("#update-button")
+        self.wait_request("/api/update/check")
+        self.wait(f"{label} === 'Søger efter en ny version …' && document.querySelector('#update-button').disabled")
+        latest = {"sha": "c" * 40, "date": "2026-10-05T12:00:00Z", "title": "Opdateringsknap"}
+        self.control("/api/_mock/publish", {"type": "update", "data": {
+            "mode": "zip", "installed": None, "latest": latest, "available": True, "blocked": None, "busy": None,
+            "checked": time.time(), "error": None}})
+        self.wait(f"{label} === 'Ny version klar' && document.querySelector('#update-button').textContent === 'Opdater nu'")
+        self.assertTrue(self.text("#update-hint").endswith(": Opdateringsknap"))
+        self.assertTrue(self.js("document.querySelector('#settings-button').classList.contains('has-update')"))
+        self.page.click("#update-button")
+        self.wait_request("/api/update/install")
+        self.wait(f"{label} === 'Henter den nye version …'")
+        self.assertFalse(self.js("document.querySelector('#settings-button').classList.contains('has-update')"))
+
     def test_theme_is_dark_by_default_and_follows_the_setting(self) -> None:
         # Dark even when Windows is light: the default "theme" setting is "dark".
         self.page.color_scheme("light")

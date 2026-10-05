@@ -84,7 +84,15 @@ nogle minutter). Du kan søge imens – statuslinjen øverst viser, hvad der sca
 tilføjet andre computere, søger Projektsøg kun i pc'ens egne drev og diske (se
 [Andre pc'er](#andre-pcer)).
 
-**Opdatering:** Kopiér de nye filer ind i mappen og kør installationen igen
+**Opdatering:** Under **Indstillinger ▸ Generelt ▸ Opdatering** står, om du har den nyeste
+version. Projektsøg kigger selv efter en ny version på GitHub et par gange om dagen; er der en,
+kommer der en lille prik på ⚙, og knappen hedder **Opdater nu**. Et tryk henter den nye version,
+kontrollerer den, udskifter filerne og genstarter Projektsøg – vinduet lukker et øjeblik, og en
+besked ved uret siger, når den nye version kører. Der installeres aldrig noget, uden at du trykker.
+Går noget galt undervejs, lægges de gamle filer tilbage. Er mappen hentet med `git clone`,
+opdateres den med git – men kun når ingen filer i den er ændret.
+
+Du kan også opdatere i hånden: kopiér de nye filer ind i mappen og kør installationen igen
 (`powershell -ExecutionPolicy Bypass -File .\install.ps1`). Den stopper den kørende version og
 starter den nye – den stopper kun Projektsøg selv, aldrig andre programmer. Indeks og
 indstillinger bevares.

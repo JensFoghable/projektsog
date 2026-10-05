@@ -500,3 +500,25 @@ test('Klippe plays: the line under "Vis legen nu"', () => {
   assert.equal(h.petPlayText({ state: 'ready', message: '' }), 'Klippe kommer ud, når du har sluppet musen et par sekunder.');
   assert.equal(h.petPlayText(null), 'Klippe kommer ud, når du har sluppet musen et par sekunder.');
 });
+
+test('updates: the Opdatering box and its button', () => {
+  const latest = { sha: 'b'.repeat(40), date: '2026-09-29T10:00:00Z', title: 'Opdateringsknap' };
+  const base = { mode: 'zip', installed: { sha: 'b'.repeat(40), date: latest.date }, latest, available: false,
+    blocked: null, busy: null, checked: ago(5 * 60e3), error: null };
+  assert.deepEqual(h.updateView(base, NOW), { label: 'Du har den nyeste version',
+    hint: 'Version fra 29. sep. · tjekket for 5 minutter siden', warn: false, button: 'Søg efter opdatering',
+    primary: false, disabled: false });
+  const ready = h.updateView({ ...base, installed: null, available: true }, NOW);
+  assert.deepEqual([ready.label, ready.hint, ready.button, ready.primary], ['Ny version klar',
+    'Fra 29. sep.: Opdateringsknap', 'Opdater nu', true]);
+  const blocked = h.updateView({ ...base, available: true, blocked: 'Der er ændrede filer i mappen' }, NOW);
+  assert.deepEqual([blocked.label, blocked.hint, blocked.warn, blocked.button],
+    ['Ny version fra 29. sep.', 'Der er ændrede filer i mappen', true, 'Søg efter opdatering']);
+  const busy = h.updateView({ ...base, busy: 'restarting' }, NOW);
+  assert.deepEqual([busy.label, busy.disabled], ['Projektsøg genstarter med den nye version …', true]);
+  assert.equal(h.updateView({ ...base, busy: 'downloading' }, NOW).label, 'Henter den nye version …');
+  const offline = h.updateView({ ...base, latest: null, installed: null, error: 'Ingen forbindelse til GitHub' }, NOW);
+  assert.deepEqual([offline.label, offline.hint, offline.warn],
+    ['Kunne ikke søge efter en ny version', 'Ingen forbindelse til GitHub', true]);
+  assert.equal(h.updateView(null, NOW).button, 'Søg efter opdatering');
+});

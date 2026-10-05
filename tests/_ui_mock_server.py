@@ -420,6 +420,11 @@ class MockBackend:
         self.calls: list[dict[str, Any]] = []      # POST/DELETE requests
         self.requests: list[dict[str, Any]] = []   # every /api/ request (newest 1000)
         self.pet_state = "ready"
+        # updater.py: up to date; tests push other states with /api/_mock/publish "update".
+        self.update = {"mode": "zip", "installed": {"sha": "a" * 40, "date": "2026-09-28T10:00:00Z"},
+                       "latest": {"sha": "a" * 40, "date": "2026-09-28T10:00:00Z", "title": "Klippe leger"},
+                       "available": False, "blocked": None, "busy": None, "checked": time.time() - 600,
+                       "error": None}
         self.pet_equipped = {"farve": "midnat", "striber": "klassisk", "hat": "ingen", "briller": "ingen-briller",
                              "mund": "ingen-mund", "haand": "ingen-haand", "aura": "ingen-aura"}
         self.errors: list[str] = []                # tracebacks of 500 responses
@@ -844,6 +849,31 @@ class MockBackend:
             equipped = dict(self.pet_equipped)
         self.bus.publish("pet_look", {"equipped": equipped})
         return {"ok": True, "equipped": equipped}
+
+    # -- new versions (updater.py) ---------------------------------------------------------
+    def set_update(self, data: Any) -> None:
+        if isinstance(data, dict):
+            with self.lock:
+                self.update = dict(data)
+
+    def update_check(self) -> dict[str, Any]:
+        with self.lock:
+            if not self.update["busy"]:
+                self.update = {**self.update, "busy": "checking"}
+            state = dict(self.update)
+        self.bus.publish("update", state)
+        return state
+
+    def update_install(self) -> dict[str, Any]:
+        with self.lock:
+            if self.update["busy"]:
+                raise ValueError("Opdateringen er allerede i gang")
+            if not self.update["available"]:
+                raise ValueError("Der er ingen ny version")
+            self.update = {**self.update, "busy": "downloading", "error": None}
+            state = dict(self.update)
+        self.bus.publish("update", state)
+        return state
 
     # -- Klippe plays (petplay.py) ---------------------------------------------------------
     def pet_status(self) -> dict[str, Any]:
@@ -1391,6 +1421,9 @@ class MockHandler(BaseHTTPRequestHandler):
             self._json({"messages": []})
         elif route == "/api/pet":
             self._json(backend.pet_trophies())
+        elif route == "/api/update":
+            with backend.lock:
+                self._json(dict(backend.update))
         elif route == "/api/import":
             self._json(backend.importer.state(flags))
         elif route == "/api/import/options":
@@ -1469,11 +1502,17 @@ class MockHandler(BaseHTTPRequestHandler):
             self._json({"ok": True})
         elif (method, route) in (("POST", "/api/messages/click"), ("DELETE", "/api/messages")):
             self._json({"ok": True})
+        elif (method, route) == ("POST", "/api/update/check"):
+            self._json(backend.update_check())
+        elif (method, route) == ("POST", "/api/update/install"):
+            self._json(backend.update_install())
         elif (method, route) == ("POST", "/api/pet/equip"):
             self._json(backend.pet_equip(str(body.get("slot", "")), str(body.get("item", ""))))
         elif (method, route) in (("POST", "/api/window/hide"), ("POST", "/api/window/show")):
             self._json({"ok": True})
         elif (method, route) == ("POST", "/api/_mock/publish"):  # test control: push any SSE event
+            if body.get("type") == "update":
+                backend.set_update(body.get("data"))
             backend.bus.publish(str(body.get("type", "")), body.get("data"))
             self._json({"ok": True})
         elif (method, route) == ("POST", "/api/_mock/drop-events"):  # test control: end all SSE streams
