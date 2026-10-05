@@ -13,10 +13,13 @@ its own notification.
 
 A button opens its uri through Windows (the program's registered protocol handler), so
 Projektsøg never runs anything itself, and only the schemes in ``URI_SCHEMES`` are accepted.
+The messages are kept in ``messages.json``: a restart of Projektsøg does not lose a question a
+session is waiting on.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -119,15 +122,17 @@ class MessageBoard:
     def __init__(self, cfg: Any, bus: Any, *, shown: Callable[[], bool] = lambda: False,
                  open_uri: Callable[[str], None] = shell_open,
                  sound: Callable[[], None] = notification_sound,
-                 clock: Callable[[], float] = time.time) -> None:
+                 clock: Callable[[], float] = time.time, path: str | None = None) -> None:
         self.cfg = cfg
         self.bus = bus
         self._shown = shown
         self._open_uri = open_uri
         self._sound = sound
         self._clock = clock
+        self._path = path
         self._lock = threading.Lock()
         self._messages: dict[str, dict[str, Any]] = {}
+        self._load()
 
     # -- API ---------------------------------------------------------------------------------
     def post(self, data: Any) -> dict[str, Any]:
@@ -140,6 +145,7 @@ class MessageBoard:
             with self._lock:
                 old = self._messages.pop(message["tag"], None)
                 snapshot = self._snapshot()
+                self._save()
             if old is not None:
                 self.bus.publish("messages", {"messages": snapshot})
             line = " – ".join(part for part in (message["titel"], message["tekst"]) if part)
@@ -153,6 +159,7 @@ class MessageBoard:
             while len(self._messages) > MAX_MESSAGES:
                 self._messages.pop(next(iter(self._messages)))
             snapshot = self._snapshot()
+            self._save()
         news = old is None or (old["titel"], old["tekst"]) != (message["titel"], message["tekst"])
         self.bus.publish("messages", {"messages": snapshot})
         if shown and news and sound:
@@ -167,6 +174,8 @@ class MessageBoard:
         with self._lock:
             gone = self._messages.pop(" ".join(tag.split()), None)
             snapshot = self._snapshot()
+            if gone is not None:
+                self._save()
         if gone is not None:
             self.bus.publish("messages", {"messages": snapshot})
         return {"ok": True}
@@ -174,6 +183,7 @@ class MessageBoard:
     def list(self) -> dict[str, Any]:
         with self._lock:
             if self._prune(self._clock()):
+                self._save()
                 self.bus.publish("messages", {"messages": self._snapshot()})
             return {"messages": self._snapshot()}
 
@@ -188,6 +198,7 @@ class MessageBoard:
             uri = message["knapper"][index]["uri"]
             del self._messages[tag]
             snapshot = self._snapshot()
+            self._save()
         self.bus.publish("messages", {"messages": snapshot})
         try:
             self._open_uri(check_uri(uri))
@@ -196,6 +207,45 @@ class MessageBoard:
             raise ValueError("Knappen kunne ikke åbnes – kører køen?") from exc
         log.info("message %s answered: %s", tag, message["knapper"][index]["tekst"])
         return {"ok": True}
+
+    # -- keeping them across restarts -----------------------------------------------------
+    def _load(self) -> None:
+        if not self._path:
+            return
+        try:
+            with open(self._path, encoding="utf-8") as fh:
+                saved = json.load(fh)
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError) as exc:
+            log.warning("could not read %s: %s", self._path, exc)
+            return
+        now = self._clock()
+        for item in saved.get("messages", []) if isinstance(saved, dict) else []:
+            try:
+                message = clean_message({**item, "visning": "kort", "lyd": bool(item.get("lyd", True))})
+                until = float(item["udloeber_ved"])
+            except (ValueError, TypeError, KeyError):
+                continue
+            if until <= now:
+                continue
+            del message["ttl"], message["visning"]
+            message.update(tid=float(item.get("tid") or now), udloeber_ved=until)
+            self._messages[message["tag"]] = message
+        if self._messages:
+            log.info("%d message(s) kept from before the restart", len(self._messages))
+
+    def _save(self) -> None:
+        """Write the messages (lock held); a failure only costs them at the next restart."""
+        if not self._path:
+            return
+        temp = self._path + ".tmp"
+        try:
+            with open(temp, "w", encoding="utf-8") as fh:
+                json.dump({"messages": list(self._messages.values())}, fh, ensure_ascii=False)
+            os.replace(temp, self._path)
+        except OSError as exc:
+            log.warning("could not save the messages: %s", exc)
 
     # -- helpers -----------------------------------------------------------------------------
     def _is_shown(self) -> bool:

@@ -45,7 +45,7 @@ from .config import Config
 
 log = logging.getLogger(__name__)
 
-POSES = ("normal", "happy", "cheer", "oops")      # the cells of the sprite sheet
+POSES = ("normal", "happy", "cheer", "oops", "aim")   # the cells of the sprite sheet
 CELL_CSS = 240                                     # a cell (CSS pixels); the SVG is 200 in the middle
 SHEET_SCALE = 2                                    # the sheet is rendered at 2× for crisp edges
 STAGE_CHANCE = {"egg": 0.0, "baby": 1.0, "junior": 0.5, "pro": 0.2, "legend": 0.25}
@@ -319,25 +319,28 @@ class SpriteSheets:
         self.profile_dir = profile_dir or os.path.join(config.app_dir(), "edge-sprites")
         self._run = run
 
-    def url(self, stage: str, outfit: str) -> str:
+    def url(self, stage: str, outfit: str, wearing: dict[str, str] | None = None) -> str:
+        pynt = ",".join(f"{slot}:{item}" for slot, item in sorted((wearing or {}).items()))
         return (f"{self.base_url}/widget.html?sprites={','.join(POSES)}&stage={stage}"
-                f"&outfit={outfit}&cell={CELL_CSS}")
+                f"&outfit={outfit}&cell={CELL_CSS}" + (f"&pynt={pynt}" if pynt else ""))
 
-    def path(self, stage: str, outfit: str) -> str:
-        return os.path.join(self.folder, f"klippe-{stage}-{outfit}-{sprite_signature(self.web_dir)}.png")
+    def path(self, stage: str, outfit: str, wearing: dict[str, str] | None = None) -> str:
+        pynt = ",".join(f"{slot}:{item}" for slot, item in sorted((wearing or {}).items()))
+        look = hashlib.sha1(pynt.encode()).hexdigest()[:6] if pynt else "x"
+        return os.path.join(self.folder, f"klippe-{stage}-{outfit}-{look}-{sprite_signature(self.web_dir)}.png")
 
     def expected_size(self) -> tuple[int, int]:
         return CELL_CSS * len(POSES) * SHEET_SCALE, CELL_CSS * SHEET_SCALE
 
-    def ensure(self, stage: str, outfit: str) -> str | None:
+    def ensure(self, stage: str, outfit: str, wearing: dict[str, str] | None = None) -> str | None:
         """The sheet's path – rendered first if needed; None when it cannot be rendered."""
-        path = self.path(stage, outfit)
+        path = self.path(stage, outfit, wearing)
         if png_size(path) == self.expected_size():
             return path
         os.makedirs(self.folder, exist_ok=True)
         self._remove_old(os.path.basename(path).rsplit("-", 1)[1])
         temp = path + ".part.png"
-        if not self._render(self.url(stage, outfit), temp):
+        if not self._render(self.url(stage, outfit, wearing), temp):
             return None
         if png_size(temp) != self.expected_size():
             log.warning("the sprite sheet came out wrong: %s", png_size(temp))
@@ -461,7 +464,9 @@ class PetPlay:
                  importer: Any = None, base_url: str = "", probe: Any = None,
                  sprites: Any = None, spawn: Callable[..., Any] | None = None,
                  rng: random.Random | None = None, clock: Callable[[], float] = time.monotonic,
-                 log_file: str | None = None) -> None:
+                 log_file: str | None = None,
+                 wardrobe: Callable[[], dict[str, str]] | None = None,
+                 on_game: Callable[[str, bool], None] | None = None) -> None:
         self.cfg = cfg
         self.bus = bus
         self._widget = widget
@@ -473,6 +478,8 @@ class PetPlay:
         self._rng = rng or random.Random()
         self._clock = clock
         self._log_file = log_file
+        self._wardrobe = wardrobe or (lambda: {})
+        self._on_game = on_game
         self._lock = threading.RLock()
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -644,7 +651,11 @@ class PetPlay:
         stage = "baby" if look["stage"] == "egg" else look["stage"]
         with self._lock:
             self._played_tick = tick                 # one game per pause, whatever happens
-        sheet = self._sprites.ensure(stage, look["outfit"])
+        try:
+            wearing = dict(self._wardrobe())
+        except Exception:
+            wearing = {}
+        sheet = self._sprites.ensure(stage, look["outfit"], wearing)
         if sheet is None:
             if manual:
                 self._end_manual(MESSAGES["sprites"])
@@ -653,6 +664,7 @@ class PetPlay:
             "--sprites", sheet, "--poses", ",".join(POSES), "--cell", str(CELL_CSS),
             "--sheet-scale", str(SHEET_SCALE), "--widget", str(int(hwnd)), "--stage", stage,
             "--seed", str(self._rng.randrange(1 << 30)), "--input-tick", str(tick),
+            "--awp", "1" if wearing.get("haand") == "awp" else "0",
             "--log-file", self._log_file or os.path.join(config.log_dir(), "petplay.log")]
         if look.get("pet"):
             argv += ["--pet", ",".join(str(v) for v in look["pet"])]
@@ -685,8 +697,14 @@ class PetPlay:
                 "Skærmen blev låst" if reason == "locked" else "Legen stoppede – se loggen")
             if reason == "touched" and self._child_manual and not self._child_out:
                 message = MESSAGES["still"]
+            was_out = self._child_out
             self._child = None
             self._child_manual = self._child_out = False
             self._set_state("ready", message, reason)
         log.info("Klippe is home (%s)", reason)
+        if self._on_game is not None:
+            try:
+                self._on_game(reason, was_out)
+            except Exception:
+                log.exception("counting the game failed")
         self._wake.set()

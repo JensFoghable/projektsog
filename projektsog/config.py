@@ -145,6 +145,9 @@ DEFAULTS: dict[str, Any] = {
     "widget_position": "",             # "x,y" where the user dragged it ("" = bottom right)
     "widget_daily_goal_hours": 6,
     "widget_pet_name": "Klippe",
+    # Hatched by hand: the pet is at least a baby whatever the hours (the time tracking itself
+    # is never touched – it is what is billed).
+    "widget_hatched": False,
     # Klippe plays (petplay.py): after this long without mouse and keyboard it may break out of
     # the widget and play with the mouse pointer on that monitor – never during playback in
     # Resolve, a transfer, in full screen or on a locked screen; any touch ends the game.

@@ -1286,7 +1286,9 @@ class TimeTabTests(UiCase):
         monday = today - timedelta(days=today.weekday())
         sunday = monday + timedelta(days=6)
         self.page.click("[data-period=week]")
-        request = self.wait_request("/api/time", "GET", where=lambda r: r["query"].get("from") == monday.isoformat())
+        # On a Monday the "today" request also starts on Monday – match the week by its end too.
+        request = self.wait_request("/api/time", "GET", where=lambda r: r["query"].get("from") == monday.isoformat()
+                                    and r["query"].get("to") == sunday.isoformat())
         self.assertEqual(request["query"]["to"], sunday.isoformat())
         self.assertEqual(self.js("document.querySelector('#time-from').value"), monday.isoformat())
         if today - timedelta(days=1) >= monday:   # the fixture's Vestervang (yesterday) is in this week
@@ -1598,6 +1600,57 @@ class WidgetTests(UiCase):
         time.sleep(0.3)
         self.assertFalse(self.js("document.querySelector('#transfer').hidden"))
 
+    def test_hatching_the_egg_by_hand(self) -> None:
+        self.open_widget()
+        self.js("window.__klippe.state.hours = 1; window.__klippe.applyStage()")      # an egg
+        self.assertEqual(self.js("document.querySelector('#app').dataset.stage"), "egg")
+        self.control("/api/_mock/publish", {"type": "settings", "data": {
+            "widget_pet_name": "Klippe", "widget_daily_goal_hours": 6, "widget_hatched": True}})
+        self.wait("document.querySelector('#app').classList.contains('hatching')")
+        self.assertEqual(self.js("document.querySelector('#app').dataset.stage"), "egg")   # it shakes first
+        self.wait("document.querySelector('#app').dataset.stage === 'baby'", timeout=4)
+        self.assertTrue(self.js("document.querySelector('#app').classList.contains('party')"))   # fireworks
+        self.assertTrue(self.text("#pet-level").startswith("Baby · Lv "))
+        self.wait(f"{self.SAID}.includes('Baby')")
+
+    def test_trophies_and_the_wardrobe(self) -> None:
+        self.open_widget()
+        self.wait("document.querySelector('#trophy-count').textContent === '2'")
+        self.page.click("#trophies")
+        self.wait("!document.querySelector('#panel').hidden && document.querySelectorAll('.trophy').length === 4")
+        self.assertEqual(self.text(".panel__summary"), "2 af 4 trofæer")
+        self.assertEqual(self.text("[data-trophy=uge] .trophy__text"), "5 hverdage i træk · 2 / 5 dage")
+        self.assertEqual(self.text("[data-trophy=fredag13] .trophy__icon"), "❔")
+        self.assertEqual(self.text("[data-trophy=maal1] .trophy__reward"), "✓ Festhat")
+        self.page.click("[data-panel-tab=wardrobe]")
+        self.wait("!!document.querySelector('[data-item=festhat]')")
+        awp = "document.querySelector('[data-item=awp]')"
+        self.assertTrue(self.js(f"{awp}.disabled && {awp}.classList.contains('is-legendary')"))
+        self.assertEqual(self.js(f"{awp}.textContent"), "🔒 AWP")
+        self.page.click("[data-item=festhat]")
+        self.assertEqual(self.wait_request("/api/pet/equip")["body"], {"slot": "hat", "item": "festhat"})
+        self.wait("document.querySelector('#app').dataset.hat === 'festhat'"
+                  " && document.querySelector('[data-item=festhat]').getAttribute('aria-pressed') === 'true'")
+        self.assertNotEqual(self.js("getComputedStyle(document.querySelector('#pet .hat--festhat')).display"), "none")
+        self.page.click("#panel-close")
+        self.wait("document.querySelector('#panel').hidden")
+        self.page.click("#trophies")
+        self.wait("!document.querySelector('#panel').hidden")
+        self.control("/api/settings", {"widget_enabled": True})
+        self.page.click("#panel-play")                       # "Lad Klippe lege nu", right in Klippe
+        self.wait_request("/api/widget/play")
+        self.wait(f"document.querySelector('#panel').hidden && {self.SAID}.includes('Slip musen')")
+        # Something legendary found: fireworks, and Klippe says so.
+        self.control("/api/_mock/publish", {"type": "pet_progress", "data": {"foerste": False, "unlocked": 3, "total": 4,
+            "nye": [{"kind": "fund", "id": "awp", "name": "AWP", "text": "Fundet 2026-10-02", "rarity": "legendarisk",
+                     "reward": {"id": "awp", "slot": "haand", "name": "AWP", "rarity": "legendarisk"}}]}})
+        self.wait(f"{self.SAID}.includes('LEGENDARISK! 🎁 Klippe fandt noget: AWP!')")
+        self.control("/api/_mock/publish", {"type": "pet_look", "data": {"equipped": {"haand": "awp", "briller": "solbriller",
+                                                                                     "mund": "cigaret"}}})
+        self.wait("document.querySelector('#app').dataset.haand === 'awp'")
+        for part in (".haand--awp", ".briller--solbriller", ".mund--cigaret"):
+            self.assertNotEqual(self.js(f"getComputedStyle(document.querySelector('#pet {part}')).display"), "none")
+
     def test_klippe_breaks_out_and_comes_home(self) -> None:
         self.open_widget()
         look = self.wait_request("/api/widget/look", where=lambda r: r["body"]["stage"] == "baby")["body"]
@@ -1677,6 +1730,24 @@ class WidgetTests(UiCase):
                     self.assertAlmostEqual(sprites.anchor_units[0], 100, delta=4)     # in the middle
                 finally:
                     sprites.close()
+
+    def test_the_sweat_drop_sits_on_klippe_at_every_stage(self) -> None:
+        self.open_widget()
+        self.js("window.__klippe.applyStatus({state: 'away', enabled: true, project: 'X', bucket: 'edit', today_s: 100})")
+        on_it = """(() => {
+            const drop = [...document.querySelectorAll('#pet .sweat')].find(d => d.getBoundingClientRect().width > 0);
+            const body = document.querySelector('#app').dataset.stage === 'egg'
+              ? document.querySelector('#pet .egg__shell') : document.querySelector('#pet .slate');
+            if (!drop) return 'no drop';
+            const d = drop.getBoundingClientRect(), b = body.getBoundingClientRect();
+            const x = d.left + d.width / 2, y = d.top + d.height / 2;
+            return x >= b.left - 2 && x <= b.right + 2 && y >= b.top - 2 && y <= b.bottom + 2; })()"""
+        for hours in (1, 6, 30, 120, 400):                  # egg, baby, junior, pro, legend
+            with self.subTest(hours=hours):
+                self.js(f"window.__klippe.state.hatched = false; window.__klippe.state.hours = {hours};"
+                        " window.__klippe.applyStage()")
+                self.wait("!document.querySelector('#app').classList.contains('hatching')", timeout=4)
+                self.assertIs(self.js(on_it), True)
 
     def test_away_and_asleep(self) -> None:
         self.open_widget()

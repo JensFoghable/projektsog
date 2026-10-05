@@ -22,11 +22,13 @@
   const BREAK_NUDGES = [90, 150, 210];       // gentle "take a break" reminders
   const DAY_MIN_S = 3600;                    // a day counts for the streak from 1 hour
 
-  /** Growth from all time ever logged: the stage, a level and the hours to the next stage. */
-  function stageFor(hours) {
+  /** Growth from all time ever logged: the stage, a level and the hours to the next stage.
+   *  `hatched` (hatched by hand, widget_hatched): at least a baby; the level stays the hours'. */
+  function stageFor(hours, hatched = false) {
     const h = Math.max(0, Number(hours) || 0);
     let index = 0;
     for (let i = 0; i < STAGES.length; i += 1) if (h >= STAGES[i].from) index = i;
+    if (hatched) index = Math.max(index, 1);
     const next = STAGES[index + 1] || null;
     return { ...STAGES[index], index, level: 1 + Math.floor(Math.sqrt(h * 2)),
       next: next ? next.name : null, toNext: next ? Math.max(0, next.from - h) : 0 };
@@ -164,6 +166,31 @@
     return live.map((m, i) => [m, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([m]) => m);
   }
 
+  /** "12 / 20 dage", "0,4 / 1 TB" – how far a locked trophy has come ("" for yes/no ones). */
+  function trophyProgress(t) {
+    if (!t || t.unlocked || t.secret || !(t.goal > 1 || t.unit === 'TB')) return '';
+    const fmt = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1).replace('.', ','));
+    const shown = t.unit === 't' || t.unit === 'TB' ? Math.floor(t.current * 10) / 10 : Math.floor(t.current);
+    return `${fmt(shown)} / ${fmt(t.goal)}${t.unit ? ` ${t.unit}` : ''}`;
+  }
+
+  /** What Klippe says when something new is earned or found. */
+  function progressLine(n) {
+    const what = n.kind === 'fund' ? `🎁 Klippe fandt noget: ${n.name}!`
+      : `🏆 ${n.name}${/[!?]$/.test(n.name) ? '' : '!'}${n.reward ? ` Ny ting: ${n.reward.name}` : ''}`;
+    return n.rarity === 'legendarisk' ? `🌟 LEGENDARISK! ${what}` : what;
+  }
+
+  /** The `pynt` of a sprite sheet url ("hat:baret,haand:awp") – only plain names. */
+  function parsePynt(text) {
+    const out = {};
+    for (const part of String(text || '').split(',')) {
+      const [slot, item] = part.split(':');
+      if (/^[a-z]+$/.test(slot || '') && /^[a-z0-9-]+$/.test(item || '')) out[slot] = item;
+    }
+    return out;
+  }
+
   /** The folded line for quiet messages: "📬 2 beskeder · vis". */
   function quietLine(count) {
     return `📬 ${count === 1 ? '1 besked' : `${count} beskeder`} · vis`;
@@ -189,7 +216,8 @@
   }
 
   const helpers = { stageFor, moodFor, outfitFor, crossedHours, crossedMarks, dayStreak, isoDate, hm, words,
-    moodLine, cheer, transferInfo, jobLine, messageOrder, quietLine, STAGES, FOCUS_STARS, BREAK_NUDGES };
+    moodLine, cheer, transferInfo, jobLine, messageOrder, quietLine, trophyProgress, progressLine, parsePynt,
+    STAGES, FOCUS_STARS, BREAK_NUDGES };
   if (typeof module === 'object' && module.exports) module.exports = helpers;
   if (typeof document === 'undefined') return;
 
@@ -211,6 +239,7 @@
     const poses = (params.get('sprites') || 'normal').split(',').filter(Boolean);
     const stage = params.get('stage') === 'egg' ? 'baby' : (params.get('stage') || 'baby');
     const cell = Number(params.get('cell')) || 240;
+    const pynt = parsePynt(params.get('pynt'));
     const svg = document.getElementById('pet');
     const copies = poses.map((_, i) => (i === 0 ? svg : svg.cloneNode(true)));   // the first keeps the ids
     const sheet = document.createElement('div');
@@ -218,7 +247,7 @@
     poses.forEach((pose, i) => {
       const box = document.createElement('div');
       box.className = PARTY_POSES.has(pose) ? 'sprite party' : 'sprite';
-      Object.assign(box.dataset, { pose, stage, outfit: params.get('outfit') || 'none', mood: 'chill' });
+      Object.assign(box.dataset, { pose, stage, outfit: params.get('outfit') || 'none', mood: 'chill', ...pynt });
       box.style.width = `${cell}px`;
       box.style.height = `${cell}px`;
       if (i > 0) copies[i].removeAttribute('id');
@@ -243,7 +272,8 @@
     app: $('app'), name: $('pet-name'), level: $('pet-level'), streak: $('pet-streak'), stage: $('stage'),
     bubble: $('bubble'), pet: $('pet'), hearts: $('hearts'), mood: $('mood'), today: $('today'), goal: $('goal'),
     todayBar: $('today-bar'), focus: $('focus'), focusBar: $('focus-bar'), grow: $('grow'), fx: $('fx'),
-    messages: $('messages'),
+    messages: $('messages'), trophies: $('trophies'), trophyCount: $('trophy-count'), panel: $('panel'),
+    panelBody: $('panel-body'), panelClose: $('panel-close'), panelPlay: $('panel-play'),
     transfer: $('transfer'), transferTitle: $('transfer-title'), transferPct: $('transfer-pct'),
     transferBar: $('transfer-bar'), transferSub: $('transfer-sub'),
   };
@@ -251,8 +281,9 @@
   const state = {
     status: null, todayS: null, focusStart: null, focusMin: 0, hours: 0, stage: null, streak: 0,
     name: 'Klippe', goalH: 6, bubbles: [], bubbleTimer: 0, seenJobs: new Set(), cards: null, project: null,
-    job: null, jobsStarted: new Set(), lookSent: '', lookTimer: 0,
+    job: null, jobsStarted: new Set(), lookSent: '', lookTimer: 0, hatched: false, hatching: false,
     messages: [], messagesSeen: new Set(), messagesLoaded: false, messageTag: null, messagesOpen: false,
+    pet: null, panelTab: 'trophies',
   };
 
   // ---------------------------------------------------------------- memory (per day)
@@ -303,6 +334,11 @@
     state.goalH = Number(settings.widget_daily_goal_hours) || 6;
     el.name.textContent = state.name;
     renderStats();
+    const hatched = Boolean(settings.widget_hatched);
+    if (hatched !== state.hatched) {
+      state.hatched = hatched;
+      if (state.stage) applyStage();
+    }
   }
 
   async function pollStatus() {
@@ -370,12 +406,13 @@
   }
 
   function applyStage() {
-    const stage = stageFor(state.hours);
+    const stage = stageFor(state.hours, state.hatched);
     const data = memory();
     const grew = state.stage && stage.index > state.stage.index
       || (data.stage != null && stage.index > data.stage);
+    const hatches = grew && stage.index === 1 && !REDUCED;
     state.stage = stage;
-    el.app.dataset.stage = stage.key;
+    if (!state.hatching) el.app.dataset.stage = hatches ? 'egg' : stage.key;
     el.level.textContent = `${stage.name} · Lv ${stage.level}`;
     el.streak.hidden = state.streak < 2;
     el.streak.textContent = `🔥 ${state.streak} dage`;
@@ -386,8 +423,29 @@
       data.stage = stage.index;
       remember(data);
     }
-    if (grew) celebrate(cheer('grow', stage), 'fireworks', 4);
+    if (hatches) {
+      hatch();
+    } else if (grew) {
+      celebrate(cheer('grow', stage), 'fireworks', 4);
+    }
     reportLook();
+  }
+
+  /** The egg hatches: it shakes and cracks, then the baby pops out – with fireworks. */
+  function hatch() {
+    if (state.hatching) return;
+    state.hatching = true;
+    say('Hov … der sker noget! 🥚', 1600);
+    el.app.classList.add('hatching');
+    setTimeout(() => {
+      state.hatching = false;
+      el.app.classList.remove('hatching');
+      el.app.dataset.stage = state.stage.key;
+      el.app.classList.add('hatched');
+      setTimeout(() => el.app.classList.remove('hatched'), 1000);
+      celebrate(cheer('grow', state.stage), 'fireworks', 4);
+      reportLook();
+    }, 1800);
   }
 
   function renderMoodLine() {
@@ -591,6 +649,155 @@
       renderMessages((await get('/api/messages')).messages);
     } catch { /* not there (yet) */ }
   }
+
+  // ---------------------------------------------------------------- trophies and wardrobe (achievements.py)
+  const SLOT_KEYS = ['farve', 'striber', 'hat', 'briller', 'mund', 'haand', 'aura'];
+
+  /** What Klippe wears: data-farve, data-hat … on the page (the CSS draws it). */
+  function applyWardrobe(equipped) {
+    for (const slot of SLOT_KEYS) {
+      if (equipped && equipped[slot]) el.app.dataset[slot] = equipped[slot];
+    }
+  }
+
+  async function loadPet() {
+    try {
+      state.pet = await get('/api/pet');
+    } catch {
+      return;
+    }
+    applyWardrobe(state.pet.equipped);
+    el.trophyCount.textContent = String(state.pet.unlocked);
+    if (!el.panel.hidden) renderPanel();
+  }
+
+  function node(tag, className, text) {
+    const n = document.createElement(tag);
+    if (className) n.className = className;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  function trophyNodes(pet) {
+    const nodes = [node('p', 'panel__summary', `${pet.unlocked} af ${pet.total} trofæer`)];
+    let group = null;
+    for (const t of pet.trophies) {
+      if (t.group !== group) {
+        group = t.group;
+        nodes.push(node('p', 'panel__group', group));
+      }
+      const row = node('div', `trophy${t.unlocked ? '' : ' is-locked'}`);
+      row.dataset.trophy = t.id;
+      row.append(node('span', 'trophy__icon', t.unlocked ? '🏆' : t.secret ? '❔' : '🔒'), node('p', 'trophy__name', t.name));
+      const progress = trophyProgress(t);
+      row.append(node('p', 'trophy__text', progress ? `${t.text} · ${progress}` : t.text));
+      if (progress) {
+        const bar = node('div', 'bar');
+        const fill = node('div', 'bar__fill');
+        fill.style.width = `${Math.round(t.progress * 100)}%`;
+        bar.append(fill);
+        row.append(bar);
+      }
+      if (t.reward) row.append(node('p', 'trophy__reward', `${t.unlocked ? '✓' : '→'} ${t.reward.name}`));
+      nodes.push(row);
+    }
+    return nodes;
+  }
+
+  function wardrobeNodes(pet) {
+    const nodes = [node('p', 'panel__summary', 'Vælg, hvad Klippe har på. Hold musen over en låst ting for at se, hvordan den fås.')];
+    for (const slot of pet.slots) {
+      const box = node('div', 'slot');
+      box.append(node('p', 'slot__name', slot.name));
+      const row = node('div', 'slot__items');
+      for (const item of pet.items.filter((i) => i.slot === slot.id)) {
+        const rarity = item.rarity === 'legendarisk' ? ' is-legendary' : item.rarity === 'sjælden' ? ' is-rare' : '';
+        const button = node('button', `item${rarity}`, item.owned ? item.name : `🔒 ${item.name}`);
+        button.type = 'button';
+        button.title = item.owned ? `${item.name} – ${item.how}` : item.how;
+        button.disabled = !item.owned;
+        button.dataset.item = item.id;
+        button.setAttribute('aria-pressed', String(pet.equipped[slot.id] === item.id));
+        button.addEventListener('click', () => equip(slot.id, item.id));
+        row.append(button);
+      }
+      box.append(row);
+      nodes.push(box);
+    }
+    return nodes;
+  }
+
+  function renderPanel() {
+    for (const tab of el.panel.querySelectorAll('[data-panel-tab]')) {
+      tab.setAttribute('aria-selected', String(tab.dataset.panelTab === state.panelTab));
+    }
+    if (!state.pet) {
+      el.panelBody.replaceChildren(node('p', 'panel__summary', 'Henter …'));
+      return;
+    }
+    const top = el.panelBody.scrollTop;
+    el.panelBody.replaceChildren(...(state.panelTab === 'wardrobe' ? wardrobeNodes(state.pet) : trophyNodes(state.pet)));
+    el.panelBody.scrollTop = top;
+  }
+
+  function openPanel(tab) {
+    if (tab) state.panelTab = tab;
+    el.panel.hidden = false;
+    renderPanel();
+    loadPet();
+  }
+
+  async function equip(slot, item) {
+    try {
+      const answer = await send('POST', '/api/pet/equip', { slot, item });
+      applyWardrobe(answer.equipped);
+      if (state.pet) state.pet.equipped = answer.equipped;
+      renderPanel();
+      jump();
+    } catch (err) {
+      say(`Øv – ${err.message}`, 5000);
+    }
+  }
+
+  function celebrateProgress(data) {
+    const news = (data && data.nye) || [];
+    if (!news.length) return;
+    if (data.foerste) {
+      celebrate(`🏆 Du har allerede ${data.unlocked} trofæer! Se dem under 🏆 ovenfor`, 'confetti', 3);
+    } else {
+      for (const n of news) {
+        const legendary = n.rarity === 'legendarisk';
+        celebrate(progressLine(n), legendary ? 'fireworks' : 'confetti', legendary ? 5 : 2.5);
+      }
+    }
+    if (data.unlocked != null) el.trophyCount.textContent = String(data.unlocked);
+    loadPet();
+  }
+
+  el.trophies.addEventListener('click', () => (el.panel.hidden ? openPanel() : (el.panel.hidden = true)));
+  el.panelClose.addEventListener('click', () => {
+    el.panel.hidden = true;
+  });
+  // "Vis legen nu" right here: the panel closes (so the box is seen), Klippe comes out as soon as
+  // the mouse has been still for a moment.
+  el.panelPlay.addEventListener('click', async () => {
+    el.panel.hidden = true;
+    try {
+      await send('POST', '/api/widget/play', {});
+      say('Slip musen … så kommer jeg ud! 🎈', 4000);
+    } catch (err) {
+      say(`Øv – ${err.message}`, 5000);
+    }
+  });
+  for (const tab of el.panel.querySelectorAll('[data-panel-tab]')) {
+    tab.addEventListener('click', () => {
+      state.panelTab = tab.dataset.panelTab;
+      renderPanel();
+    });
+  }
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !el.panel.hidden) el.panel.hidden = true;
+  });
 
   async function loadPlay() {
     try {
@@ -835,7 +1042,7 @@
     return { start, count: () => parts.length };
   })();
   window.__klippe = { celebrate, fx, state, applyStatus, applyStage, applyJob, applyPlay, lookReport,
-    renderMessages };   // for tests
+    renderMessages, applySettings, celebrateProgress, openPanel };   // for tests
 
   // ---------------------------------------------------------------- events
   function connectEvents() {
@@ -877,6 +1084,16 @@
           : `Uh, et ${card.camera}-kort! 📼`);
       }
     });
+    source.addEventListener('pet_look', (event) => {
+      try {
+        applyWardrobe(JSON.parse(event.data).equipped);
+      } catch { /* ignore */ }
+    });
+    source.addEventListener('pet_progress', (event) => {
+      try {
+        celebrateProgress(JSON.parse(event.data));
+      } catch { /* ignore */ }
+    });
     source.addEventListener('say', (event) => {
       try {
         say(JSON.parse(event.data).tekst, 6000);
@@ -915,6 +1132,7 @@
     setInterval(() => reportLook(true), 60e3);
     setInterval(() => renderMessages(state.messages), 60e3);   // expired messages go
     await loadMessages();
+    loadPet();
     window.addEventListener('resize', () => reportLook());
     loadPlay();
     connectEvents();

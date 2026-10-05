@@ -420,6 +420,8 @@ class MockBackend:
         self.calls: list[dict[str, Any]] = []      # POST/DELETE requests
         self.requests: list[dict[str, Any]] = []   # every /api/ request (newest 1000)
         self.pet_state = "ready"
+        self.pet_equipped = {"farve": "midnat", "striber": "klassisk", "hat": "ingen", "briller": "ingen-briller",
+                             "mund": "ingen-mund", "haand": "ingen-haand", "aura": "ingen-aura"}
         self.errors: list[str] = []                # tracebacks of 500 responses
         self.sse_generation = 0                    # bumped by /api/_mock/drop-events
         self.settings: dict[str, Any] = config.validate({**config.DEFAULTS, "hosts": list(HOSTS)})
@@ -808,6 +810,40 @@ class MockBackend:
 
     def publish_settings(self) -> None:
         self.bus.publish("settings", self.settings_payload(self.default_flags))
+
+    # -- Klippe's trophies and wardrobe (achievements.py) ----------------------------------
+    def pet_trophies(self) -> dict[str, Any]:
+        with self.lock:
+            equipped = dict(self.pet_equipped)
+        return {
+            "unlocked": 2, "total": 4, "equipped": equipped,
+            "slots": [{"id": "hat", "name": "Hat"}, {"id": "haand", "name": "I hånden"}],
+            "trophies": [
+                {"id": "maal1", "group": "Mål", "name": "Mål!", "text": "Nå dagens mål", "unlocked": 1.0,
+                 "secret": False, "goal": 1, "current": 1, "unit": "dage", "progress": 1.0,
+                 "reward": {"id": "festhat", "slot": "hat", "name": "Festhat", "rarity": "almindelig"}},
+                {"id": "kort1", "group": "Kort", "name": "Første kort", "text": "Overfør et kort", "unlocked": 2.0,
+                 "secret": False, "goal": 1, "current": 1, "unit": "", "progress": 1.0, "reward": None},
+                {"id": "uge", "group": "Rytme", "name": "En hel uge", "text": "5 hverdage i træk", "unlocked": None,
+                 "secret": False, "goal": 5, "current": 2, "unit": "dage", "progress": 0.4,
+                 "reward": {"id": "varm", "slot": "aura", "name": "Varm glød", "rarity": "almindelig"}},
+                {"id": "fredag13", "group": "Hemmelig", "name": "???", "text": "Hemmelig", "unlocked": None,
+                 "secret": True, "goal": 1, "current": 0, "unit": "", "progress": 0.0, "reward": None}],
+            "items": [
+                {"id": "ingen", "slot": "hat", "name": "Ingen", "rarity": "almindelig", "owned": True, "how": "Fra start"},
+                {"id": "festhat", "slot": "hat", "name": "Festhat", "rarity": "almindelig", "owned": True, "how": "Trofæ: Mål!"},
+                {"id": "ingen-haand", "slot": "haand", "name": "Ingen", "rarity": "almindelig", "owned": True, "how": "Fra start"},
+                {"id": "awp", "slot": "haand", "name": "AWP", "rarity": "legendarisk", "owned": False,
+                 "how": "Sjældent fund – Klippe finder det måske en dag"}]}
+
+    def pet_equip(self, slot: str, item: str) -> dict[str, Any]:
+        if (slot, item) not in (("hat", "ingen"), ("hat", "festhat"), ("haand", "ingen-haand")):
+            raise ValueError("Det er ikke låst op endnu")
+        with self.lock:
+            self.pet_equipped[slot] = item
+            equipped = dict(self.pet_equipped)
+        self.bus.publish("pet_look", {"equipped": equipped})
+        return {"ok": True, "equipped": equipped}
 
     # -- Klippe plays (petplay.py) ---------------------------------------------------------
     def pet_status(self) -> dict[str, Any]:
@@ -1353,6 +1389,8 @@ class MockHandler(BaseHTTPRequestHandler):
             self._json(backend.pet_status())
         elif route == "/api/messages":
             self._json({"messages": []})
+        elif route == "/api/pet":
+            self._json(backend.pet_trophies())
         elif route == "/api/import":
             self._json(backend.importer.state(flags))
         elif route == "/api/import/options":
@@ -1431,6 +1469,8 @@ class MockHandler(BaseHTTPRequestHandler):
             self._json({"ok": True})
         elif (method, route) in (("POST", "/api/messages/click"), ("DELETE", "/api/messages")):
             self._json({"ok": True})
+        elif (method, route) == ("POST", "/api/pet/equip"):
+            self._json(backend.pet_equip(str(body.get("slot", "")), str(body.get("item", ""))))
         elif (method, route) in (("POST", "/api/window/hide"), ("POST", "/api/window/show")):
             self._json({"ok": True})
         elif (method, route) == ("POST", "/api/_mock/publish"):  # test control: push any SSE event

@@ -98,3 +98,25 @@ test('messages: what needs you first, quiet ones last, expired gone', () => {
   assert.equal(w.quietLine(1), '📬 1 besked · vis');
   assert.equal(w.quietLine(3), '📬 3 beskeder · vis');
 });
+
+test('hatched by hand: at least a baby, the level stays the hours', () => {
+  const egg = w.stageFor(2);
+  const baby = w.stageFor(2, true);
+  assert.equal(egg.key, 'egg');
+  assert.deepEqual([baby.key, baby.level, baby.next, baby.toNext], ['baby', egg.level, 'Junior', 23]);
+  assert.equal(w.stageFor(30, true).key, 'junior');
+});
+
+test('trophies: progress, the news and the wardrobe of a sprite sheet', () => {
+  assert.equal(w.trophyProgress({ goal: 20, current: 12, unit: 'dage' }), '12 / 20 dage');
+  assert.equal(w.trophyProgress({ goal: 10, current: 3.46, unit: 't' }), '3,4 / 10 t');
+  assert.equal(w.trophyProgress({ goal: 1, current: 0.37, unit: 'TB' }), '0,3 / 1 TB');
+  assert.equal(w.trophyProgress({ goal: 1, current: 0, unit: '' }), '');
+  assert.equal(w.trophyProgress({ goal: 5, current: 5, unit: 'dage', unlocked: 1 }), '');
+  assert.equal(w.trophyProgress({ goal: 1, current: 0, secret: true }), '');
+  assert.equal(w.progressLine({ kind: 'trofae', name: 'Mål!', reward: { name: 'Festhat' }, rarity: 'almindelig' }),
+    '🏆 Mål! Ny ting: Festhat');
+  assert.equal(w.progressLine({ kind: 'trofae', name: 'Trofast', reward: null }), '🏆 Trofast!');
+  assert.equal(w.progressLine({ kind: 'fund', name: 'AWP', rarity: 'legendarisk' }), '🌟 LEGENDARISK! 🎁 Klippe fandt noget: AWP!');
+  assert.deepEqual(w.parsePynt('hat:baret,haand:awp,x:<script>,:y,briller'), { hat: 'baret', haand: 'awp' });
+});

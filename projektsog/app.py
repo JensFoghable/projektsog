@@ -40,6 +40,7 @@ from .indexer import Indexer
 from .resolve_bridge import ResolveBridge
 from .server import HOST, Server
 from .importer import Importer
+from .achievements import PetProgress
 from .messages import MessageBoard
 from .petplay import PetPlay, window_shown
 from .widget import PetWindow
@@ -617,6 +618,7 @@ class Components:
     widget: Callable[..., PetWindow] = PetWindow
     petplay: Callable[..., PetPlay] = PetPlay
     messages: Callable[..., MessageBoard] = MessageBoard
+    progress: Callable[..., PetProgress] = PetProgress
     tray: Callable[..., TrayIcon] = TrayIcon
     hotkeys: Callable[..., HotkeyManager] = HotkeyManager
 
@@ -696,6 +698,7 @@ class App:
         self.widget: PetWindow | None = None
         self.petplay: PetPlay | None = None
         self.messages: MessageBoard | None = None
+        self.progress: PetProgress | None = None
         self.tray: TrayIcon | None = None
         self._actions: _ActionRunner | None = None
         self._notify_queue: queue.Queue | None = None
@@ -749,8 +752,13 @@ class App:
                                parse_hotkey=hotkey.parse_hotkey, tracker=self.tracker,
                                importer=self.importer)
         # Messages from other programs (the Claude sessions' Resolve queue), shown by Klippe.
-        self.messages = c.messages(cfg, bus, shown=self._klippe_shown)
+        self.messages = c.messages(cfg, bus, shown=self._klippe_shown,
+                                   path=os.path.join(config.app_dir(), "messages.json"))
         self.server.messages = self.messages
+        # Klippe's trophies and wardrobe (achievements.py): from the time and the cards.
+        self.progress = c.progress(cfg, bus, tracker=self.tracker, importer=self.importer,
+                                   path=os.path.join(config.app_dir(), "pet.json"))
+        self.server.progress = self.progress
         port = self.server.start(args.port)
         self._instance_file = config.instance_path()
         write_instance_file(self._instance_file, os.getpid(), port)
@@ -761,7 +769,8 @@ class App:
             # and its games with the mouse pointer when nobody is at the PC (petplay.py).
             self.widget = c.widget(cfg, f"http://{HOST}:{port}/widget.html")
             self.petplay = c.petplay(cfg, bus, widget=self.widget, bridge=self.bridge,
-                                     importer=self.importer, base_url=f"http://{HOST}:{port}")
+                                     importer=self.importer, base_url=f"http://{HOST}:{port}",
+                                     wardrobe=self.progress.equipped, on_game=self.progress.note_game)
             self.server.petplay = self.petplay
             self.widget.start()
             self.petplay.start()
@@ -771,6 +780,7 @@ class App:
             if self._hotkey_settings["hotkey_enabled"]:
                 self._start_hotkeys(self._hotkey_settings)
         self.importer.start()      # camera cards: a card going in may show the window
+        self.progress.start()
         self._spawn(self._maintenance_loop, "app-maintenance")
         if with_ui:
             if args.background:
@@ -831,7 +841,7 @@ class App:
         if self.server is not None:
             steps["server"] = self.server.stop
         # A game ends first: the helper puts the pointer back where it was.
-        windows = [w.close for w in (self.petplay, self.widget, self.window) if w is not None]
+        windows = [w.close for w in (self.petplay, self.progress, self.widget, self.window) if w is not None]
         if windows:
             steps["window"] = lambda: [close() for close in windows]
         for name, budget in budgets.items():

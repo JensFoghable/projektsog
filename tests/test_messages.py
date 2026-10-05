@@ -106,6 +106,39 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(self.listed()[0]["tag"], "t24")
 
 
+class KeptTests(unittest.TestCase):
+    """A restart of Projektsøg does not lose a question a session is waiting on."""
+
+    def test_kept_across_a_restart(self) -> None:
+        import json
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "messages.json")
+            clock = [1000.0]
+
+            def board():
+                return messages.MessageBoard(None, FakeBus(), shown=lambda: True, open_uri=lambda uri: None,
+                                             sound=lambda: None, clock=lambda: clock[0], path=path)
+            first = board()
+            first.post(ASK)
+            first.post({**ASK, "tag": "koe:hook-Mette", "knapper": [], "prioritet": "stille", "udloeber": 60})
+            first.post({**ASK, "tag": "koe:info", "visning": "boble"})          # a note is not kept
+            second = board()
+            self.assertEqual([m["tag"] for m in second.list()["messages"]], ["koe:hook-Mette", "koe:venter"])
+            self.assertEqual(second.list()["messages"][0]["prioritet"], "stille")
+            second.click("koe:venter", 0)
+            clock[0] += 61                                                     # the quiet one expired
+            self.assertEqual(board().list()["messages"], [])
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"messages": [{"tag": "x", "titel": "y", "udloeber_ved": 9e9,
+                                         "knapper": [{"tekst": "Go", "uri": "https://evil"}]}, "junk"]}, fh)
+            self.assertEqual(board().list()["messages"], [])                   # checked like a POST
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("{not json")
+            self.assertEqual(board().list()["messages"], [])
+
+
 class MessageEndpointTests(ServerTestBase):
     def setUp(self) -> None:
         super().setUp()

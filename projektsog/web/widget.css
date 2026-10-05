@@ -49,7 +49,19 @@ body {
   font-weight: 600;
   white-space: nowrap;
 }
-.head__streak { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--warn); white-space: nowrap; }
+.head__right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.head__streak { font-size: 12px; font-weight: 600; color: var(--warn); white-space: nowrap; }
+.head__trophies {
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font: 600 11.5px/1.5 var(--font);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.head__trophies:hover { color: var(--text); background: var(--surface-3); }
 
 /* ---------------------------------------------------------------- stage + bubble */
 /* The stage takes the room that is left (less while a transfer is shown): the pet scales to it. */
@@ -169,6 +181,14 @@ body {
 [data-mood="working"] .pet__glow { opacity: 0.35; }
 
 .clap .clapper { animation: clap 0.3s ease-in-out 3; }
+
+/* hatching: the egg shakes harder and harder and cracks open, then the baby pops out */
+.hatching .egg { animation: hatch-shake 0.3s ease-in-out infinite !important; }
+.hatching .egg__crack { stroke-width: 4.5; stroke-dasharray: 60; animation: crack-open 1.6s ease-in forwards; }
+.hatched .body { animation: hatch-pop 0.8s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes hatch-shake { 0%, 100% { rotate: 0deg; } 25% { rotate: -10deg; } 75% { rotate: 10deg; } }
+@keyframes crack-open { from { stroke-dashoffset: 60; } to { stroke-dashoffset: 0; } }
+@keyframes hatch-pop { from { scale: 0.2; opacity: 0; } to { scale: 1; opacity: 1; } }
 .jump .body, .jump .egg { animation: jump 0.7s cubic-bezier(.3, 1.6, .5, 1); }
 
 @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
@@ -342,6 +362,137 @@ body {
 @keyframes tick { 0% { opacity: 0; transform: translateY(6px); } 30% { opacity: 1; } 100% { opacity: 0; transform: translateY(-14px); } }
 @keyframes shake { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-8deg); } 75% { transform: rotate(8deg); } }
 
+/* ---------------------------------------------------------------- the wardrobe (achievements.py)
+   Chosen in the 🏆 panel; set as data-farve/-striber/-hat/-briller/-mund/-haand/-aura on #app
+   (and on every cell of the sprite sheet, so Klippe wears it outside the box too). */
+[data-farve="skov"] { --body: #2b3d33; --body-edge: #4d6b57; }
+[data-farve="bordeaux"] { --body: #3d2a32; --body-edge: #7a4a5e; }
+[data-farve="havblaa"] { --body: #22394a; --body-edge: #3f6a85; }
+[data-farve="lavendel"] { --body: #3a3350; --body-edge: #7568a6; }
+[data-farve="kobber"] { --body: #4a3428; --body-edge: #b0703f; }
+[data-farve="mint"] { --body: #284440; --body-edge: #5aa596; }
+[data-farve="guld"] { --body: #4d3f17; --body-edge: #d4af37; }
+[data-farve="kosmos"] { --body: #171433; --body-edge: #5b4bd1; }
+[data-farve="regnbue"] { --body: #3b2a63; --body-edge: #ff6fa8; }
+[data-farve="regnbue"] .slate { animation: rainbow 6s linear infinite; }
+@keyframes rainbow { to { filter: hue-rotate(360deg); } }
+[data-striber="orange"] { --stripe-light: #f0a45b; }
+[data-striber="roed"] { --stripe-light: #ef7166; }
+[data-striber="blaa"] { --stripe-light: #7f9cff; }
+[data-striber="zebra"] { --stripe-dark: #ff7eb6; --stripe-light: #fff5fa; }
+[data-striber="guldstriber"] { --stripe-light: #ffcf4a; }
+[data-striber="neon"] { --stripe-dark: #0d0f0d; --stripe-light: #7cff6b; }
+[data-aura="varm"] { --aura: #ff9a3d; }
+[data-aura="kold"] { --aura: #6fb8ff; }
+[data-aura="hjerter"] { --aura: #ff7eb6; }
+[data-aura="stjernestoev"] { --aura: #b59cff; }
+[data-aura="varm"] .pet__glow, [data-aura="kold"] .pet__glow, [data-aura="hjerter"] .pet__glow,
+[data-aura="stjernestoev"] .pet__glow { opacity: 0.6; }
+
+.hat, .briller, .mund, .haand, .aura { display: none; }
+[data-hat="sloejfe"] .hat--sloejfe, [data-hat="festhat"] .hat--festhat, [data-hat="baret"] .hat--baret,
+[data-hat="nissehue"] .hat--nissehue, [data-hat="blomst"] .hat--blomst, [data-hat="propelhat"] .hat--propelhat,
+[data-briller="hornbriller"] .briller--hornbriller, [data-briller="solbriller"] .briller--solbriller,
+[data-mund="slikkepind"] .mund--slikkepind, [data-mund="cigaret"] .mund--cigaret,
+[data-haand="kaffe"] .haand--kaffe, [data-haand="awp"] .haand--awp,
+[data-aura="hjerter"] .aura--hjerter, [data-aura="stjernestoev"] .aura--stjernestoev { display: inline; }
+/* Work clothes on the head win while you work on that page; your own hat replaces the crown,
+   your own glasses the Color page's; the hands are busy carrying files during a transfer. */
+[data-outfit="fusion"] .hat, [data-outfit="deliver"] .hat, [data-outfit="audio"] .hat { display: none !important; }
+[data-hat]:not([data-hat="ingen"]) .acc--crown { display: none !important; }
+[data-briller]:not([data-briller="ingen-briller"]) .acc--color { display: none !important; }
+[data-transfer] .haand { display: none !important; }
+
+.hat--sloejfe path, .hat--sloejfe circle { fill: #ef7166; stroke: #b04a42; stroke-width: 2; }
+.hat--festhat path:first-child { fill: #7f9cff; stroke: #4b5fc0; stroke-width: 2; stroke-linejoin: round; }
+.hat__line { fill: none; stroke: #ffcf4a; stroke-width: 3; stroke-linecap: round; }
+.hat__pom { fill: #ffcf4a; }
+.hat--baret path:first-child { fill: #26262b; stroke: #0e0e10; stroke-width: 2; }
+.hat__stem { fill: none; stroke: #26262b; stroke-width: 4; stroke-linecap: round; }
+.hat--nissehue path { fill: #d6453d; stroke: #9e2c25; stroke-width: 2; }
+.hat__brim, .hat--nissehue .hat__pom { fill: #f6f1ea; }
+.hat--blomst circle { fill: #ffb3cf; stroke: #e0789f; stroke-width: 1.5; }
+.hat--blomst .hat__pom { fill: #ffcf4a; stroke: #d99a1c; }
+.hat--propelhat > path:first-child { fill: #ef7166; stroke: #9e3f37; stroke-width: 2; }
+.hat__seg { fill: #ffcf4a; }
+.hat--propelhat .hat__stem { stroke: #444; stroke-width: 3; }
+.propel ellipse:first-child { fill: #7f9cff; }
+.propel ellipse:last-child { fill: #5fcf8f; }
+.propel { transform-box: view-box; transform-origin: 100px 23px; animation: propel 0.5s linear infinite; }
+@keyframes propel { 0%, 100% { scale: 1 1; } 50% { scale: -1 1; } }
+.briller--hornbriller rect { fill: rgba(255, 255, 255, 0.08); stroke: #3a2a1d; stroke-width: 5; }
+.briller--hornbriller path { fill: none; stroke: #3a2a1d; stroke-width: 4; stroke-linecap: round; }
+.briller__lens { fill: url(#shades); stroke: #d4af37; stroke-width: 2.5; }
+.briller__frame { fill: none; stroke: #d4af37; stroke-width: 3; stroke-linecap: round; }
+.briller__shine { fill: none; stroke: rgba(255, 255, 255, 0.7); stroke-width: 2.5; stroke-linecap: round; }
+.mund__stick { fill: none; stroke: #f3efe6; stroke-width: 3; stroke-linecap: round; }
+.mund--slikkepind circle { fill: #ef7166; }
+.mund__swirl { fill: none; stroke: #fff; stroke-width: 2; }
+.cig__paper { fill: none; stroke: #f3efe6; stroke-width: 5; }
+.cig__filter { fill: none; stroke: #d98b4f; stroke-width: 5.5; }
+.cig__ember { fill: #ff6a2b; animation: ember 1.6s ease-in-out infinite; }
+@keyframes ember { 50% { fill: #ffcf4a; } }
+.cig__smoke path, .kaffe__steam { fill: none; stroke: rgba(220, 220, 220, 0.55); stroke-width: 2; stroke-linecap: round;
+  animation: smoke 2.4s ease-out infinite; transform-box: fill-box; }
+.cig__smoke path:last-child { animation-delay: 1.2s; }
+@keyframes smoke { 0% { opacity: 0; translate: 0 6px; } 30% { opacity: 1; } 100% { opacity: 0; translate: 3px -10px; } }
+.kaffe__cup { fill: #f3efe6; stroke: #9a8f80; stroke-width: 2; }
+.kaffe__handle { fill: none; stroke: #f3efe6; stroke-width: 3.5; }
+.kaffe__top { fill: #6b4226; }
+.awp__stock { fill: #4f6b3a; stroke: #1d2416; stroke-width: 1.5; }
+.awp__body { fill: #2e3a24; stroke: #1d2416; stroke-width: 1; }
+.awp__mag, .awp__barrel, .awp__brake { fill: #1d1f1a; }
+.awp__scope { fill: #111; }
+.awp__lens { fill: #6fb8ff; stroke: #111; stroke-width: 2; }
+.awp__mount { stroke: #111; stroke-width: 2.5; }
+.aura--hjerter path { fill: #ff7eb6; transform-box: fill-box; animation: float-heart 3s ease-in-out infinite; }
+.aura--hjerter path:nth-child(2) { animation-delay: 1s; }
+.aura--hjerter path:nth-child(3) { animation-delay: 2s; }
+@keyframes float-heart { 0%, 100% { translate: 0 0; opacity: 0.5; } 50% { translate: 0 -8px; opacity: 1; } }
+.aura--stjernestoev path { fill: #e8deff; transform-box: fill-box; transform-origin: center; animation: twinkle 2.2s ease-in-out infinite; }
+.aura--stjernestoev path:nth-child(2n) { animation-delay: 0.7s; }
+.aura--stjernestoev path:nth-child(3n) { animation-delay: 1.4s; }
+@keyframes twinkle { 0%, 100% { opacity: 0.2; scale: 0.6; } 50% { opacity: 1; scale: 1.1; } }
+
+/* ---------------------------------------------------------------- the 🏆 panel: trophies and wardrobe */
+.panel { position: fixed; inset: 0; z-index: 4; display: flex; flex-direction: column; background: var(--bg); }
+.panel[hidden] { display: none; }
+.panel__head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.panel__tabs { display: flex; flex: 1; gap: 4px; }
+.panel__tab { flex: 1; padding: 5px 6px; border: 0; border-radius: 8px; background: transparent; color: var(--text-2);
+  font: 600 12px/1.3 var(--font); cursor: pointer; }
+.panel__tab[aria-selected="true"] { background: var(--surface-3); color: var(--text); }
+.panel__close { width: 26px; height: 26px; border: 0; border-radius: 7px; background: transparent; color: var(--text-3);
+  font-size: 17px; line-height: 1; cursor: pointer; }
+.panel__close:hover { background: var(--surface-3); color: var(--text); }
+.panel__body { flex: 1; overflow-y: auto; padding: 6px 10px 14px; scrollbar-width: thin; }
+.panel__foot { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--line); }
+.panel__play { padding: 6px 12px; border: 0; border-radius: 8px; background: var(--accent); color: #1d1b19;
+  font: 600 12px/1.2 var(--font); cursor: pointer; }
+.panel__play:hover { filter: brightness(1.08); }
+.panel__hint { color: var(--text-3); font-size: 11px; }
+.panel__summary { margin: 4px 0 6px; color: var(--text-2); font-size: 12px; }
+.panel__group { margin: 12px 0 2px; color: var(--text-3); font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em;
+  text-transform: uppercase; }
+.trophy { display: grid; grid-template-columns: 20px 1fr; gap: 1px 6px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.trophy__icon { font-size: 14px; line-height: 1.3; }
+.trophy__name { margin: 0; font-size: 12.5px; font-weight: 600; }
+.trophy.is-locked .trophy__name { color: var(--text-2); }
+.trophy__text, .trophy__reward { grid-column: 2; margin: 0; color: var(--text-3); font-size: 11.5px; }
+.trophy__reward { color: var(--accent); font-size: 11px; }
+.trophy .bar { grid-column: 2; height: 4px; margin-top: 3px; }
+.slot { margin: 10px 0 2px; }
+.slot__name { margin: 0; color: var(--text-3); font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.slot__items { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.item { padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--text);
+  font: 600 11.5px/1.3 var(--font); cursor: pointer; }
+.item:hover:not(:disabled) { background: var(--surface-3); }
+.item[aria-pressed="true"] { border-color: var(--accent); background: rgba(240, 164, 91, 0.16); }
+.item:disabled { color: var(--text-3); cursor: help; opacity: 0.75; }
+.item.is-rare { border-color: rgba(127, 156, 255, 0.65); }
+.item.is-legendary { border-color: #ffcf4a; box-shadow: 0 0 8px rgba(255, 207, 74, 0.3); }
+.item.is-legendary:not(:disabled) { background: linear-gradient(90deg, rgba(255, 207, 74, 0.18), rgba(181, 156, 255, 0.18)); }
+
 /* ---------------------------------------------------------------- Klippe is out playing (petplay.py)
    The pet has broken out through the box: only the hole is left until it is home again. */
 .hole { display: none; }
@@ -359,12 +510,18 @@ html.sprites, html.sprites body { background: transparent; }
 .sheet { display: flex; }
 .sprite { display: flex; flex: none; align-items: center; justify-content: center; }
 .sprite .pet { width: 200px; height: 200px; max-width: none; max-height: none; cursor: default; }
-.sprite .pet__shadow, .sprite .pet__glow, .sprite .carry, .sprite .zzz, .sprite .sweat, .sprite .hole { display: none !important; }
+.sprite .pet__shadow, .sprite .pet__glow, .sprite .carry, .sprite .zzz, .sprite .sweat, .sprite .hole,
+.sprite .aura { display: none !important; }
 html.sprites *, html.sprites *::before, html.sprites *::after { animation: none !important; transition: none !important; }
 [data-pose="cheer"] .arm--left { transform: rotate(80deg); }
 [data-pose="cheer"] .arm--right { transform: rotate(-80deg); }
 [data-pose="oops"] .mouth--smile { display: none; }
 [data-pose="oops"] .mouth--o { display: inline; }
+/* aiming the AWP: raised to the eye, the barrel straight out to the right */
+[data-pose="aim"] .haand--awp { transform: translate(-14px, -26px); }
+[data-pose="aim"] .arm--right { transform: rotate(-55deg); }
+[data-pose="aim"] .mouth--smile { display: none; }
+[data-pose="aim"] .mouth--flat { display: inline; }
 
 /* ---------------------------------------------------------------- effects */
 .fx { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }

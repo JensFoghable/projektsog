@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from .indexer import Indexer
     from .resolve_bridge import ResolveBridge
     from .importer import Importer
+    from .achievements import PetProgress
     from .messages import MessageBoard
     from .petplay import PetPlay
     from .timetrack import TimeTracker
@@ -132,6 +133,7 @@ class Server:
         self.importer = importer
         self.petplay: "PetPlay | None" = None     # set by the app once the widget exists
         self.messages: "MessageBoard | None" = None
+        self.progress: "PetProgress | None" = None
         self.web_dir = web_dir or os.path.join(package_dir, "web")
         self.assets_dir = assets_dir or os.path.join(package_dir, "assets")
         self.sse_heartbeat_s = sse_heartbeat_s
@@ -279,6 +281,8 @@ class Server:
             ("GET", r"/api/widget/play", self._pet_status),
             ("POST", r"/api/widget/play", self._pet_play),
             ("POST", r"/api/widget/look", self._pet_look),
+            ("GET", r"/api/pet", self._pet_progress),
+            ("POST", r"/api/pet/equip", self._pet_equip),
             ("GET", r"/api/messages", self._messages_list),
             ("POST", r"/api/messages", self._messages_post),
             ("DELETE", r"/api/messages", self._messages_remove),
@@ -433,6 +437,18 @@ class Server:
 
     def _pet_look(self, req: _Request) -> Any:
         return self._pet().set_look(req.body)
+
+    # -- Klippe's trophies and wardrobe (SPEC §18.5) -----------------------------------------
+    def _wardrobe(self) -> "PetProgress":
+        if self.progress is None:
+            raise ValueError("Klippes trofæer er ikke startet")
+        return self.progress
+
+    def _pet_progress(self, req: _Request) -> Any:
+        return self._wardrobe().state()
+
+    def _pet_equip(self, req: _Request) -> Any:
+        return self._wardrobe().equip(req.body.get("slot"), req.body.get("item"))
 
     # -- messages from other programs (SPEC §19) ---------------------------------------------
     def _board(self) -> "MessageBoard":

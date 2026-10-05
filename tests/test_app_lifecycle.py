@@ -464,7 +464,7 @@ class AppHarness:
         self.widget = fakes.FakeWidget(self.journal, "widget")
         return self.widget
 
-    def _petplay(self, cfg, bus, *, widget, bridge, importer, base_url: str) -> fakes.FakePetPlay:
+    def _petplay(self, cfg, bus, *, widget, bridge, importer, base_url: str, wardrobe, on_game) -> fakes.FakePetPlay:
         self.journal.append("petplay.create")
         assert (widget, bridge, importer) == (self.widget, self.bridge, self.importer)
         assert base_url == "http://127.0.0.1:4711"

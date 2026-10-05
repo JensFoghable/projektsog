@@ -13,6 +13,29 @@ LOOK = {"stage": "baby", "outfit": "none", "pet": {"x": 25, "y": 40, "w": 210, "
         "view": {"w": 260, "h": 448}}
 
 
+class TrophyEndpointTests(ServerTestBase):
+    def setUp(self) -> None:
+        super().setUp()
+        from projektsog import achievements
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        cfg = Config(path=os.path.join(self.dir.name, "config.json"))
+        self.progress = achievements.PetProgress(cfg, FakeBus(), path=os.path.join(self.dir.name, "pet.json"))
+        self.server.progress = self.progress
+
+    def test_state_and_equip(self) -> None:
+        state = self.req("GET", "/api/pet").json()
+        self.assertEqual((state["unlocked"], state["total"]), (0, len(state["trophies"])))
+        self.assertEqual(state["equipped"]["hat"], "ingen")
+        answer = self.req("POST", "/api/pet/equip", body={"slot": "hat", "item": "ingen"}).json()
+        self.assertEqual(answer["ok"], True)
+        response = self.req("POST", "/api/pet/equip", body={"slot": "haand", "item": "awp"})
+        self.assertEqual((response.status, response.json()), (400, {"error": "AWP er ikke låst op endnu"}))
+        self.server.progress = None
+        response = self.req("GET", "/api/pet")
+        self.assertEqual((response.status, response.json()), (400, {"error": "Klippes trofæer er ikke startet"}))
+
+
 class PetEndpointTests(ServerTestBase):
     def setUp(self) -> None:
         super().setUp()

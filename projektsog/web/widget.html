@@ -14,7 +14,10 @@
     <header class="head">
       <span class="head__name" id="pet-name">Klippe</span>
       <span class="head__level" id="pet-level" title="Vokser med al den tid, du har registreret">Æg</span>
-      <span class="head__streak" id="pet-streak" title="Dage i træk med mindst 1 times arbejde" hidden></span>
+      <span class="head__right">
+        <span class="head__streak" id="pet-streak" title="Dage i træk med mindst 1 times arbejde" hidden></span>
+        <button type="button" class="head__trophies" id="trophies" title="Trofæer og garderobe" aria-haspopup="dialog">🏆 <span id="trophy-count">0</span></button>
+      </span>
     </header>
 
     <section class="stage" id="stage" aria-label="Klippe">
@@ -26,11 +29,26 @@
             <rect x="11" width="11" height="22" fill="var(--stripe-light)"/>
           </pattern>
           <radialGradient id="glow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stop-color="var(--accent)" stop-opacity=".35"/>
-            <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+            <stop offset="0%" stop-color="var(--aura, var(--accent))" stop-opacity=".35"/>
+            <stop offset="100%" stop-color="var(--aura, var(--accent))" stop-opacity="0"/>
           </radialGradient>
+          <linearGradient id="shades" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#1a1440"/>
+            <stop offset="55%" stop-color="#6b3fd6"/>
+            <stop offset="100%" stop-color="#ff8a3d"/>
+          </linearGradient>
         </defs>
         <ellipse class="pet__glow" cx="100" cy="120" rx="90" ry="80" fill="url(#glow)"/>
+        <g class="aura aura--hjerter">
+          <path d="M34 92 c-4 -6 -14 -2 -10 6 l10 9 l10 -9 c4 -8 -6 -12 -10 -6 z"/>
+          <path d="M164 70 c-3 -5 -11 -2 -8 5 l8 7 l8 -7 c3 -7 -5 -10 -8 -5 z"/>
+          <path d="M170 150 c-3 -5 -11 -2 -8 5 l8 7 l8 -7 c3 -7 -5 -10 -8 -5 z"/>
+        </g>
+        <g class="aura aura--stjernestoev">
+          <path d="M30 70 l3 7 7 3 -7 3 -3 7 -3 -7 -7 -3 7 -3 z"/><path d="M172 56 l2 5 5 2 -5 2 -2 5 -2 -5 -5 -2 5 -2 z"/>
+          <path d="M178 128 l3 7 7 3 -7 3 -3 7 -3 -7 -7 -3 7 -3 z"/><path d="M22 140 l2 5 5 2 -5 2 -2 5 -2 -5 -5 -2 5 -2 z"/>
+          <path d="M100 18 l2 5 5 2 -5 2 -2 5 -2 -5 -5 -2 5 -2 z"/><path d="M58 30 l2 4 4 2 -4 2 -2 4 -2 -4 -4 -2 4 -2 z"/>
+        </g>
         <ellipse class="pet__shadow" cx="100" cy="184" rx="46" ry="7"/>
 
         <!-- while Klippe is out playing: the hole it broke out through -->
@@ -44,6 +62,7 @@
           <path class="egg__shell" d="M100 52 C 136 52 156 104 156 132 C 156 164 132 182 100 182 C 68 182 44 164 44 132 C 44 104 64 52 100 52 Z"/>
           <path class="egg__band" d="M47 120 L153 120 L155 136 L45 136 Z" fill="url(#stripes)"/>
           <path class="egg__crack" d="M70 96 L80 104 L74 112 L86 118"/>
+          <path class="sweat" d="M156 96 Q 162 106 156 112 Q 150 106 156 96 Z"/>
           <g class="egg__eyes">
             <ellipse class="eye" cx="84" cy="150" rx="7" ry="8"/><circle class="pupil" cx="84" cy="151" r="3.5"/>
             <ellipse class="eye" cx="116" cy="150" rx="7" ry="8"/><circle class="pupil" cx="116" cy="151" r="3.5"/>
@@ -85,6 +104,7 @@
               <path class="mouth mouth--flat" d="M90 146 L 110 146"/>
               <ellipse class="mouth mouth--o" cx="100" cy="148" rx="5" ry="6"/>
             </g>
+            <path class="sweat" d="M138 94 Q 144 104 138 110 Q 132 104 138 94 Z"/>
           </g>
 
           <!-- outfits -->
@@ -106,6 +126,76 @@
           </g>
           <g class="acc acc--crown">
             <path d="M70 60 L76 34 L90 50 L100 28 L110 50 L124 34 L130 60 Z"/>
+          </g>
+
+          <!-- the wardrobe (achievements.py): hats, glasses, the mouth, the hand -->
+          <g class="hat hat--sloejfe">
+            <path d="M130 60 L113 49 Q 108 60 113 71 Z"/><path d="M130 60 L147 49 Q 152 60 147 71 Z"/>
+            <circle cx="130" cy="60" r="5"/>
+          </g>
+          <g class="hat hat--festhat">
+            <path d="M84 64 L103 12 L122 64 Z"/>
+            <path class="hat__line" d="M92 42 L114 42 M88 54 L118 54"/>
+            <circle class="hat__pom" cx="103" cy="12" r="6"/>
+          </g>
+          <g class="hat hat--baret">
+            <path d="M58 63 Q 60 40 98 37 Q 140 36 145 58 Q 118 68 58 63 Z"/>
+            <path class="hat__stem" d="M98 37 L102 29"/>
+          </g>
+          <g class="hat hat--nissehue">
+            <path d="M66 62 C 74 30, 112 12, 148 28 C 138 38, 132 48, 136 62 Z"/>
+            <rect class="hat__brim" x="60" y="55" width="82" height="13" rx="6.5"/>
+            <circle class="hat__pom" cx="150" cy="28" r="8"/>
+          </g>
+          <g class="hat hat--blomst">
+            <circle cx="66" cy="48" r="7"/><circle cx="78" cy="54" r="7"/><circle cx="74" cy="67" r="7"/>
+            <circle cx="60" cy="67" r="7"/><circle cx="55" cy="54" r="7"/>
+            <circle class="hat__pom" cx="67" cy="58" r="6"/>
+          </g>
+          <g class="hat hat--propelhat">
+            <path d="M70 64 Q 72 34 100 34 Q 128 34 130 64 Z"/>
+            <path class="hat__seg" d="M100 34 Q 90 44 86 64 L 100 64 Z M100 34 Q 112 44 116 64 L 100 64 Z"/>
+            <path class="hat__stem" d="M100 34 L100 24"/>
+            <g class="propel"><ellipse cx="88" cy="23" rx="12" ry="3.5"/><ellipse cx="112" cy="23" rx="12" ry="3.5"/></g>
+          </g>
+          <g class="briller briller--hornbriller">
+            <rect x="64" y="107" width="32" height="25" rx="9"/><rect x="104" y="107" width="32" height="25" rx="9"/>
+            <path d="M96 117 L104 117 M64 114 L50 110 M136 114 L150 110"/>
+          </g>
+          <g class="briller briller--solbriller">
+            <path class="briller__lens" d="M60 110 L98 110 Q 98 134 80 134 Q 62 134 60 110 Z"/>
+            <path class="briller__lens" d="M102 110 L140 110 Q 138 134 120 134 Q 102 134 102 110 Z"/>
+            <path class="briller__frame" d="M58 110 L142 110 M98 112 Q 100 108 102 112 M58 110 L46 106 M142 110 L154 106"/>
+            <path class="briller__shine" d="M68 114 L76 122 M110 114 L118 122"/>
+          </g>
+          <g class="mund mund--slikkepind">
+            <path class="mund__stick" d="M108 146 L128 160"/>
+            <circle cx="132" cy="163" r="9"/>
+            <path class="mund__swirl" d="M132 163 m-5 0 a5 5 0 1 0 5 -5 a3 3 0 1 0 -3 3"/>
+          </g>
+          <g class="mund mund--cigaret">
+            <path class="cig__paper" d="M106 147 L134 153"/>
+            <path class="cig__filter" d="M106 147 L113 148.5"/>
+            <circle class="cig__ember" cx="135" cy="153.2" r="2.8"/>
+            <g class="cig__smoke">
+              <path d="M137 148 q -4 -6 0 -12 q 4 -6 0 -12"/><path d="M141 146 q -4 -6 0 -12 q 4 -6 0 -12"/>
+            </g>
+          </g>
+          <g class="haand haand--kaffe">
+            <path class="kaffe__steam" d="M168 132 q -3 -5 0 -10 M176 132 q -3 -5 0 -10"/>
+            <path class="kaffe__cup" d="M162 138 L184 138 L182 162 Q 182 166 178 166 L168 166 Q 164 166 164 162 Z"/>
+            <path class="kaffe__handle" d="M184 144 Q 192 146 190 154 Q 188 158 183 157"/>
+            <ellipse class="kaffe__top" cx="173" cy="139" rx="10" ry="2.5"/>
+          </g>
+          <g class="haand haand--awp">
+            <path class="awp__stock" d="M112 156 L126 148 L140 148 L140 162 L120 166 Q 112 166 112 160 Z"/>
+            <rect class="awp__body" x="138" y="146" width="38" height="11" rx="2"/>
+            <rect class="awp__mag" x="150" y="156" width="9" height="11" rx="1.5"/>
+            <rect class="awp__barrel" x="176" y="149" width="27" height="4.5" rx="1"/>
+            <rect class="awp__brake" x="200" y="147.5" width="6" height="7.5" rx="1"/>
+            <rect class="awp__scope" x="144" y="135" width="30" height="8" rx="4"/>
+            <circle class="awp__lens" cx="174" cy="139" r="4.5"/>
+            <path class="awp__mount" d="M152 143 L152 146 M166 143 L166 146"/>
           </g>
         </g>
 
@@ -131,7 +221,6 @@
           </g>
         </g>
         <g class="zzz"><text x="150" y="70">z</text><text x="162" y="52">z</text><text x="172" y="34">Z</text></g>
-        <path class="sweat" d="M156 96 Q 162 106 156 112 Q 150 106 156 96 Z"/>
       </svg>
       <div class="hearts" id="hearts" aria-hidden="true"></div>
     </section>
@@ -161,6 +250,20 @@
       <p class="grow" id="grow"></p>
     </section>
   </main>
+  <section class="panel" id="panel" role="dialog" aria-label="Trofæer og garderobe" hidden>
+    <header class="panel__head">
+      <div class="panel__tabs" role="tablist">
+        <button type="button" class="panel__tab" role="tab" data-panel-tab="trophies" aria-selected="true">🏆 Trofæer</button>
+        <button type="button" class="panel__tab" role="tab" data-panel-tab="wardrobe" aria-selected="false">👕 Garderobe</button>
+      </div>
+      <button type="button" class="panel__close" id="panel-close" title="Luk" aria-label="Luk">×</button>
+    </header>
+    <div class="panel__body" id="panel-body"></div>
+    <footer class="panel__foot">
+      <button type="button" class="panel__play" id="panel-play">🎮 Lad Klippe lege nu</button>
+      <span class="panel__hint">Slip musen bagefter</span>
+    </footer>
+  </section>
   <canvas class="fx" id="fx" aria-hidden="true"></canvas>
 </body>
 </html>

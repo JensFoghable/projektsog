@@ -47,7 +47,9 @@ class ShowTests(unittest.TestCase):
         for stage in ("baby", "junior", "pro", "legend"):
             for name, pointer in self.POINTERS.items():
                 for seed in range(6):
-                    yield stage, name, pointer, seed, pc.build_show(geometry(), random.Random(seed), pointer, stage)
+                    awp = seed % 2 == 1                      # every other one with the AWP
+                    yield stage, name, pointer, seed, pc.build_show(geometry(), random.Random(seed), pointer, stage,
+                                                                    awp=awp)
 
     def test_the_pointer_never_leaves_the_play_area_and_ends_where_it_was(self) -> None:
         for stage, name, pointer, seed, show in self.shows():
@@ -102,6 +104,60 @@ class ShowTests(unittest.TestCase):
             with self.subTest(act=act):
                 show = pc.build_show(geometry(1.5), random.Random(1), self.POINTERS["inside"], acts=[act])
                 self.assertIn(act, [s.name for s in show])
+
+    def test_with_the_awp_klippe_shoots_after_the_pointer(self) -> None:
+        for seed in range(8):
+            for name, pointer in self.POINTERS.items():
+                with self.subTest(seed=seed, pointer=name):
+                    show = pc.build_show(geometry(), random.Random(seed), pointer, "baby", awp=True)
+                    names = [s.name for s in show]
+                    self.assertEqual(len([n for n in names if n in (*pc.ACTS, "snipe")]), 3)
+                    snipe = next(s for s in show if s.name == "snipe")
+                    frames = [snipe.at(i / 1000) for i in range(1001)]
+                    self.assertTrue(all(f.pose == "aim" and f.laser for f in frames))
+                    flashes = sum(1 for a, b in zip(frames, frames[1:]) if b.flash and not a.flash)
+                    self.assertTrue(3 <= flashes <= 9, flashes)         # a couple of tries
+                    # The laser has a mind of its own: it is not glued to the pointer …
+                    apart = [math.dist(f.laser_to, f.cursor) for f in frames]
+                    self.assertGreater(max(apart), 40)
+                    # … and the barrel follows the laser, not the pointer.
+                    for f in frames:
+                        dx = f.laser_to[0] - f.x
+                        if abs(dx) > 60:
+                            self.assertEqual(f.flip, dx < 0)
+                    self.assertIn("drop", names)
+                    self.assertIn("fetch-it", names)
+
+    def test_the_hunt(self) -> None:
+        play = PLAY
+        for seed in range(12):
+            with self.subTest(seed=seed):
+                hunt = pc.hunt_plan(random.Random(seed), play, (2900, 450), (4400, 800))
+                outcomes = [o for _t, o, _w in hunt.shots]
+                self.assertEqual(outcomes[-1], "kill")
+                self.assertEqual(outcomes.count("kill"), 1)
+                self.assertTrue(2 <= len(outcomes) <= 9)
+                self.assertTrue(all(play.contains(*a) and play.contains(*p) for a, p in zip(hunt.aim, hunt.pointer)))
+                for t, outcome, where in hunt.shots:
+                    i = hunt.index(t - hunt.step)
+                    pointer = hunt.pointer[i]
+                    if outcome == "miss":
+                        self.assertGreater(math.dist(where, pointer), 10)    # the bullet went beside it
+                    else:
+                        self.assertEqual(where, pointer)                     # right on it
+                # The pointer stands still – it only moves right after a hit.
+                hits = [t for t, o, _w in hunt.shots if o == "hit"]
+                for i, (a, b) in enumerate(zip(hunt.pointer, hunt.pointer[1:])):
+                    if a != b:
+                        t = (i + 1) * hunt.step
+                        self.assertTrue(any(0 <= t - h <= 0.45 for h in hits), t)
+                self.assertEqual(sum(1 for a, b in zip(hunt.pointer, hunt.pointer[1:]) if a != b) > 0, bool(hits))
+
+    def test_aim(self) -> None:
+        self.assertEqual(pc.aim((0, 0), (10, 0)), (0.0, False))
+        self.assertEqual(pc.aim((0, 0), (10, 10)), (45.0, False))
+        self.assertEqual(pc.aim((0, 0), (-10, 10)), (-45.0, True))
+        self.assertEqual(pc.aim((0, 0), (1, 100)), (55.0, False))           # never steeper than 55°
 
     def test_caught_playing_it_flies_home_without_the_pointer(self) -> None:
         geo = geometry()
@@ -259,6 +315,52 @@ class PlayerTests(unittest.TestCase):
         self.assertEqual(self.mouse.moves, [])
         self.assertEqual(self.events, [{"event": "home", "reason": "touched"}])   # never out
 
+    def test_a_hit_shows_on_the_pointer(self) -> None:
+        target = FakeOverlay()
+        target.hidden = 0
+        target.draw_target = lambda frame: None
+        target.hide = lambda: setattr(target, "hidden", target.hidden + 1)
+        show = [Segment("snipe", 0.2, lambda u: Frame(100, 100, pose="aim", cursor=(400 + 100 * u, 300),
+                                                      aim_at=(400 + 100 * u, 300), hit=1 - u), True),
+                Segment("put-down", 0.05, lambda u: Frame(100, 100, cursor=self.mouse.at), True),
+                Segment("home", 0.05, lambda u: Frame(100, 100))]
+        player = pc.Player(geometry(), show, None, self.overlay, self.watch, self.events.append, pointer=self.mouse.at,
+                           get_pointer=self.mouse.get, set_pointer=self.mouse.put, fps=200, target=target)
+        self.assertEqual(player.run(), "done")
+        self.assertTrue(target.shown and all(400 <= f.x <= 500 and f.y == 300 for f in target.shown))
+        self.assertGreater(target.hidden, 0)                    # gone once the hit has faded
+
+    def test_the_laser_is_drawn_once_while_everything_stands_still(self) -> None:
+        class Laser(FakeOverlay):
+            def __init__(self) -> None:
+                super().__init__()
+                self.lines, self.places, self.hidden = [], [], 0
+
+            def draw_laser(self, start, end, clear=None) -> None:
+                self.lines.append((start, end))
+
+            def show_box(self, left, top, box) -> None:
+                self.places.append((left, top, box))
+
+            def hide(self) -> None:
+                self.hidden += 1
+
+        class Sprites:
+            tip = (40.0, 0.0)
+        laser = Laser()
+        laser.size, laser.height = 2560, 1392
+        laser.canvas = laser
+        show = [Segment("aim", 0.2, lambda u: Frame(3000, 300, pose="aim", cursor=(3500, 400), laser=True,
+                                                    laser_to=(3400, 420)), True),
+                Segment("put-down", 0.05, lambda u: Frame(3000, 300, cursor=self.mouse.at), True),
+                Segment("home", 0.05, lambda u: Frame(3000, 300))]
+        player = pc.Player(geometry(), show, Sprites(), self.overlay, self.watch, self.events.append, pointer=self.mouse.at,
+                           get_pointer=self.mouse.get, set_pointer=self.mouse.put, fps=200, laser=laser)
+        self.assertEqual(player.run(), "done")
+        self.assertEqual(laser.lines, [((3000 + 46 - 2560, 300), (3400 - 2560, 420))])   # barrel → where it aims
+        self.assertEqual(laser.places, [(2560, 0, (486 - 8, 300 - 8, 840 - 486 + 16, 420 - 300 + 16))])  # just its box
+        self.assertGreater(laser.hidden, 0)
+
     def test_without_moving_the_pointer(self) -> None:
         player = pc.Player(geometry(), quick_show(self.mouse.at), None, self.overlay, self.watch,
                            self.events.append, move_pointer=False, pointer=self.mouse.at,
@@ -271,14 +373,16 @@ class PlayerTests(unittest.TestCase):
 # Drawing (GDI+, off screen)
 # ============================================================================================
 
-def write_sheet(path: str, cells: int = 4, cell: int = 480) -> None:
-    """A sprite sheet: in every cell an opaque square (the pet) on transparency."""
+def write_sheet(path: str, cells: int = 5, cell: int = 480) -> None:
+    """A sprite sheet: in every cell an opaque square (the pet) on transparency; the last one
+    ("aim") holds a barrel out to the right."""
     rows = []
     for y in range(cell):
         row = bytearray()
         for c in range(cells):
             for x in range(cell):
                 inside = 180 <= x < 300 and 200 <= y < 360 + c * 4
+                inside = inside or (c == cells - 1 and 300 <= x < 440 and 256 <= y < 264)
                 row += bytes((40, 50, 60, 255)) if inside else bytes(4)
         rows.append(b"\x00" + bytes(row))
 
@@ -316,6 +420,46 @@ class DrawingTests(unittest.TestCase):
             finally:
                 sprites.close()
         os.remove(self.sheet)            # the file is not held open
+
+    def test_the_awp_fires_from_its_muzzle(self) -> None:
+        with pc.GdiPlus():
+            sprites = pc.Sprites(self.sheet, list(petplay.POSES), 240, 2, 0.9)
+            try:
+                tx, ty = sprites.tip              # the barrel's end, from the middle of the pet
+                self.assertAlmostEqual(tx, (439 - 240) * 0.45, delta=1)
+                self.assertAlmostEqual(ty, (259.5 - 280) * 0.45, delta=1)
+                canvas = pc.Canvas(260)
+                try:
+                    canvas.draw(sprites, Frame(0, 0, pose="aim", flash=1.0), (0.0, 0.0), 1.0)
+                    self.assertGreater(canvas.pixel_alpha(int(130 + tx + 6), int(130 + ty)), 0)   # the flash
+                    canvas.draw(sprites, Frame(0, 0, pose="aim", flip=True), (0.0, 0.0), 1.0)
+                    self.assertGreater(canvas.pixel_alpha(int(130 - tx + 3), int(130 + ty + 3)), 0)  # mirrored
+                    self.assertEqual(canvas.pixel_alpha(int(130 + tx - 3), int(130 + ty + 3)), 0)
+                finally:
+                    canvas.close()
+                target = pc.Canvas(80)
+                try:
+                    target.draw_target(Frame(0, 0, hit=1.0))
+                    self.assertGreater(target.pixel_alpha(40, 40), 0)             # the hit
+                    self.assertEqual(target.pixel_alpha(2, 2), 0)
+                    target.draw_target(Frame(0, 0, hit=0.0))
+                    self.assertEqual(target.pixel_alpha(40, 40), 0)               # no sight on the pointer
+                finally:
+                    target.close()
+                laser = pc.Canvas(200, 1.0, 60)                                    # any size
+                try:
+                    laser.draw_laser((10, 30), (190, 30))
+                    self.assertGreater(laser.pixel_alpha(100, 30), 200)
+                    self.assertEqual(laser.pixel_alpha(100, 5), 0)
+                    self.assertEqual(laser.pixel_alpha(199, 59), 0)
+                    laser.draw_laser((10, 50), (90, 50), clear=(0, 20, 120, 20))   # wipes only its box
+                    self.assertEqual(laser.pixel_alpha(100, 30), 0)
+                    self.assertGreater(laser.pixel_alpha(150, 30), 200)            # outside the box: kept
+                    self.assertGreater(laser.pixel_alpha(50, 50), 200)
+                finally:
+                    laser.close()
+            finally:
+                sprites.close()
 
     def test_the_window_is_never_activated_and_lets_clicks_through(self) -> None:
         with pc.GdiPlus():
@@ -387,8 +531,9 @@ class FakeSprites:
         self.ok = True
         self.asked: list[tuple[str, str]] = []
 
-    def ensure(self, stage: str, outfit: str):
+    def ensure(self, stage: str, outfit: str, wearing=None):
         self.asked.append((stage, outfit))
+        self.wearing = wearing
         return "C:\\sheets\\klippe.png" if self.ok else None
 
 
@@ -470,8 +615,25 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(arg("--input-tick"), "1000")
         self.assertEqual(arg("--pet"), "25.0,40.0,210.0,210.0")
         self.assertEqual(arg("--view"), "260.0,448.0")
-        self.assertEqual(arg("--poses"), "normal,happy,cheer,oops")
+        self.assertEqual(arg("--poses"), "normal,happy,cheer,oops,aim")
         self.assertEqual(self.sprites.asked, [("baby", "color")])
+        self.assertEqual(arg("--awp"), "0")
+
+    def test_klippe_wears_its_wardrobe_and_its_games_count(self) -> None:
+        games = []
+        self.play = petplay.PetPlay(self.cfg, self.bus, widget=FakeWidget(), probe=self.probe, sprites=self.sprites,
+                                    spawn=lambda argv, out, end: self.children.append(FakeChild(argv, out, end))
+                                    or self.children[-1], clock=lambda: self.now,
+                                    wardrobe=lambda: {"hat": "baret", "haand": "awp"},
+                                    on_game=lambda reason, out: games.append((reason, out)))
+        self.play.set_look(LOOK)
+        self.idle_for(6)
+        argv = self.children[0].argv
+        self.assertEqual(argv[argv.index("--awp") + 1], "1")              # it shoots at the pointer
+        self.assertEqual(self.sprites.wearing, {"hat": "baret", "haand": "awp"})
+        self.children[0].on_out()
+        self.children[0].on_exit("touched")
+        self.assertEqual(games, [("touched", True)])
 
     def test_one_game_per_pause(self) -> None:
         self.idle_for(6)
@@ -646,7 +808,7 @@ class SpriteSheetTests(unittest.TestCase):
             with open(os.path.join(self.web, name), "w") as fh:
                 fh.write(name)
         self.runs: list[list[str]] = []
-        self.size = (240 * 4 * 2, 240 * 2)
+        self.size = (240 * 5 * 2, 240 * 2)
 
     def run_edge(self, args, **kwargs) -> None:
         self.runs.append(args)
@@ -665,9 +827,9 @@ class SpriteSheetTests(unittest.TestCase):
         args = self.runs[0]
         self.assertIn("--headless=new", args)
         self.assertIn("--default-background-color=00000000", args)
-        self.assertIn("--window-size=960,240", args)
+        self.assertIn("--window-size=1200,240", args)
         self.assertIn("--force-device-scale-factor=2", args)
-        self.assertEqual(args[-1], "http://127.0.0.1:4711/widget.html?sprites=normal,happy,cheer,oops"
+        self.assertEqual(args[-1], "http://127.0.0.1:4711/widget.html?sprites=normal,happy,cheer,oops,aim"
                                    "&stage=baby&outfit=none&cell=240")
         self.assertEqual(sheets.ensure("baby", "none"), path)
         self.assertEqual(len(self.runs), 1)

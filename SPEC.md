@@ -1233,6 +1233,38 @@ cancelled and its temp file removed).
   with ≥ 1 h (ending today, or yesterday while today is under an hour). Effects on a canvas;
   `prefers-reduced-motion` shows only words and an emoji.
 
+### 18.5 Trophies and wardrobe (`achievements.py`)
+
+* `PetProgress(cfg, bus, tracker=, importer=, path=pet.json)` recomputes every 5 min (first
+  after 8 s; at once after a game): `compute_stats()` from all time segments, the import history
+  and the game counters → `TROPHIES` (40: growth/levels, rhythm, goal, focus, pages, projects,
+  cards, Klippe, seasons, secrets). A trophy, once earned, is kept with its time. They reward
+  steady work, breaks, variety and going home on time – streaks count workdays only (weekends
+  neither count nor break them); nothing rewards overtime or nights.
+* Wardrobe slots: farve, striber, hat, briller, mund, haand, aura (`ITEMS`; one default per
+  slot). A trophy may give one item. `FINDS`: rare and legendary items (incl. the AWP, the cool
+  shades, the cigarette) are found on workdays with ≥ 1 h, decided by
+  `sha256(<this PC's secret>|<day>|<item>)` < chance – the same every time, different per PC.
+* `GET /api/pet` → `{trophies: [...], items: [...], equipped, slots, unlocked, total}` (secret
+  locked trophies: name "???", text "Hemmelig", no reward). `POST /api/pet/equip {slot, item}`
+  (only owned items) → SSE `pet_look {equipped}`. New trophies/finds → SSE `pet_progress {nye,
+  foerste, unlocked, total}`: the widget celebrates (fireworks for legendary; the very first
+  computation gives one summary line).
+* The widget's 🏆 button opens a panel (trophies with progress, wardrobe with locked items and
+  how to get them). Worn items are `data-<slot>` attributes on `#app` and on every sprite cell
+  (`widget.html?…&pynt=slot:item,…`), so Klippe wears them outside the box too. With the AWP the
+  game always includes "snipe": Klippe tosses the pointer away and hunts it (`hunt_plan`). The
+  pointer stands still; a red laser sight runs from the end of the barrel (the right-most pixel
+  of the aiming pose `aim`, mirrored to the left, ±55°) to where Klippe aims – independent of the
+  pointer: a baby's aim, a spring (ω 7, ζ 0.5) with trembling that searches its way there – and
+  Klippe shoots once it is steady (impatient after 1.7 s). Planned: 1–2 misses (aimed 28–55 px
+  off) and 1–2 hits in random order, then the kill; what the laser really points at decides (a
+  shot far off is a miss after all). A hit knocks the pointer 110–220 px away (it stays still
+  there) while Klippe reloads (0.4 s, the laser kicks up) and has to find it again; the bullet's
+  sparks land where the laser pointed. The kill drops the pointer to the floor, and Klippe fetches
+  it. The laser is drawn into a work-area-sized canvas but only its own box is wiped and shown
+  (`UpdateLayeredWindow` with a source offset). The panel also has "🎮 Lad Klippe lege nu" (= "Vis legen nu").
+
 ### 18.4 Klippe plays (`petplay.py` main process, `petplay_child.py` helper)
 
 * `PetPlay(cfg, bus, widget=, bridge=, importer=, base_url=)` is created with the widget and

@@ -200,6 +200,13 @@ at slå det fra igen.
 - **Vokser:** fra æg til baby, junior, pro og legende med al den tid, du har registreret, og viser
   🔥 dage i træk med mindst en times arbejde. Klik på den, så bliver den glad.
 
+**Trofæer og garderobe:** Klik på 🏆 øverst i Klippe. Der er 40 trofæer – for at nå dagens mål,
+holde pauser, gå hjem til tiden, arbejde stabilt (kun hverdage tæller), bruge alle Resolves sider,
+overføre kort og meget mere; nogle kun i bestemte måneder, og nogle er hemmelige. Mange giver en ny
+ting til garderoben: farver, striber, hatte, briller, noget i munden eller hånden og en aura. De
+sjældne og legendariske ting – blandt andet seje solbriller, en cigaret og en AWP, som Klippe skyder
+efter musen med, når du er væk – findes kun ved held på en arbejdsdag, og hver pc har sit eget held.
+
 **Beskeder:** Når en Claude-session vil bruge Resolve, er færdig eller venter på dig, kommer
 beskeden op nede ved Klippe med knapperne (f.eks. **Byg nu**) og en lille lyd – den tager ikke
 fokus fra Resolve, og den kommer aldrig ind i søgevinduet. Der vises én besked ad gangen; er der
