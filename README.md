@@ -242,7 +242,8 @@ en besked ved uret, hvis du har slået det fra), og kortet vises også øverst i
 1. **Kortet**: Projektsøg kan se, hvilket kamera det er fra (FX9, FS7, A7S, DJI, GoPro – læst i
    klippenes egne filer), hvor mange klip, hvor meget det fylder, og hvornår der er optaget.
    Den ser også efter, om klippene allerede ligger i et projekt (samme navn *og* størrelse – FX9'ens
-   tæller starter forfra, så navnet alene er ikke nok).
+   tæller starter forfra, så navnet alene er ikke nok). Er kortet tomt – formateret i kameraet
+   eller på pc'en – står der **Kortet er tomt**, så du ved, at kortet er læst uden fejl.
 2. **Hvor skal klippene hen?** Øverst står forslagene: projektet, hvor nogle af kortets klip
    allerede ligger, projektet der er åbent i DaVinci Resolve, projekter du har arbejdet på i dag,
    og projekter du lige har oprettet. Du kan også søge efter et andet projekt eller vælge

@@ -1094,7 +1094,8 @@ class MockImporter:
     """In-memory imitation of importer.Importer (SPEC §17): it never touches a real disk.
 
     Flags: ``card`` puts an FX9 card in E:, ``card2`` also an A7S card in G: (its clips are
-    in Rikke Lindholm already); ``import-fail`` stops a copy half-way ("Kortet blev taget ud …")."""
+    in Rikke Lindholm already); ``card-empty`` puts an empty, freshly formatted Sony card in F:;
+    ``import-fail`` stops a copy half-way ("Kortet blev taget ud …")."""
 
     def __init__(self, bus: EventBus) -> None:
         self.bus = bus
@@ -1115,6 +1116,13 @@ class MockImporter:
                           "stills": 0, "bytes": 77_700_000_000, "first": yesterday + 21 * 3600 + 41 * 60,
                           "last": yesterday + 23 * 3600 + 11 * 60,
                           "found": {"clips": 0, "files": 0, "total": 297, "complete": False, "projects": []},
+                          "inserted": time.time(), "dismissed": False})
+        if "card-empty" in flags:
+            cards.append({"id": "5C6D7E8F@F:", "drive": "F:", "serial": "5C6D7E8F", "label": "",
+                          "volume_size": 128 * 10 ** 9, "kinds": ["xdcam"], "model": None, "camera": "Sony",
+                          "folder": "F:\\XDROOT\\Clip", "files": 0, "clips": 0, "stills": 0, "bytes": 0,
+                          "first": None, "last": None, "blank": True,
+                          "found": {"clips": 0, "files": 0, "total": 0, "complete": False, "projects": []},
                           "inserted": time.time(), "dismissed": False})
         if "card2" in flags:
             cards.append({"id": "1A2B3C4D@G:", "drive": "G:", "serial": "1A2B3C4D", "label": "",

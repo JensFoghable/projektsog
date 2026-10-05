@@ -206,6 +206,37 @@ class CardTests(ImporterCase):
         self.assertEqual(notes[0]["title"], "FX9-kort i X:")
         self.assertTrue(self.controller.shown.empty())
 
+    def test_an_empty_card_is_shown_as_empty(self) -> None:
+        for name in os.listdir(self.clip_dir()):
+            os.remove(os.path.join(self.clip_dir(), name))          # formatted in the camera
+        self.importer.poll()
+        (card,) = self.importer.cards()
+        self.assertEqual((card["camera"], card["model"], card["files"], card["clips"], card["bytes"], card["blank"]),
+                         ("Sony", None, 0, 0, 0, True))
+        self.assertEqual(card["folder"], self.clip_dir())
+        self.assertEqual(self.controller.shown.get(timeout=2), {"reason": "card", "panel": "import"})
+        with self.assertRaisesRegex(ValueError, importer.MSG_EMPTY):
+            self.importer.plan(card["id"], self.project)
+        # Without auto-open: a message says so.
+        self.cfg.update({"import_auto_open": False})
+        self.volumes = []
+        self.importer.poll()
+        self.volumes = [self.volume()]
+        self.importer.poll()
+        notes = [d for t, d in self.drain() if t == "notify"]
+        self.assertEqual(notes[-1], {"title": "Sony-kortet i X: er tomt", "text": "Der er ingen klip at overføre",
+                                     "level": "info"})
+
+    def test_a_card_with_nothing_on_it_is_shown_as_empty_but_never_a_hard_disk(self) -> None:
+        blank = os.path.join(self.dir.name, "blank")
+        os.makedirs(os.path.join(blank, "System Volume Information"))
+        self.volumes = [self.volume(root=blank, serial="99990000", drive="Z:"),
+                        self.volume(root=blank, serial="88887777", drive="W:", drive_type=3)]
+        self.importer.poll()
+        (card,) = self.importer.cards()
+        self.assertEqual((card["drive"], card["camera"], card["kinds"], card["files"], card["folder"]),
+                         ("Z:", None, [], 0, blank))
+
     def test_disks_and_volumes_without_media_are_ignored(self) -> None:
         empty = os.path.join(self.dir.name, "usb")
         os.makedirs(os.path.join(empty, "Kunder"))

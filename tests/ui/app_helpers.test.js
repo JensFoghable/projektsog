@@ -446,7 +446,13 @@ test('import: a camera card is described in one line', () => {
     { tone: 'part', text: 'Alle klip er overført til Rikke Lindholm, men 7 filer mangler' });
   assert.deepEqual(h.cardStatus({ ...FX9, found: found(99, 297) }),
     { tone: 'done', text: 'Alle 99 klip er overført til Rikke Lindholm' });
-  assert.deepEqual(h.cardStatus({ ...FX9, files: 0, clips: 0, bytes: 0 }), { tone: 'done', text: 'Kortet er tomt' });
+  const empty = { ...FX9, camera: 'Sony', model: null, files: 0, clips: 0, bytes: 0, first: null, last: null,
+    volume_size: 128e9, blank: true };
+  assert.deepEqual(h.cardStatus(empty), { tone: 'done', text: 'Kortet er tomt – der er ingen klip at overføre' });
+  assert.equal(h.cardTitle(empty), 'Sony-kort i E:');
+  assert.equal(h.cardFacts(empty, NOW), 'Ingen filer · 119 GB-kort');
+  assert.equal(h.cardTitle({ ...empty, camera: null }), 'Kort i E:');      // nothing on it at all
+  assert.equal(h.cardFacts({ ...empty, volume_size: 0 }, NOW), 'Ingen filer');
 });
 
 test('import: progress, time left and the outcome', () => {

@@ -618,13 +618,14 @@
 
   // ---------------------------------------------------------------- import helper
 
-  /** "FX9-kort i E:" */
+  /** "FX9-kort i E:" ("Kort i E:" for an empty card nothing tells the camera of) */
   function cardTitle(card) {
-    return `${card.camera || 'Kamera'}-kort i ${card.drive}`;
+    return `${card.camera ? `${card.camera}-kort` : 'Kort'} i ${card.drive}`;
   }
 
-  /** "99 klip · 72,4 GB · optaget 29. sep. 21.41–23.11" */
+  /** "99 klip · 72,4 GB · optaget 29. sep. 21.41–23.11" ("Ingen filer · 128 GB-kort" when empty) */
   function cardFacts(card, now = Date.now()) {
+    if (!card.files) return `Ingen filer${card.volume_size ? ` · ${formatBytes(card.volume_size)}-kort` : ''}`;
     const parts = [plural(card.clips || card.files || 0, 'klip', 'klip')];
     if (card.stills) parts.push(plural(card.stills, 'foto', 'fotos'));
     parts.push(formatBytes(card.bytes || 0));
@@ -643,7 +644,7 @@
     const found = (card && card.found) || { clips: 0, files: 0, projects: [] };
     const clips = card.clips || 0;
     const where = found.projects && found.projects.length ? found.projects[0].name : null;
-    if (!card.files) return { tone: 'done', text: 'Kortet er tomt' };
+    if (!card.files) return { tone: 'done', text: 'Kortet er tomt – der er ingen klip at overføre' };
     if (found.complete) return { tone: 'done', text: `Alle ${plural(clips, 'klip', 'klip')} er overført${where ? ` til ${where}` : ''}` };
     if (!found.clips && !found.files) return { tone: 'new', text: 'Ikke overført før' };
     if (clips && found.clips >= clips) {
@@ -857,6 +858,7 @@
     importError: $('import-error'), importCopy: $('import-copy'), importPrepare: $('import-prepare'),
     importMove: $('import-move'), importMoveLabel: $('import-move-label'),
     importHistoryBox: $('import-history-box'), importHistory: $('import-history'),
+    importWhere: $('import-where'), importTransfer: $('import-transfer'),
   };
 
   const state = {
@@ -3166,7 +3168,8 @@
     const seq = ++imp.planSeq;
     imp.plan = null;
     imp.planError = imp.choice === 'new' && el.importName.value.trim() ? newNameError() : null;
-    if (!project || !imp.cardId || imp.planError) {
+    const card = imp.cards.find((c) => c.id === imp.cardId);
+    if (!project || !imp.cardId || imp.planError || (card && !card.files)) {
       renderImportTarget();
       return;
     }
@@ -3289,6 +3292,9 @@
     const status = cardStatus(card);
     const complete = Boolean(card.found && card.found.complete && card.found.projects.length);
     const where = complete ? card.found.projects[0] : null;
+    const empty = !card.files && !jobRunning();
+    el.importWhere.hidden = empty;      // nothing to import: no choices, no buttons
+    el.importTransfer.hidden = empty;
     el.importCard.classList.toggle('is-done', complete);
     el.importCard.replaceChildren(
       h('div', { class: 'imp-card__icon', 'aria-hidden': 'true' }, svgIcon(complete ? 'check' : 'card')),
@@ -3299,7 +3305,10 @@
         where ? h('p', { class: 'imp-card__done' }, `Alle ${plural(card.found.total || card.files, 'fil', 'filer')} findes med `
           + `samme navn og størrelse i ${where.folder} – kortet kan tages ud.`) : null,
         where ? h('div', { class: 'imp-actions' }, h('button', { type: 'button', class: 'btn btn--secondary btn--sm',
-          dataset: { importAction: 'open', path: where.folder } }, svgIcon('open'), 'Åbn mappen')) : null));
+          dataset: { importAction: 'open', path: where.folder } }, svgIcon('open'), 'Åbn mappen')) : null,
+        empty && card.blank ? h('p', { class: 'imp-card__done' }, 'Kortet er læst, og der er ingen fejl – der ligger bare ingen '
+          + 'klip på det. Er det ikke det kort, du ventede, så tag det ud og sæt det rigtige i.') : null));
+    if (empty) return;
     renderImportChoices();
     renderImportTarget();
   }

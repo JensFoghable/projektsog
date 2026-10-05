@@ -5,6 +5,8 @@
   FX9, FS7), Sony Alpha/Cinema Line (``PRIVATE\\M4ROOT\\CLIP`` + stills in ``DCIM``), DJI and
   GoPro (``DCIM``). The camera model comes from the clips' XML (``modelName``) and picks the
   project's ``Klip\\<camera>`` folder (``import_camera_folders``).
+* An empty card (the camera's folders without a file, or a card with nothing on it at all) is
+  shown too - "Kortet er tomt" - so a card going in never looks like it was not noticed.
 * "Already imported" = a file with the same name AND size somewhere in the index (camera
   counters wrap, so names alone repeat) - or in the target folder.
 * Targets: projects holding some of the card's clips, the project open in Resolve, projects
@@ -66,6 +68,12 @@ MSG_BUSY = "En overførsel er allerede i gang"
 MSG_NO_CARD = "Kortet er ikke sat i længere"
 MSG_CARD_GONE = "Kortet blev taget ud under overførslen – sæt det i igen og tryk Fortsæt"
 MSG_DISK_FULL = "Der er ikke plads nok på disken"
+MSG_EMPTY = "Kortet er tomt – der er ingen klip at overføre"
+
+# An empty card has no clip to read the model from: its layout says this much.
+KIND_CAMERAS = {"xdcam": "Sony", "m4root": "Sony", "dji": "DJI", "gopro": "GoPro"}
+# Windows' own folders on a card formatted on a PC (and a Mac's hidden ones start with ".").
+_ROOT_SYSTEM = frozenset({"system volume information", "$recycle.bin"})
 
 
 class ImportCancelled(Exception):
@@ -103,6 +111,15 @@ def detect_card(root: str) -> list[tuple[str, str]]:
             elif upper.endswith("MSDCF") and found and found[0][0] in ("m4root", "xdcam"):
                 found.append(("stills", folder))
     return found
+
+
+def blank_volume(root: str) -> bool:
+    """Nothing on the volume at all (a card formatted on a PC): only the system's own folders."""
+    try:
+        with os.scandir(root) as entries:
+            return all(e.name.casefold() in _ROOT_SYSTEM or e.name.startswith(".") for e in entries)
+    except OSError:
+        return False
 
 
 def card_files(folders: list[tuple[str, str]]) -> list[dict[str, Any]]:
@@ -809,24 +826,36 @@ class Importer:
     def _analyse(self, key: str, vol: dict[str, Any]) -> dict[str, Any] | None:
         root = str(vol.get("root") or (vol["drive"] + "\\"))
         status, folders = self._call(f"card:{vol['drive']}", lambda: detect_card(root), FS_TIMEOUT_S)
-        if status != "ok" or not folders:
+        if status != "ok":
             return None
-        status, files = self._call(f"card:{vol['drive']}", lambda: card_files(folders), 30.0)
-        if status != "ok" or not files:
+        files: list[dict[str, Any]] = []
+        if folders:
+            status, files = self._call(f"card:{vol['drive']}", lambda: card_files(folders), 30.0)
+            if status != "ok" or files is None:
+                return None
+        elif vol.get("drive_type") == 2:       # a card reader (or a stick) - never a hard disk
+            status, blank = self._call(f"card:{vol['drive']}", lambda: blank_volume(root), FS_TIMEOUT_S)
+            if status != "ok" or not blank:
+                return None
+        else:
             return None
         kinds = {kind for kind, _ in folders}
         model = camera_model(files, kinds)
         media = [f for f in files if f["media"]]
-        first_name = media[0]["name"] if media else files[0]["name"]
-        camera = camera_folder(model, first_name, self.cfg.get("import_camera_folders") or [])
+        if files:
+            first_name = media[0]["name"] if media else files[0]["name"]
+            camera = camera_folder(model, first_name, self.cfg.get("import_camera_folders") or [])
+        else:
+            # Empty: nothing to import, and no clip to read the model from.
+            camera = model or next((KIND_CAMERAS[k] for k, _ in folders if k in KIND_CAMERAS), None)
         by_time = sorted(media, key=lambda f: f["mtime"] or 0)
         card = {
             "id": key, "drive": vol["drive"], "serial": str(vol["serial"]).upper(),
             "label": vol.get("label") or "", "volume_size": vol.get("size") or 0,
             "kinds": sorted(kinds), "model": model, "camera": camera,
-            "folder": folders[0][1],
+            "folder": folders[0][1] if folders else root,
             "files": len(files), "clips": len(media), "stills": sum(1 for f in files if f["still"]),
-            "bytes": sum(f["size"] for f in files),
+            "bytes": sum(f["size"] for f in files), "blank": not files,      # empty when it went in
             "first": recorded_at(by_time[0]) if by_time else None,
             "last": recorded_at(by_time[-1]) if by_time else None,
             "found": self._already_imported(files, str(vol["serial"]).upper()),
@@ -901,6 +930,11 @@ class Importer:
         if controller is not None and self.cfg.get("import_auto_open", True):
             threading.Thread(target=lambda: controller.show_window(reason="card", panel="import"),
                              name="card-show", daemon=True).start()
+            return
+        if not card["files"]:
+            name = f"{card['camera']}-kortet" if card["camera"] else "Kortet"
+            self.bus.publish("notify", {"title": f"{name} i {card['drive']} er tomt",
+                                        "text": "Der er ingen klip at overføre", "level": "info"})
             return
         found = card["found"]
         clips = card["clips"] or card["files"]
@@ -1041,6 +1075,8 @@ class Importer:
     def plan(self, card_id: str, project: str, *, separate: bool = False) -> dict[str, Any]:
         """Where exactly the clips go in ``project`` and what is new there."""
         card = self._card(card_id)
+        if not card["_files"]:
+            raise ValueError(MSG_EMPTY)
         project = _clean_dir(project)
         result = self._fs(f"plan:{project.casefold()}", lambda: self._plan(card, project, separate),
                           15.0, "Projektmappen svarer ikke")

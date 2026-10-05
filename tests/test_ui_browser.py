@@ -1401,6 +1401,25 @@ CHOSEN = ("document.querySelector('#panel-import [data-import-choice][aria-check
 RIKKE = "C:\\Kunder 2026 (STUDIO)\\Rikke Lindholm"
 
 
+class EmptyCardTests(UiCase):
+    """An empty card is shown as empty – never silently ignored, as if it was not noticed."""
+    scenario = "asked,card-empty"
+
+    def test_an_empty_card_says_so_and_offers_nothing_to_import(self) -> None:
+        self.open(ready=ROWS + " && document.querySelector('.card--camera')")
+        self.assertEqual(self.text(".card--camera .card__title"), "Sony-kort i F:")
+        self.assertEqual(self.text(".card--camera .card__text"),
+                         "Ingen filer · 119 GB-kort · Kortet er tomt – der er ingen klip at overføre")
+        self.page.click(".card--camera .btn--primary")
+        self.wait(IMPORT_READY + " && document.querySelector('.imp-card__title')")
+        self.assertEqual(self.text(".imp-card__status"), "Kortet er tomt – der er ingen klip at overføre")
+        self.assertIn("der ligger bare ingen klip på det", self.text("#import-card"))
+        self.assertFalse(self.visible("#import-where"))
+        self.assertFalse(self.visible("#import-transfer"))
+        time.sleep(0.3)
+        self.assertEqual(self.requests("/api/import/plan", "GET"), [])
+
+
 class ImportTests(UiCase):
     """The import helper: a camera card in the reader → where its clips go → copy (SPEC §17)."""
     scenario = "asked,card"

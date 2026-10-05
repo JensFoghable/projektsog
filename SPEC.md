@@ -1160,6 +1160,16 @@ cancelled and its temp file removed).
   longest prefix wins; else a folder named like the clip prefix; else the model) gives the
   `Klip` subfolder. Recording span = `CreationDate` of the first/last clip (display only: camera
   clocks can be wrong). Cards present at startup are listed but never announced.
+* **Empty cards** are cards too, so one going in never looks unnoticed: those folders without a
+  file (formatted in the camera; `camera` from the layout: XDCAM/M4ROOT → "Sony", DJI, GoPro),
+  or a removable (`drive_type` 2, never a hard disk) volume with nothing but
+  `System Volume Information`, `$RECYCLE.BIN` and dot-entries at its root (`camera` null,
+  `kinds` [], `folder` = the root). `blank: true` = empty when it went in. `plan`/`start_import`
+  → 400 "Kortet er tomt – der er ingen klip at overføre"; without auto-open the notification is
+  "<camera>-kortet i E: er tomt". The UI: "Sony-kort i F:" ("Kort i F:" without a camera),
+  "Ingen filer · 119 GB-kort · Kortet er tomt – der er ingen klip at overføre"; the Import tab
+  hides "Hvor skal klippene hen?" and the transfer box and (for `blank`) says the card was read
+  without errors, it just holds no clips.
 * **Already imported** = the same name AND size, for every file of the card (clips and their
   XML/BIM sidecars). `Indexer.find_files` only nominates folders (never the card's own volume);
   up to 8 of them are listed NOW (`call_with_timeout`), and only a folder that cannot be listed
