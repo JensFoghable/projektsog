@@ -31,6 +31,13 @@
   const ACTION_LABELS = { folder: 'Åbn mappe', reveal: 'Vis i Stifinder', file: 'Åbn fil' };
   const SETTINGS_TABS = ['placeringer', 'generelt', 'resolve', 'tid', 'import'];
   const TIME_PERIODS = ['today', 'yesterday', 'week', 'last-week', 'month', 'last-month'];
+  // Browser sites whose time counts on the open Resolve project (Tid tab): the setting, its form, the toast.
+  const SITE_LISTS = [
+    { key: 'time_music_sites', form: 'timeSitesForm', input: 'timeSites', error: 'timeSitesError',
+      saved: 'Musik- og lydsiderne er gemt' },
+    { key: 'time_ai_sites', form: 'timeAiSitesForm', input: 'timeAiSites', error: 'timeAiSitesError',
+      saved: 'AI-siderne er gemt' },
+  ];
   const SCAN_VISIBLE_AFTER_MS = 1500;
 
   const FILE_TYPES = extensionMap({
@@ -544,7 +551,8 @@
     }
     if (s.state === 'recording' && s.project) {
       const since = s.since ? ` siden ${CLOCK.format(new Date(s.since * 1000))}` : '';
-      const where = s.bucket === 'musik' ? 'Musik/lyd i browseren' : (s.bucket_label || 'Resolve');
+      const where = { musik: 'Musik/lyd i browseren', ai: 'AI-video/billeder i browseren' }[s.bucket]
+        || s.bucket_label || 'Resolve';
       const timeline = s.timeline ? `Tidslinje „${s.timeline}“ · ` : '';
       return { tone: 'rec', main: `Registrerer: ${s.project}`, sub: `${timeline}${where}${since}` };
     }
@@ -559,7 +567,7 @@
     }
     if (s.state === 'paused') {
       return { tone: 'pause', main: 'Pause – DaVinci Resolve er ikke i forgrunden',
-        sub: 'Tid i Resolve og på musik- og lydsider som Artlist tæller med.' };
+        sub: 'Tid i Resolve og på sider som Artlist og Higgsfield tæller med.' };
     }
     if (s.state === 'no-resolve') {
       return { tone: 'pause', main: 'Venter på DaVinci Resolve', sub: 'Tiden tæller, når et projekt er åbent i Resolve.' };
@@ -848,6 +856,7 @@
     timeReportTitle: $('time-report-title'), timeDetail: $('time-detail'), timeRound: $('time-round'),
     timeExport: $('time-export'), timeTable: $('time-table'), timeIdle: $('time-idle'),
     timeSitesForm: $('time-sites-form'), timeSites: $('time-sites'), timeSitesError: $('time-sites-error'),
+    timeAiSitesForm: $('time-ai-sites-form'), timeAiSites: $('time-ai-sites'), timeAiSitesError: $('time-ai-sites-error'),
     petGoal: $('pet-goal'), petNameForm: $('pet-name-form'), petName: $('pet-name'),
     petPlayIdle: $('pet-play-idle'), petPlayNow: $('pet-play-now'), petPlayState: $('pet-play-state'),
     importJob: $('import-job'), importNone: $('import-none'), importMain: $('import-main'),
@@ -880,7 +889,7 @@
     locationKeyAt: 0, locationPointer: false, firstPaint: null, renderToken: 0,
     // detail: '' (one row per project), 'day' or 'timeline' (rows under each project)
     time: { status: null, report: null, from: '', to: '', detail: '', seq: 0, timer: 0, signature: '',
-      sitesDirty: false, error: null },
+      sitesDirty: new Set(), error: null },
     // Import helper: cards, the running/last job, and the choices in the Import tab.
     imp: { cards: [], job: null, history: [], cardId: null, options: null, choice: null, picked: [],
       results: [], root: null, plan: null, planSeq: 0, optionsSeq: 0, searchSeq: 0, separate: false,
@@ -2142,8 +2151,8 @@
     hideFieldError(el.hostError, el.hostInput);
     hideFieldError(el.rootError, el.rootInput);
     hideFieldError(el.hotkeyError, el.hotkeyInput);
-    hideFieldError(el.timeSitesError, el.timeSites);
-    state.time.sitesDirty = false;
+    for (const list of SITE_LISTS) hideFieldError(el[list.error], el[list.input]);
+    state.time.sitesDirty.clear();
     renderTimeButton();
     scheduleTimePoll();
     if (focus) focusSearch(true);
@@ -2847,8 +2856,11 @@
     selectValue(el.timeRound, round, `Afrund til ${round} min`);
     const idle = Number(s.time_idle_minutes) || 10;
     selectValue(el.timeIdle, idle, `${idle} min`);
-    if (document.activeElement !== el.timeSites && !state.time.sitesDirty) {
-      el.timeSites.value = (s.time_music_sites || []).join(', ');
+    for (const list of SITE_LISTS) {
+      const input = el[list.input];
+      if (document.activeElement !== input && !state.time.sitesDirty.has(list.key)) {
+        input.value = (s[list.key] || []).join(', ');
+      }
     }
   }
 
@@ -2962,13 +2974,14 @@
     saveSettings({ [key]: value });
   }
 
-  async function submitTimeSites(event) {
+  async function submitTimeSites(list, event) {
     event.preventDefault();
-    const sites = el.timeSites.value.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
-    if (await saveSettings({ time_music_sites: sites }, { errorNode: el.timeSitesError, input: el.timeSites })) {
-      state.time.sitesDirty = false;
+    const input = el[list.input];
+    const sites = input.value.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean);
+    if (await saveSettings({ [list.key]: sites }, { errorNode: el[list.error], input })) {
+      state.time.sitesDirty.delete(list.key);
       renderTimeControls();
-      toast('Musik- og lydsiderne er gemt', 'ok');
+      toast(list.saved, 'ok');
     }
   }
 
@@ -4087,7 +4100,7 @@
       const find = event.target.closest('[data-time-find]');
       if (find) findTimeProject(find.dataset.timeFind);
     });
-    el.timeSitesForm.addEventListener('submit', submitTimeSites);
+    for (const list of SITE_LISTS) el[list.form].addEventListener('submit', (event) => submitTimeSites(list, event));
     el.petGoal.addEventListener('change', () => saveSettings({ widget_daily_goal_hours: Number(el.petGoal.value) || 6 }));
     el.petPlayIdle.addEventListener('change', () => saveSettings({ widget_play_idle_minutes: Number(el.petPlayIdle.value) || 5 }));
     el.petPlayNow.addEventListener('click', playPetNow);
@@ -4162,10 +4175,12 @@
       }
     });
     el.importSearch.addEventListener('input', scheduleImportSearch);
-    el.timeSites.addEventListener('input', () => {
-      state.time.sitesDirty = true;
-      hideFieldError(el.timeSitesError, el.timeSites);
-    });
+    for (const list of SITE_LISTS) {
+      el[list.input].addEventListener('input', () => {
+        state.time.sitesDirty.add(list.key);
+        hideFieldError(el[list.error], el[list.input]);
+      });
+    }
   }
 
   function init() {

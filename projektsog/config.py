@@ -114,8 +114,8 @@ DEFAULTS: dict[str, Any] = {
     #   "open"   also open the project folder in Explorer automatically
     "resolve_follow": "notify",
     # --- Time tracking (projektsog/timetrack.py) -----------------------------------------
-    # Counts time per Resolve project and page while Resolve is in front (and on music sites
-    # below while a project is open). A pause longer than time_idle_minutes is not counted;
+    # Counts time per Resolve project and page while Resolve is in front (and on music and AI
+    # sites below while a project is open). A pause longer than time_idle_minutes is not counted;
     # a moving playhead counts as activity.
     "time_tracking_enabled": True,
     "time_idle_minutes": 10,
@@ -124,6 +124,8 @@ DEFAULTS: dict[str, Any] = {
         "Artlist", "Epidemic Sound", "Musicbed", "Soundstripe", "PremiumBeat", "Envato",
         "Motion Array", "Audio Network", "Freesound", "Soundsnap",
     ],
+    # Browser tab titles that count as "AI-video/billeder" work (generating AI video and images).
+    "time_ai_sites": ["Higgsfield"],
     "time_round_minutes": 15,          # default rounding offered in the report (0 = none)
     # Import helper (importer.py): camera cards (XDROOT, PRIVATE\M4ROOT, DJI, GoPro) are offered
     # for import into a project's Klip\<camera> folder.

@@ -3,15 +3,17 @@
 Every few seconds the tracker looks at three cheap signals:
 
 * which window is in front (``winui``): DaVinci Resolve, a browser showing a music/SFX site
-  such as Artlist (``time_music_sites``), or anything else;
+  such as Artlist (``time_music_sites``) or an AI video/image site such as Higgsfield
+  (``time_ai_sites``), or anything else;
 * when the keyboard or mouse was last used (``GetLastInputInfo``);
 * what Resolve is doing (``ResolveBridge.activity()``: the open project, the page – Edit, Color,
   Fusion … – the playhead and whether a render runs).
 
 Time counts when Resolve is in front with a project open (bucket = the page), or when a music
-site is in front while a Resolve project is open (bucket ``"musik"``). A moving playhead counts
-as activity, so watching playback is not "idle" - for up to an hour without any input, so a
-timeline left looping overnight does not bill the night. Rendering alone is not activity.
+site (bucket ``"musik"``) or an AI site (bucket ``"ai"``) is in front while a Resolve project is
+open. A moving playhead counts as activity, so watching playback is not "idle" - for up to an
+hour without any input, so a timeline left looping overnight does not bill the night. Rendering
+alone is not activity.
 
 One rule for every pause, ``time_idle_minutes`` long (the "Pause efter" setting): a pause
 shorter than that counts fully, a longer one not at all. A pause is either no input at all (the
@@ -61,7 +63,7 @@ RESOLVE_EXES = frozenset({"resolve.exe"})
 BUCKET_LABELS = {
     "edit": "Edit", "cut": "Cut", "color": "Color", "fusion": "Fusion",
     "fairlight": "Fairlight", "deliver": "Deliver", "media": "Media", "photo": "Photo",
-    "musik": "Musik/lyd",
+    "musik": "Musik/lyd", "ai": "AI-video/billeder",
 }
 
 
@@ -279,7 +281,7 @@ class TimeTracker:
             else:
                 switched = self._seg is not None
                 self._close_segment(now)
-                # A switch (page, project, Resolve <-> music site) continues seamlessly at `now`;
+                # A switch (page, project, Resolve <-> music/AI site) continues seamlessly at `now`;
                 # resuming after a pause starts at the input that ended it (at most one tick ago).
                 start = now if switched else max(now - TICK_S, min(now, last_active))
                 self._open_segment(key, folder, start, now)
@@ -298,7 +300,7 @@ class TimeTracker:
     def _context(self, act: dict[str, Any] | None, exe: str,
                  title: str) -> tuple[str, str | None, str, str, str] | None:
         """``(project, database, uid, bucket, timeline)`` when this moment counts, else None.
-        Time on a music site counts on the timeline that is open in Resolve."""
+        Time on a music or AI site counts on the timeline that is open in Resolve."""
         if not act:
             return None
         project = act.get("project")
@@ -310,10 +312,11 @@ class TimeTracker:
         if exe in RESOLVE_EXES:
             return base + ((act.get("page") or "edit").lower(), timeline)
         if exe in BROWSERS and title != "Projektsøg":
-            sites = [s.casefold() for s in self._cfg.get("time_music_sites", []) if s.strip()]
             folded = title.casefold()
-            if any(site in folded for site in sites):
-                return base + ("musik", timeline)
+            for bucket, key in (("musik", "time_music_sites"), ("ai", "time_ai_sites")):
+                sites = [s.casefold() for s in self._cfg.get(key, []) if s.strip()]
+                if any(site in folded for site in sites):
+                    return base + (bucket, timeline)
         return None
 
     def _playhead_moved(self, act: dict[str, Any] | None) -> bool:

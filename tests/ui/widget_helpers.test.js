@@ -52,6 +52,7 @@ test('what Klippe says', () => {
     bucket: 'edit', bucket_label: 'Edit' };
   assert.equal(w.moodLine(working), 'Klipper løs på Testimonial v3 · Edit');
   assert.equal(w.moodLine({ ...working, bucket: 'color' }), 'Gør Testimonial v3 smuk i Color 😎');
+  assert.equal(w.moodLine({ ...working, bucket: 'ai' }), 'Laver AI-video og -billeder til Testimonial v3 🤖');
   assert.equal(w.moodLine({ ...working, state: 'away' }, 'Bobby'), 'Bobby venter på dig – tiden tæller stadig ⏳');
   assert.equal(w.moodLine({ state: 'off', enabled: false }), 'Tidsregistreringen er slået fra 💤');
   assert.equal(w.cheer('hour', 1, () => 0), '1 time i dag! 🎉');

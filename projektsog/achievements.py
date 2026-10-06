@@ -298,6 +298,7 @@ TROPHIES = [
     Trophy("fairlight10", "Sider", "Lydnørd", "10 timer i Fairlight", 10, _hours("fairlight"), unit="t"),
     Trophy("deliver", "Sider", "Afsender", "3 timer på Deliver", 3, _hours("deliver"), unit="t"),
     Trophy("musik", "Sider", "Musikjæger", "5 timer på musiksider", 5, _hours("musik"), unit="t"),
+    Trophy("ai", "Sider", "Prompt-instruktør", "5 timer på AI-sider", 5, _hours("ai"), unit="t"),
     Trophy("allround", "Sider", "Allround", "Edit, Color, Fusion, Fairlight og Deliver på samme dag", 1,
            _days(_allround), "slikkepind"),
     # Projects

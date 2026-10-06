@@ -1367,8 +1367,13 @@ class TimeTabTests(UiCase):
         self.page.click("#time-sites-form button[type=submit]")
         self.assertEqual(self.wait_request("/api/settings", count=2)["body"],
                          {"time_music_sites": ["Artlist", "Epidemic Sound", "Freesound"]})
+        self.assertEqual(self.js("document.querySelector('#time-ai-sites').value"), "Higgsfield")
+        self.js("document.querySelector('#time-ai-sites').value = 'Higgsfield; Runway'")
+        self.page.click("#time-ai-sites-form button[type=submit]")
+        self.assertEqual(self.wait_request("/api/settings", count=3)["body"],
+                         {"time_ai_sites": ["Higgsfield", "Runway"]})
         self.page.click("[data-setting=time_tracking_enabled]")
-        self.assertEqual(self.wait_request("/api/settings", count=3)["body"], {"time_tracking_enabled": False})
+        self.assertEqual(self.wait_request("/api/settings", count=4)["body"], {"time_tracking_enabled": False})
         self.wait("document.querySelector('#time-now-main').textContent === 'Tidsregistrering er slået fra'")
         self.wait("document.querySelector('#time-button').dataset.state === 'off'")
 

@@ -375,6 +375,8 @@ test('time tracking: the live line says what counts and why not', () => {
   assert.deepEqual(h.timeStatusText({ state: 'recording', project: 'Rikke Lindholm - Testimonial', bucket: 'color',
     bucket_label: 'Color', since }), { tone: 'rec', main: 'Registrerer: Rikke Lindholm - Testimonial', sub: 'Color siden 10.42' });
   assert.equal(h.timeStatusText({ state: 'recording', project: 'X', bucket: 'musik', since: null }).sub, 'Musik/lyd i browseren');
+  assert.equal(h.timeStatusText({ state: 'recording', project: 'X', bucket: 'ai', bucket_label: 'AI-video/billeder',
+    since: null }).sub, 'AI-video/billeder i browseren');
   assert.equal(h.timeStatusText({ state: 'recording', project: 'X', bucket: 'color', bucket_label: 'Color',
     timeline: 'Teaser v2', since }).sub, 'Tidslinje „Teaser v2“ · Color siden 10.42');
   assert.match(h.timeStatusText({ state: 'idle' }, 15).sub, /i over 15 min/);

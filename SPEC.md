@@ -1116,7 +1116,8 @@ rendering, folder}` from the Resolve helper's poll (`GetCurrentPage`, the curren
 `GetCurrentTimecode`, `IsRenderingInProgress`; `None` when older than 15 s).
 
 * **Counts** when `Resolve.exe` is in front with a project open (bucket = page), or a browser
-  whose title contains one of `time_music_sites` while a project is open (bucket `musik`).
+  whose title contains one of `time_music_sites` (bucket `musik`) or `time_ai_sites` (bucket
+  `ai`, AI video/images such as Higgsfield) while a project is open.
   Never for `Untitled Project…` or without a project.
 * **Activity** = input, or a playhead that moved since the last tick (not while rendering) — the
   latter only while the last input is ≤ `PLAYBACK_MAX_S` (1 h) old.

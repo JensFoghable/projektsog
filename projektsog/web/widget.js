@@ -99,7 +99,7 @@
   }
 
   const PAGE_NAMES = { edit: 'Edit', cut: 'Cut', color: 'Color', fusion: 'Fusion', fairlight: 'Fairlight',
-    deliver: 'Deliver', media: 'Media', photo: 'Photo', musik: 'musik og lyd' };
+    deliver: 'Deliver', media: 'Media', photo: 'Photo', musik: 'musik og lyd', ai: 'AI-video og -billeder' };
 
   /** The line under the pet. */
   function moodLine(status, name = 'Klippe') {
@@ -109,6 +109,7 @@
     const page = PAGE_NAMES[s.bucket] || s.bucket_label || '';
     if (mood === 'working') {
       if (s.bucket === 'musik') return `Lytter efter musik til ${what} 🎧`;
+      if (s.bucket === 'ai') return `Laver AI-video og -billeder til ${what} 🤖`;
       if (s.bucket === 'color') return `Gør ${what} smuk i Color 😎`;
       if (s.bucket === 'fusion') return `Laver magi i Fusion ✨`;
       if (s.bucket === 'deliver') return `Pakker ${what} til levering 📦`;

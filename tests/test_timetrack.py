@@ -187,6 +187,16 @@ class CountingTests(TrackerCase):
         self.assertAlmostEqual(self.minutes("musik"), 10.0, delta=0.2)
         self.assertAlmostEqual(self.minutes(), 10.0, delta=0.2)
 
+    def test_ai_sites_count_on_the_open_project(self) -> None:
+        self.w.exe, self.w.title = "chrome.exe", "AI Video Generator - Sora, Kling, Veo | Higgsfield - Google Chrome"
+        self.w.advance(600)
+        self.assertEqual(self.tracker.status()["bucket_label"], "AI-video/billeder")
+        self.w.exe, self.w.title = "msedge.exe", "Artlist - Microsoft Edge"
+        self.w.advance(300)
+        self.assertAlmostEqual(self.minutes("ai"), 10.0, delta=0.2)
+        self.assertAlmostEqual(self.minutes("musik"), 5.0, delta=0.2)
+        self.assertAlmostEqual(self.minutes(), 15.0, delta=0.2)
+
     def test_music_site_without_an_open_project_does_not_count(self) -> None:
         self.w.resolve_running = False
         self.w.exe, self.w.title = "chrome.exe", "Artlist - Google Chrome"
@@ -355,6 +365,7 @@ class SettingsTests(unittest.TestCase):
         self.assertIs(config.DEFAULTS["time_tracking_enabled"], True)
         self.assertEqual(config.DEFAULTS["time_idle_minutes"], 10)
         self.assertIn("Artlist", config.DEFAULTS["time_music_sites"])
+        self.assertIn("Higgsfield", config.DEFAULTS["time_ai_sites"])
 
     def test_bounds(self) -> None:
         self.assertEqual(config.validate({"time_idle_minutes": 15, "time_round_minutes": 0}),

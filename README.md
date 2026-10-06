@@ -289,6 +289,9 @@ tæller lige nu); klik på det for at åbne fanen **Tid**.
   arbejder på: **Edit, Cut, Color, Fusion, Fairlight, Deliver** …
 - Tid i browseren på **musik- og lydsider** som Artlist, Epidemic Sound og Musicbed – den tæller
   på det projekt, der er åbent i Resolve, som „Musik/lyd". Listen kan rettes under **Tid**.
+- Tid i browseren på **AI-sider** som Higgsfield, hvor du laver AI-video og -billeder – den tæller
+  på det projekt, der er åbent i Resolve, som „AI-video/billeder". Listen kan også rettes under
+  **Tid**.
 - **Afspilning tæller som arbejde**, også uden at du rører mus og tastatur – dog højst en time
   ad gangen, så en tidslinje, der kører i loop natten over, ikke tæller.
 
