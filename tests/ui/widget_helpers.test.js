@@ -121,3 +121,30 @@ test('trophies: progress, the news and the wardrobe of a sprite sheet', () => {
   assert.equal(w.progressLine({ kind: 'fund', name: 'AWP', rarity: 'legendarisk' }), '🌟 LEGENDARISK! 🎁 Klippe fandt noget: AWP!');
   assert.deepEqual(w.parsePynt('hat:baret,haand:awp,x:<script>,:y,briller'), { hat: 'baret', haand: 'awp' });
 });
+
+test('hunger: how full, what Klippe says and the drip', () => {
+  assert.deepEqual([100, 70, 69, 35, 34, 12, 11, 0].map(w.hungerLevel),
+    ['maet', 'maet', 'fin', 'fin', 'sulten', 'sulten', 'skrubsulten', 'skrubsulten']);
+  assert.equal(w.hungerLevel(null), null);
+  assert.equal(w.hungerLevel('x'), null);
+  const hungry = { maet: 20, energi: null };
+  assert.equal(w.foodLine(hungry, 'chill', 'Klippe', 'durum'), 'Klippe er sulten – drømmer om en durum 🌯');
+  assert.equal(w.foodLine(hungry, 'working', 'Klippe', 'durum'), null);              // the work line stays
+  assert.equal(w.foodLine(hungry, 'sleeping', 'Klippe', null), 'Klippe sover og drømmer om mad 🍔 💤');
+  assert.equal(w.foodLine({ maet: 5 }, 'working', 'Klippe', null), 'Klippe er skrubsulten! Giv den noget at spise 🍔');
+  const rush = { maet: 60, energi: { item: 'booster', name: 'Faxe Kondi Booster' } };
+  assert.equal(w.foodLine(rush, 'chill', 'Klippe'), '⚡ Klippe er helt oppe at køre på Faxe Kondi Booster');
+  assert.equal(w.foodLine(rush, 'working', 'Klippe'), null);
+  assert.equal(w.foodLine({ maet: 60, energi: { item: 'drop', name: 'Booster-drop' } }, 'chill', 'Klippe'),
+    '💉 Klippe ligger i Booster-drop – fuld fart ⚡');
+  assert.equal(w.foodLine({ maet: 60 }, 'chill'), null);
+  assert.equal(w.foodLine(null, 'chill'), null);
+  assert.equal(w.foodHint({ kind: 'mad', points: 60, energy_min: 0 }), '+60');
+  assert.equal(w.foodHint({ kind: 'drop', points: 15, energy_min: 45 }), '⚡ 45 min');
+  assert.equal(w.foodSay('durum', () => 0), 'Mmm, durum med det hele! 🌯');
+  assert.equal(w.foodSay('maet', () => 0.99), 'Ikke en bid mere … 😵');
+  assert.equal(w.foodSay('ukendt'), 'Mmm! 😋');
+  assert.equal(w.dropLeft({ fra: 0, til: 100 }, 25), 0.75);                           // the drip's own bag
+  assert.equal(w.dropLeft({ fra: 0, til: 100 }, 100), 0.05);                          // never quite empty
+  assert.equal(w.dropLeft(null), 1);
+});

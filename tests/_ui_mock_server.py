@@ -74,7 +74,7 @@ from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-from projektsog import __version__, config, importer, textutil, timetrack
+from projektsog import __version__, achievements, config, importer, textutil, timetrack
 from projektsog.events import EventBus
 from projektsog.server import content_disposition, time_export, time_range
 
@@ -438,6 +438,8 @@ class MockBackend:
         _finish_entries(self.entries)
         self.time = _make_time_tracker(self.settings)
         self.importer = MockImporter(self.bus)
+        # Klippe's hunger: the real rules (achievements.py), kept in memory, a little hungry.
+        self.food = achievements.PetProgress({}, self.bus, tracker=self.time)
 
     def next_id(self) -> int:
         self._next_id += 1
@@ -1429,6 +1431,8 @@ class MockHandler(BaseHTTPRequestHandler):
             self._json({"messages": []})
         elif route == "/api/pet":
             self._json(backend.pet_trophies())
+        elif route == "/api/pet/mad":
+            self._json(backend.food.food())
         elif route == "/api/update":
             with backend.lock:
                 self._json(dict(backend.update))
@@ -1516,6 +1520,8 @@ class MockHandler(BaseHTTPRequestHandler):
             self._json(backend.update_install())
         elif (method, route) == ("POST", "/api/pet/equip"):
             self._json(backend.pet_equip(str(body.get("slot", "")), str(body.get("item", ""))))
+        elif (method, route) == ("POST", "/api/pet/mad"):
+            self._json(backend.food.feed(body.get("item")))
         elif (method, route) in (("POST", "/api/window/hide"), ("POST", "/api/window/show")):
             self._json({"ok": True})
         elif (method, route) == ("POST", "/api/_mock/publish"):  # test control: push any SSE event

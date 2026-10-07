@@ -1248,8 +1248,8 @@ cancelled and its temp file removed).
 
 * `PetProgress(cfg, bus, tracker=, importer=, path=pet.json)` recomputes every 5 min (first
   after 8 s; at once after a game): `compute_stats()` from all time segments, the import history
-  and the game counters → `TROPHIES` (40: growth/levels, rhythm, goal, focus, pages, projects,
-  cards, Klippe, seasons, secrets). A trophy, once earned, is kept with its time. They reward
+  the game counters and the meals → `TROPHIES` (47: growth/levels, rhythm, goal, focus, pages,
+  projects, cards, Klippe, food, seasons, secrets). A trophy, once earned, is kept with its time. They reward
   steady work, breaks, variety and going home on time – streaks count workdays only (weekends
   neither count nor break them); nothing rewards overtime or nights.
 * Wardrobe slots: farve, striber, hat, briller, mund, haand, aura (`ITEMS`; one default per
@@ -1275,6 +1275,41 @@ cancelled and its temp file removed).
   sparks land where the laser pointed. The kill drops the pointer to the floor, and Klippe fetches
   it. The laser is drawn into a work-area-sized canvas but only its own box is wiped and shown
   (`UpdateLayeredWindow` with a source offset). The panel also has "🎮 Lad Klippe lege nu" (= "Vis legen nu").
+
+### 18.6 Hunger and food (`achievements.py`, `web/widget.*`)
+
+* `PetProgress` keeps `mad` in pet.json: `maet` (satiety 0–100) anchored at `ved` (time) and
+  `arbejde_s` (`TimeStore.total_s()`, all time ever logged), `energi {item, fra, til}` (the rush),
+  `drop {fra, til}` (the drip's own bag), `spist` (item → times, kept forever) and `log` (the last
+  300 meals as [time, item]). On every read and every refresh it is brought up to now by
+  `satiety_after()`: −20 per hour of logged work, −4 per hour of other time but never below 30 by
+  that (no one comes back to a starving Klippe after a weekend). A new Klippe starts at 35. When
+  the time store cannot be read (closed on exit, busy) the anchor is left as it is; when its total
+  goes down (the tracker trims a pause it had counted), the burnt satiety is given back.
+* `MENU`: Durum (+60), Big Mac (+45), Chicken McNuggets (+30), Pommes frites (+20) – food;
+  Faxe Kondi Booster (+10, ⚡ 20 min) and Monster Mango Loco (+12, ⚡ 25 min) – energy drinks;
+  Booster-drop (+15, ⚡ 45 min) – Booster on a drip. A rush stacks on what is left of the last one,
+  never beyond an hour from now.
+* `GET /api/pet/mad` → `{maet, energi: {item, name, fra, til, left_s} | null, drop: {fra, til} |
+  null, spist, menu: [{id, name, kind (mad | drik | drop), points, energy_min, mcd}]}`. `POST /api/pet/mad {item}` →
+  `{ok, spiste, grund, item, mad}`: food is refused at ≥ 90 (`grund` "maet"); a fourth energy
+  drink or drip within two hours too ("hjerte"). A meal → SSE `pet_mad` (the same as GET) and the
+  trophies are recomputed at once.
+* Trophies "Mad": Velbekomme (anything), Durumkongen (10 durum → hand item Durum), Stamkunde
+  (10 from McDonald's → Pommes frites), Booster-holdet (10 Booster → the can), Loco for mango (10
+  Mango Loco → the can); secret Sukkerchok (3 energy drinks/drips on one day → aura Lyn).
+* The widget (not an egg) shows a "Mæthed" row with a 🍔 Mad button → a tray with the menu
+  (icons are the same drawings, `#mad-<id>`). Levels: mæt ≥ 70, fin ≥ 35, sulten ≥ 12,
+  skrubsulten below (`data-sult`). Hungry: it dreams of one dish (picked per hunger, kept in
+  localStorage; feeding exactly that one gives an extra happy line), wavy mouth, a growling stomach;
+  starving: a sad mouth and drool. It says so when it gets hungrier, never on the first load
+  (except one hello per day). Eating (`data-spiser`, ~5 s): the dish flies from the hand to the
+  mouth, four bites (an SVG mask), the rest is thrown away; a drink is tilted up, crushed and
+  thrown, then "BØVS!"; the drip's stand rolls in and its tube goes to the left hand. While a rush
+  lasts (`data-energi`): lightning, a glow, it cannot sit still, ⚡ before the work line. The drip
+  (`data-drop`) stays until its own 45-minute bag is empty – also when a drink is taken meanwhile –
+  with the bag emptying (`--drop`) and that hand kept still. A trophy that arrives while it eats is celebrated after
+  the meal. The food state is polled every minute.
 
 ### 18.4 Klippe plays (`petplay.py` main process, `petplay_child.py` helper)
 

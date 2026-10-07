@@ -35,6 +35,18 @@ class TrophyEndpointTests(ServerTestBase):
         response = self.req("GET", "/api/pet")
         self.assertEqual((response.status, response.json()), (400, {"error": "Klippes trofæer er ikke startet"}))
 
+    def test_food(self) -> None:
+        from projektsog import achievements
+        food = self.req("GET", "/api/pet/mad").json()
+        self.assertEqual((food["maet"], food["energi"]), (achievements.START_SATIETY, None))
+        self.assertIn("drop", [m["id"] for m in food["menu"]])
+        answer = self.req("POST", "/api/pet/mad", body={"item": "drop"}).json()
+        self.assertEqual((answer["spiste"], answer["item"]["name"], answer["mad"]["energi"]["item"]),
+                         (True, "Booster-drop", "drop"))
+        response = self.req("POST", "/api/pet/mad", body={"item": "pizza"})
+        self.assertEqual((response.status, response.json()), (400, {"error": "Ugyldig værdi: item"}))
+
+
 
 class PetEndpointTests(ServerTestBase):
     def setUp(self) -> None:

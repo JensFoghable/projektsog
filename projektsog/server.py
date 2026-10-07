@@ -285,6 +285,8 @@ class Server:
             ("POST", r"/api/widget/look", self._pet_look),
             ("GET", r"/api/pet", self._pet_progress),
             ("POST", r"/api/pet/equip", self._pet_equip),
+            ("GET", r"/api/pet/mad", self._pet_food),
+            ("POST", r"/api/pet/mad", self._pet_feed),
             ("GET", r"/api/update", self._update_state),
             ("POST", r"/api/update/check", self._update_check),
             ("POST", r"/api/update/install", self._update_install),
@@ -454,6 +456,12 @@ class Server:
 
     def _pet_equip(self, req: _Request) -> Any:
         return self._wardrobe().equip(req.body.get("slot"), req.body.get("item"))
+
+    def _pet_food(self, req: _Request) -> Any:
+        return self._wardrobe().food()
+
+    def _pet_feed(self, req: _Request) -> Any:
+        return self._wardrobe().feed(req.body.get("item"))
 
     # -- new versions from GitHub (SPEC §20) --------------------------------------------------
     def _updates(self) -> "Updater":

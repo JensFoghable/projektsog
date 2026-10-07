@@ -65,7 +65,7 @@ body {
 
 /* ---------------------------------------------------------------- stage + bubble */
 /* The stage takes the room that is left (less while a transfer is shown): the pet scales to it. */
-.stage { position: relative; flex: 1 1 auto; min-height: 110px; display: flex; align-items: flex-end; justify-content: center; }
+.stage { position: relative; flex: 1 1 auto; min-height: 76px; display: flex; align-items: flex-end; justify-content: center; }
 .pet { height: 100%; max-height: 210px; width: auto; max-width: 100%; overflow: visible; cursor: pointer; }
 
 .bubble {
@@ -140,7 +140,8 @@ body {
 [data-mood="waiting"] .mouth--flat { display: inline; }
 [data-mood="sleeping"] .zzz { display: inline; }
 [data-mood="waiting"] .sweat { display: inline; }
-.party .eyes-open, .party .mouth--smile, .party .mouth--flat, .party .mouth--o, .party .eyes-closed { display: none !important; }
+.party .eyes-open, .party .mouth--smile, .party .mouth--flat, .party .mouth--o, .party .mouth--wavy,
+.party .mouth--sad, .party .eyes-closed { display: none !important; }
 .party .eyes-happy, .party .mouth--grin { display: inline !important; }
 
 [data-outfit="color"] .acc--color, [data-outfit="fusion"] .acc--fusion,
@@ -394,7 +395,8 @@ body {
 [data-hat="nissehue"] .hat--nissehue, [data-hat="blomst"] .hat--blomst, [data-hat="propelhat"] .hat--propelhat,
 [data-briller="hornbriller"] .briller--hornbriller, [data-briller="solbriller"] .briller--solbriller,
 [data-mund="slikkepind"] .mund--slikkepind, [data-mund="cigaret"] .mund--cigaret,
-[data-haand="kaffe"] .haand--kaffe, [data-haand="awp"] .haand--awp,
+[data-haand="kaffe"] .haand--kaffe, [data-haand="awp"] .haand--awp, [data-haand="durum"] .haand--durum,
+[data-haand="pommes"] .haand--pommes, [data-haand="booster"] .haand--booster, [data-haand="mangoloco"] .haand--mangoloco,
 [data-aura="hjerter"] .aura--hjerter, [data-aura="stjernestoev"] .aura--stjernestoev { display: inline; }
 /* Work clothes on the head win while you work on that page; your own hat replaces the crown,
    your own glasses the Color page's; the hands are busy carrying files during a transfer. */
@@ -454,6 +456,204 @@ body {
 .aura--stjernestoev path:nth-child(3n) { animation-delay: 1.4s; }
 @keyframes twinkle { 0%, 100% { opacity: 0.2; scale: 0.6; } 50% { opacity: 1; scale: 1.1; } }
 
+/* ---------------------------------------------------------------- food and hunger (SPEC §18.6)
+   data-sult (maet | fin | sulten | skrubsulten) and data-energi (an energy drink's rush) on #app;
+   data-spiser + data-spise-art (mad | drik) while it eats. */
+.drom, .knurr, .savl, .mad, .krummer, .boevs { display: none; }
+.mouth--wavy, .mouth--sad { fill: none; stroke: #f3efe6; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.mouth--chew { fill: #7a2320; stroke: #f3efe6; stroke-width: 3; transform-box: fill-box; transform-origin: center; }
+.savl { fill: #bfe6ff; transform-box: fill-box; transform-origin: 50% 0%; }
+.drom__sky { fill: #fbfaf7; stroke: #d9d4cc; stroke-width: 1.5; }
+.drom { transform-box: fill-box; transform-origin: 100% 100%; }
+.knurr { fill: #eab54f; font: italic 700 13px var(--font-display); transform-box: fill-box; transform-origin: center; opacity: 0; }
+
+/* hungry: a dream of food, a wavy mouth while it works or relaxes, a growling stomach */
+[data-sult="sulten"] .drom, [data-sult="skrubsulten"] .drom { display: inline; animation: dream 3.4s ease-in-out infinite; }
+[data-sult="sulten"] .knurr, [data-sult="skrubsulten"] .knurr { display: inline; animation: growl 5s ease-in-out infinite 1s; }
+[data-sult="skrubsulten"] .knurr { animation-duration: 2.6s; }
+:is([data-sult="sulten"], [data-sult="skrubsulten"]):is([data-mood="working"], [data-mood="chill"]) .mouth--smile { display: none; }
+[data-sult="sulten"]:is([data-mood="working"], [data-mood="chill"]) .mouth--wavy { display: inline; }
+[data-sult="skrubsulten"]:is([data-mood="working"], [data-mood="chill"]) .mouth--sad { display: inline; }
+[data-sult="skrubsulten"]:not([data-mood="sleeping"]) .savl { display: inline; animation: drool 2.8s ease-in infinite; }
+@keyframes dream { 0%, 100% { translate: 0 0; } 50% { translate: 0 -4px; } }
+@keyframes growl { 0%, 60%, 100% { opacity: 0; rotate: 0deg; } 66% { opacity: 1; rotate: -8deg; } 72% { rotate: 8deg; } 78% { opacity: 1; rotate: -6deg; } 86% { opacity: 0; } }
+@keyframes drool { 0% { scale: 1 0.3; opacity: 0; } 20% { opacity: 1; } 70% { scale: 1 1.4; opacity: 1; } 100% { scale: 1 1.6; opacity: 0; translate: 0 6px; } }
+
+/* an energy drink's rush: lightning, a glow in the can's colours, and it cannot sit still */
+[data-energi="booster"] { --lyn: #a6f000; --aura: #a6f000; }
+[data-energi="mangoloco"] { --lyn: #ffa53d; --aura: #2bc4e6; }
+[data-aura="lyn"] { --aura: #ffe14a; }
+[data-energi] .aura--lyn, [data-aura="lyn"] .aura--lyn { display: inline; }
+[data-energi] .pet__glow, [data-aura="lyn"] .pet__glow { opacity: 0.6; }
+.aura--lyn path { fill: var(--lyn, #ffe14a); stroke: rgba(0, 0, 0, 0.35); stroke-width: 1; animation: flicker 1.1s steps(2) infinite; }
+.aura--lyn path:nth-child(2) { animation-delay: 0.3s; }
+.aura--lyn path:nth-child(3) { animation-delay: 0.55s; }
+.aura--lyn path:nth-child(4) { animation-delay: 0.8s; }
+[data-energi] .body__inner { animation: buzz 0.16s linear infinite; }
+[data-energi][data-mood="working"] .arm--left { animation-duration: 0.2s; }
+[data-energi][data-mood="working"] .arm--right { animation-duration: 0.2s; animation-delay: 0.1s; }
+@keyframes flicker { 0% { opacity: 1; } 50% { opacity: 0.15; } }
+@keyframes buzz { 0%, 100% { translate: 0 0; } 25% { translate: 1px -1px; } 50% { translate: -1px 0; } 75% { translate: 1px 1px; } }
+
+/* eating: the food flies from the hand (175,152) to the mouth (--mx, --my, turned --mr), four bites,
+   and what is left is thrown away; a drink is tilted up, crushed, thrown – and then the burp */
+[data-spiser] .mad { display: inline; }
+[data-spiser] .mouth, [data-spiser] .mund, [data-spiser] .haand, [data-spiser] .drom, [data-spiser] .knurr,
+[data-spiser] .savl, [data-spiser] .zzz, [data-spiser] .eyes-open, [data-spiser] .eyes-closed,
+[data-spiser] .eyes-happy { display: none !important; }
+[data-spiser] .mouth--chew { display: inline !important; }
+/* (--ax, --ay): one bite deeper along the food, so what is left stays at the mouth */
+.mad { --mx: 117px; --my: 161px; --mr: -40deg; --ax: -5.5px; --ay: -6.6px; }
+[data-spiser="bigmac"] .mad { --mx: 117px; --my: 145px; --mr: -10deg; --ax: -7.4px; --ay: 1.3px; }
+.mad__flyt { opacity: 0; }
+[data-spise-art="mad"] .mad__flyt { animation: spis 5.2s ease-in-out forwards; }
+[data-spise-art="mad"] .eyes-happy { display: inline !important; }
+[data-spise-art="mad"] .mouth--chew { animation: chew 0.52s ease-in-out infinite; }
+[data-spise-art="mad"] .krummer { display: inline; }
+.krummer circle { fill: #e8c27f; opacity: 0; transform-box: fill-box; }
+[data-spise-art="mad"] .krummer circle { animation: crumb 0.62s ease-in 1.4s 4; }
+[data-spise-art="mad"] .krummer circle:nth-child(2) { animation-delay: 1.6s; }
+[data-spise-art="mad"] .krummer circle:nth-child(3) { animation-delay: 1.8s; }
+.bid { opacity: 0; }
+[data-spise-art="mad"] .bid { animation: bite 0.01s linear forwards; }
+[data-spise-art="mad"] .bid--1 { animation-delay: 1.4s; }
+[data-spise-art="mad"] .bid--2 { animation-delay: 2.03s; }
+[data-spise-art="mad"] .bid--3 { animation-delay: 2.65s; }
+[data-spise-art="mad"] .bid--4 { animation-delay: 3.28s; }
+[data-spise-art="drik"] .mad__flyt { animation: drink 5.4s ease-in-out forwards; }
+[data-spise-art="drik"] .eyes-open, [data-spise-art="drik"] .eyes-closed { display: inline !important; }
+[data-spise-art="drik"] .eyes-open { animation: eyes-after 5.4s linear forwards; }
+[data-spise-art="drik"] .eyes-closed { animation: eyes-during 5.4s linear forwards; }
+[data-spise-art="drik"] .mouth--chew { animation: burp-mouth 5.4s ease-in-out forwards; }
+[data-spise-art="drik"] .boevs { display: inline; animation: burp 5.4s ease-out forwards; }
+.boevs { fill: #ffcf4a; stroke: #1d1b19; stroke-width: 3; paint-order: stroke; font: 900 17px var(--font-display);
+  transform-box: fill-box; transform-origin: 0% 100%; opacity: 0; }
+
+@keyframes spis {
+  0% { transform: translate(175px, 152px) rotate(0deg) scale(0.3); opacity: 0; }
+  8% { transform: translate(175px, 152px) rotate(0deg) scale(1); opacity: 1; }
+  12% { transform: translate(175px, 150px) rotate(8deg) scale(1); opacity: 1; }
+  22% { transform: translate(var(--mx), var(--my)) rotate(var(--mr)) scale(1.15); opacity: 1; }
+  27% { transform: translate(calc(var(--mx) + var(--ax) * 0.5), calc(var(--my) + var(--ay) * 0.5)) rotate(var(--mr)) scale(1.15); }
+  31% { transform: translate(calc(var(--mx) + var(--ax) * 1), calc(var(--my) + var(--ay) * 1)) rotate(var(--mr)) scale(1.15); }
+  39% { transform: translate(calc(var(--mx) + var(--ax) * 1.5), calc(var(--my) + var(--ay) * 1.5)) rotate(var(--mr)) scale(1.15); }
+  43% { transform: translate(calc(var(--mx) + var(--ax) * 2), calc(var(--my) + var(--ay) * 2)) rotate(var(--mr)) scale(1.15); }
+  51% { transform: translate(calc(var(--mx) + var(--ax) * 2.5), calc(var(--my) + var(--ay) * 2.5)) rotate(var(--mr)) scale(1.15); }
+  55% { transform: translate(calc(var(--mx) + var(--ax) * 3), calc(var(--my) + var(--ay) * 3)) rotate(var(--mr)) scale(1.15); }
+  63% { transform: translate(calc(var(--mx) + var(--ax) * 3.4), calc(var(--my) + var(--ay) * 3.4)) rotate(var(--mr)) scale(1.15); }
+  67%, 72% { transform: translate(calc(var(--mx) + var(--ax) * 3), calc(var(--my) + var(--ay) * 3)) rotate(var(--mr)) scale(1.15); opacity: 1; }
+  80% { transform: translate(150px, 140px) rotate(20deg) scale(1); opacity: 1; }
+  92%, 100% { transform: translate(204px, 70px) rotate(300deg) scale(0.6); opacity: 0; }
+}
+@keyframes drink {
+  0% { transform: translate(175px, 152px) rotate(0deg) scale(0.3, 0.3); opacity: 0; }
+  8% { transform: translate(175px, 152px) rotate(0deg) scale(1, 1); opacity: 1; }
+  20% { transform: translate(122px, 152px) rotate(-70deg) scale(1, 1); opacity: 1; }
+  30%, 46% { transform: translate(124px, 146px) rotate(-96deg) scale(1, 1); opacity: 1; }
+  38%, 54% { transform: translate(123px, 147px) rotate(-90deg) scale(1, 1); opacity: 1; }
+  62% { transform: translate(124px, 145px) rotate(-102deg) scale(1, 1); opacity: 1; }
+  68% { transform: translate(152px, 146px) rotate(-10deg) scale(1, 1); opacity: 1; }
+  72%, 76% { transform: translate(152px, 152px) rotate(0deg) scale(1.25, 0.42); opacity: 1; }
+  90%, 100% { transform: translate(206px, 70px) rotate(320deg) scale(0.8, 0.35); opacity: 0; }
+}
+.nej .body { animation: no-thanks 0.6s ease-in-out; }
+@keyframes no-thanks { 0%, 100% { translate: 0 0; } 20%, 60% { translate: -6px 0; } 40%, 80% { translate: 6px 0; } }
+@keyframes chew { 0%, 100% { scale: 1 1; } 50% { scale: 0.9 0.25; } }
+@keyframes crumb { 0% { opacity: 1; translate: 0 0; } 100% { opacity: 0; translate: 2px 14px; } }
+@keyframes bite { to { opacity: 1; } }
+@keyframes eyes-during { 0%, 65% { opacity: 1; } 66%, 100% { opacity: 0; } }
+@keyframes eyes-after { 0%, 65% { opacity: 0; } 66%, 100% { opacity: 1; } }
+@keyframes burp-mouth {
+  0%, 18% { scale: 0.6 0.6; } 20%, 64% { scale: 0.45 0.55; } 68%, 76% { scale: 0.7 0.2; }
+  80%, 92% { scale: 1.3 1.35; } 100% { scale: 0.7 0.6; }
+}
+@keyframes burp { 0%, 78% { opacity: 0; scale: 0.3; } 82% { opacity: 1; scale: 1.25; } 86% { scale: 1; } 94% { opacity: 1; } 100% { opacity: 0; translate: 4px -8px; } }
+
+/* Booster on a drip: the stand rolls in from the left and the tube goes to the left hand; it
+   stays until its bag is empty (data-drop; --drop: how full the bag still is, set by widget.js),
+   and that hand keeps still so the tube stays in it */
+.drop, .drop__tape { display: none; }
+[data-drop] .drop, [data-spise-art="drop"] .drop,
+[data-drop] .drop__tape, [data-spise-art="drop"] .drop__tape { display: inline; }
+[data-drop] .arm--left, [data-spise-art="drop"] .arm--left { animation: none !important; transform: none !important; }
+.drop__stang { fill: none; stroke: #9aa3b1; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.drop__slange { fill: none; stroke: #8fc0d6; stroke-width: 2; stroke-linecap: round; }
+.drop__tape { fill: #f3efe6; }
+[data-energi="drop"] { --lyn: #a6f000; --aura: #a6f000; }
+[data-drop] .drom, [data-drop] .knurr, [data-drop] .aura--lyn path:nth-child(odd) { display: none; }
+[data-spise-art="drop"] .eyes-happy { display: inline !important; }
+[data-spise-art="drop"] .drop { animation: drop-in 2.8s ease-out; }
+[data-spise-art="drop"] .drop__slange { stroke-dasharray: 80; animation: tube-in 2.8s ease-in-out both; }
+[data-spise-art="drop"] .drop__tape { animation: tape-in 2.8s ease-out both; }
+[data-spise-art="drop"] .mouth--chew { scale: 0.55 0.65; }
+@keyframes drop-in { 0% { translate: -70px 0; opacity: 0; } 30% { translate: 4px 0; opacity: 1; } 40%, 100% { translate: 0 0; } }
+@keyframes tube-in { 0%, 40% { stroke-dashoffset: 80; } 75%, 100% { stroke-dashoffset: 0; } }
+@keyframes tape-in { 0%, 72% { opacity: 0; } 80%, 100% { opacity: 1; } }
+
+/* the hunger row and the food tray */
+.stat--maet .stat__row { align-items: center; }
+.stat--maet .bar { flex: 1; margin-top: 0; }
+.bar--maet .bar__fill { background: linear-gradient(90deg, var(--ok), #9cf0bf); }
+[data-sult="fin"] .bar--maet .bar__fill { background: linear-gradient(90deg, var(--accent), #ffcf8a); }
+[data-sult="sulten"] .bar--maet .bar__fill { background: linear-gradient(90deg, var(--warn), #ffd98a); }
+[data-sult="skrubsulten"] .bar--maet .bar__fill { background: var(--danger); animation: hungry-pulse 1.4s ease-in-out infinite; }
+@keyframes hungry-pulse { 50% { opacity: 0.45; } }
+.stat__energi { color: var(--lyn, #ffe14a); font-size: 11.5px; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.feed {
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font: 600 11.5px/1.5 var(--font);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.feed:hover:not(:disabled) { color: var(--text); background: var(--surface-3); }
+.feed:disabled { opacity: 0.5; cursor: default; }
+[data-sult="skrubsulten"] .feed { border-color: rgba(239, 113, 102, 0.6); color: var(--text); }
+
+.tray {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 3;
+  padding: 6px 8px 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  animation: message-in 0.2s ease-out;
+}
+.tray[hidden] { display: none; }
+.tray__head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.tray__title { flex: 1; font-size: 12.5px; font-weight: 600; }
+.tray__close { width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: var(--text-3);
+  font-size: 16px; line-height: 1; cursor: pointer; }
+.tray__close:hover { background: var(--surface-3); color: var(--text); }
+.tray__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.food {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  padding: 5px 3px 4px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text);
+  font: 600 10.5px/1.2 var(--font);
+  text-align: center;
+  cursor: pointer;
+}
+.food:hover { background: var(--surface-3); }
+.food svg { width: 38px; height: 38px; overflow: visible; }
+.food__name { overflow-wrap: anywhere; }
+.food__hint { color: var(--text-3); font-size: 10px; font-weight: 600; }
+.food.is-craved { border-color: var(--accent); box-shadow: 0 0 8px rgba(240, 164, 91, 0.35); }
+
 /* ---------------------------------------------------------------- the 🏆 panel: trophies and wardrobe */
 .panel { position: fixed; inset: 0; z-index: 4; display: flex; flex-direction: column; background: var(--bg); }
 .panel[hidden] { display: none; }
@@ -498,7 +698,7 @@ body {
 .hole { display: none; }
 [data-play="out"] .hole { display: inline; }
 [data-play="out"] .body, [data-play="out"] .egg, [data-play="out"] .zzz,
-[data-play="out"] .sweat, [data-play="out"] .carry { visibility: hidden; }
+[data-play="out"] .sweat, [data-play="out"] .carry, [data-play="out"] .aura--lyn { visibility: hidden; }
 .hole__gap { fill: #0b0b0c; stroke: #4a4540; stroke-width: 2; stroke-linejoin: round; }
 .hole__crack { fill: none; stroke: #5a554f; stroke-width: 2.5; stroke-linecap: round; }
 [data-play="out"] .hole { animation: hole-in 0.35s ease-out; transform-box: fill-box; transform-origin: center; }

@@ -192,6 +192,69 @@
     return out;
   }
 
+  // ---------------------------------------------------------------- food and hunger (SPEC §18.6)
+  /** maet ≥ 70 · fin ≥ 35 · sulten ≥ 12 · skrubsulten below (null: not known yet). */
+  function hungerLevel(maet) {
+    if (maet == null || maet === '' || !Number.isFinite(Number(maet))) return null;
+    const m = Number(maet);
+    if (m >= 70) return 'maet';
+    if (m >= 35) return 'fin';
+    return m >= 12 ? 'sulten' : 'skrubsulten';
+  }
+
+  /** What Klippe dreams of, as it would say it: "en durum 🌯". */
+  const CRAVINGS = { durum: 'en durum 🌯', bigmac: 'en Big Mac 🍔', nuggets: 'McNuggets 🐔', pommes: 'pommes frites 🍟',
+    booster: 'en Faxe Kondi Booster ⚡', mangoloco: 'en Monster Mango Loco 🥭', drop: 'et Booster-drop 💉' };
+
+  /** The line under the pet about food, or null: starving beats everything, then an energy rush,
+   *  then hunger (not while you work – the work line stays, the dream bubble says it). */
+  function foodLine(food, mood, name = 'Klippe', craving = null) {
+    if (!food) return null;
+    const level = hungerLevel(food.maet);
+    const dream = CRAVINGS[craving];
+    if (level === 'skrubsulten') {
+      return dream ? `${name} er skrubsulten og drømmer om ${dream}` : `${name} er skrubsulten! Giv den noget at spise 🍔`;
+    }
+    if (food.energi && mood !== 'working') {
+      return food.energi.item === 'drop' ? `💉 ${name} ligger i Booster-drop – fuld fart ⚡`
+        : `⚡ ${name} er helt oppe at køre på ${food.energi.name}`;
+    }
+    if (level !== 'sulten' || mood === 'working') return null;
+    if (mood === 'sleeping') return `${name} sover og drømmer om ${dream || 'mad 🍔'} 💤`;
+    return dream ? `${name} er sulten – drømmer om ${dream}` : `${name} er sulten 🍔`;
+  }
+
+  const FOOD_LINES = {
+    durum: ['Mmm, durum med det hele! 🌯', 'Ekstra hvidløg, tak! 😋', 'Byens bedste durum 🤤'],
+    bigmac: ['Big Mac – det var lige sagen! 🍔', 'Nom nom nom 🍔😋'],
+    nuggets: ['Nuggets! Hvor er dippen? 🐔', 'Sprøde nuggets 😋'],
+    pommes: ['Sprøde pommes! 🍟', 'Med ketchup næste gang 🍟😋'],
+    booster: ['BØVS! ⚡ Nu kører det!', 'Booster! Nu kan jeg klippe en hel spillefilm ⚡'],
+    mangoloco: ['BØVS! 🥭 Mango Loco!', 'Jeg kan høre farver 🥭⚡'],
+    drop: ['Booster direkte i blodet! 💉⚡', 'Intravenøs turbo 💉 – nu klipper vi!'],
+    maet: ['Jeg er proppet! 🤢 Måske senere', 'Ikke en bid mere … 😵'],
+    hjerte: ['Mit hjerte hamrer 💓 – ikke flere energidrikke lige nu', 'Puha … vand nu, tak 💧'],
+    sulten: ['Min mave knurrer … 🍔', 'Er det ikke snart frokost? 🌯'],
+    skrubsulten: ['Jeg er SKRUBSULTEN! 😫', 'Mad … nu … tak … 🥺'],
+  };
+
+  /** What Klippe says about food: `key` = a menu item it ate, a refusal (maet, hjerte) or hunger. */
+  function foodSay(key, random = Math.random) {
+    const lines = FOOD_LINES[key] || ['Mmm! 😋'];
+    return lines[Math.floor(random() * lines.length) % lines.length];
+  }
+
+  /** The hint under a dish in the tray: "+60" or "⚡ 20 min" (an energy drink or the drip). */
+  function foodHint(food) {
+    return food.energy_min > 0 ? `⚡ ${Math.round(food.energy_min)} min` : `+${Math.round(food.points)}`;
+  }
+
+  /** How full the drip's bag still is (0.05–1): `bag` = {fra, til} of the drip. */
+  function dropLeft(bag, now = Date.now() / 1000) {
+    if (!bag || typeof bag.til !== 'number' || typeof bag.fra !== 'number' || bag.til <= bag.fra) return 1;
+    return Math.max(0.05, Math.min(1, (bag.til - now) / (bag.til - bag.fra)));
+  }
+
   /** The folded line for quiet messages: "📬 2 beskeder · vis". */
   function quietLine(count) {
     return `📬 ${count === 1 ? '1 besked' : `${count} beskeder`} · vis`;
@@ -218,7 +281,7 @@
 
   const helpers = { stageFor, moodFor, outfitFor, crossedHours, crossedMarks, dayStreak, isoDate, hm, words,
     moodLine, cheer, transferInfo, jobLine, messageOrder, quietLine, trophyProgress, progressLine, parsePynt,
-    STAGES, FOCUS_STARS, BREAK_NUDGES };
+    hungerLevel, foodLine, foodSay, foodHint, dropLeft, STAGES, FOCUS_STARS, BREAK_NUDGES };
   if (typeof module === 'object' && module.exports) module.exports = helpers;
   if (typeof document === 'undefined') return;
 
@@ -230,6 +293,10 @@
   // ===========================================================================================
 
   const PARTY_POSES = new Set(['happy', 'cheer']);
+  // The drip's falling drop is SMIL (it has to run inside <use>), which reduced motion does not stop.
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    for (const animate of document.querySelectorAll('#mad-drop animate')) animate.remove();
+  }
   const query = new URLSearchParams(window.location.search);
   if (query.has('sprites')) {
     renderSprites(query);
@@ -277,6 +344,9 @@
     panelBody: $('panel-body'), panelClose: $('panel-close'), panelPlay: $('panel-play'),
     transfer: $('transfer'), transferTitle: $('transfer-title'), transferPct: $('transfer-pct'),
     transferBar: $('transfer-bar'), transferSub: $('transfer-sub'),
+    hunger: $('hunger'), maet: $('maet'), maetBar: $('maet-bar'), energi: $('energi'), feed: $('feed'),
+    tray: $('tray'), trayGrid: $('tray-grid'), trayClose: $('tray-close'), dream: $('drom-mad'),
+    eatBite: $('mad-bid'), eatThing: $('mad-ting'),
   };
 
   const state = {
@@ -285,6 +355,7 @@
     job: null, jobsStarted: new Set(), lookSent: '', lookTimer: 0, hatched: false, hatching: false,
     messages: [], messagesSeen: new Set(), messagesLoaded: false, messageTag: null, messagesOpen: false,
     pet: null, panelTab: 'trophies',
+    food: null, menu: [], hunger: null, energy: null, craving: null, eating: null, feeding: false, laterProgress: [],
   };
 
   // ---------------------------------------------------------------- memory (per day)
@@ -429,6 +500,7 @@
     } else if (grew) {
       celebrate(cheer('grow', stage), 'fireworks', 4);
     }
+    renderHunger();
     reportLook();
   }
 
@@ -445,6 +517,7 @@
       el.app.classList.add('hatched');
       setTimeout(() => el.app.classList.remove('hatched'), 1000);
       celebrate(cheer('grow', state.stage), 'fireworks', 4);
+      renderHunger();
       reportLook();
     }, 1800);
   }
@@ -454,8 +527,17 @@
       el.mood.textContent = `${state.name} er ude at lege med musen 🎈 Rør den, så kommer ${state.name} hjem`;
       return;
     }
-    const info = transferInfo(state.job);
-    el.mood.textContent = jobLine(info, state.job) || moodLine(state.status, state.name);
+    if (state.eating) {
+      const verb = { drik: 'drikker', drop: 'får' }[state.eating.kind] || 'spiser';
+      el.mood.textContent = `${state.name} ${verb} ${state.eating.name} ${state.eating.kind === 'drop' ? '💉' : '😋'}`;
+      return;
+    }
+    const job = jobLine(transferInfo(state.job), state.job);
+    const mood = moodFor(state.status);
+    const food = hatchedFood();
+    const hungry = foodLine(food, mood, state.name, state.craving);
+    const rush = food && food.energi && mood === 'working' ? '⚡ ' : '';   // turbo editing
+    el.mood.textContent = job || hungry || `${rush}${moodLine(state.status, state.name)}`;
   }
 
   // ---------------------------------------------------------------- the games (petplay.py)
@@ -763,6 +845,10 @@
   function celebrateProgress(data) {
     const news = (data && data.nye) || [];
     if (!news.length) return;
+    if (state.eating) {                 // a food trophy arrives while it eats: party after the meal
+      state.laterProgress.push(data);
+      return;
+    }
     if (data.foerste) {
       celebrate(`🏆 Du har allerede ${data.unlocked} trofæer! Se dem under 🏆 ovenfor`, 'confetti', 3);
     } else {
@@ -775,7 +861,14 @@
     loadPet();
   }
 
-  el.trophies.addEventListener('click', () => (el.panel.hidden ? openPanel() : (el.panel.hidden = true)));
+  el.trophies.addEventListener('click', () => {
+    closeTray();
+    if (el.panel.hidden) {
+      openPanel();
+    } else {
+      el.panel.hidden = true;
+    }
+  });
   el.panelClose.addEventListener('click', () => {
     el.panel.hidden = true;
   });
@@ -797,8 +890,201 @@
     });
   }
   window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !el.panel.hidden) el.panel.hidden = true;
+    if (event.key !== 'Escape') return;
+    el.panel.hidden = true;
+    closeTray();
   });
+
+  // ---------------------------------------------------------------- food and hunger (SPEC §18.6)
+  /** The food state – unless Klippe is still an egg (an egg is never hungry). */
+  function hatchedFood() {
+    return el.app.dataset.stage === 'egg' ? null : state.food;
+  }
+
+  /** The dish Klippe dreams of while it is hungry: picked once per hunger (kept over a reload). */
+  function pickCraving(level) {
+    const data = memory();
+    if (level !== 'sulten' && level !== 'skrubsulten') {
+      if (data.craving) {
+        delete data.craving;
+        remember(data);
+      }
+      return null;
+    }
+    const ids = state.menu.map((m) => m.id);
+    if (!ids.includes(data.craving) && ids.length) {
+      data.craving = ids[Math.floor(Math.random() * ids.length)];
+      remember(data);
+    }
+    return data.craving || null;
+  }
+
+  /** `GET /api/pet/mad`, SSE `pet_mad` and a meal: how full, a rush, the menu. */
+  function applyFood(food) {
+    if (!food || typeof food !== 'object') return;
+    const before = state.food ? state.hunger : undefined;
+    const hadEnergy = state.energy;
+    state.food = food;
+    if (Array.isArray(food.menu) && food.menu.length) state.menu = food.menu;
+    state.hunger = hungerLevel(food.maet);
+    state.energy = food.energi ? food.energi.item : null;
+    state.craving = pickCraving(state.hunger);
+    renderHunger();
+    if (!hatchedFood() || state.eating) return;
+    const worse = ['maet', 'fin', 'sulten', 'skrubsulten'];
+    if (before !== undefined && worse.indexOf(state.hunger) > worse.indexOf(before)
+        && (state.hunger === 'sulten' || state.hunger === 'skrubsulten')) {
+      const dream = CRAVINGS[state.craving];
+      say(dream && state.hunger === 'sulten' ? `Jeg kunne godt spise ${dream}` : foodSay(state.hunger), 7000);
+    }
+    if (hadEnergy && !state.energy) say('Sukkerkrak … 🥱', 5000);
+  }
+
+  function renderHunger() {
+    const food = hatchedFood();
+    el.hunger.hidden = !food;
+    if (food) {
+      el.app.dataset.sult = state.hunger || 'fin';
+    } else {
+      delete el.app.dataset.sult;
+    }
+    if (food && food.energi) {
+      el.app.dataset.energi = food.energi.item;
+    } else {
+      delete el.app.dataset.energi;
+    }
+    if (food && food.drop) {                 // the drip stays until its own bag is empty
+      el.app.dataset.drop = '';
+    } else {
+      delete el.app.dataset.drop;
+    }
+    const newDrip = state.eating && state.eating.kind === 'drop';    // a new bag is full
+    el.app.style.setProperty('--drop', String(newDrip ? 1 : dropLeft(food && food.drop)));
+    if (food) {
+      const maet = Math.max(0, Math.min(100, Number(food.maet) || 0));
+      el.maetBar.style.width = `${maet}%`;
+      el.maet.title = `Mæthed ${Math.round(maet)} / 100 – Klippe bliver sulten, mens du arbejder`;
+      const left = food.energi ? Math.max(1, Math.round((food.energi.til - Date.now() / 1000) / 60)) : 0;
+      el.energi.hidden = !food.energi;
+      el.energi.textContent = food.energi ? `⚡ ${left} min` : '';
+      el.energi.title = food.energi ? `${food.energi.name}: ${left} min mere` : '';
+    }
+    if (state.craving) el.dream.setAttribute('href', `#mad-${state.craving}`);
+    el.feed.disabled = Boolean(state.eating);
+    renderMoodLine();
+  }
+
+  async function loadFood() {
+    try {
+      const food = await get('/api/pet/mad');
+      if (!state.feeding) applyFood(food);      // a meal brings its own state when it is eaten
+    } catch { /* not there (yet) */ }
+  }
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  function dishIcon(id) {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '-23 -23 46 46');
+    svg.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS(SVG_NS, 'use');
+    use.setAttribute('href', `#mad-${id}`);
+    svg.append(use);
+    return svg;
+  }
+
+  function renderTray() {
+    const buttons = state.menu.map((food) => {
+      const button = node('button', `food${food.id === state.craving ? ' is-craved' : ''}`);
+      button.type = 'button';
+      button.dataset.food = food.id;
+      button.title = food.energy_min > 0 ? `${food.name} – energi i ${Math.round(food.energy_min)} min`
+        : `${food.name} – mætter ${Math.round(food.points)}`;
+      button.append(dishIcon(food.id), node('span', 'food__name', food.name), node('span', 'food__hint', foodHint(food)));
+      button.addEventListener('click', () => feed(food.id));
+      return button;
+    });
+    el.trayGrid.replaceChildren(...(buttons.length ? buttons : [node('p', 'panel__summary', 'Henter menuen …')]));
+  }
+
+  function openTray() {
+    el.panel.hidden = true;
+    renderTray();
+    el.tray.hidden = false;
+    loadFood().then(() => {
+      if (!el.tray.hidden) renderTray();
+    });
+  }
+
+  function closeTray() {
+    el.tray.hidden = true;
+  }
+
+  /** The meal itself: the food flies from the hand to the mouth and is eaten (CSS, widget.css). */
+  function eat(food) {
+    return new Promise((resolve) => {
+      if (REDUCED) {
+        floatEmoji(food.kind === 'mad' ? '😋' : '⚡', 1);
+        resolve();
+        return;
+      }
+      state.eating = food;
+      renderHunger();
+      el.eatThing.setAttribute('href', `#mad-${food.id}`);
+      if (food.kind === 'mad') {
+        el.eatBite.setAttribute('mask', food.id === 'bigmac' ? 'url(#bid-side)' : 'url(#bid-top)');
+      } else {
+        el.eatBite.removeAttribute('mask');
+      }
+      delete el.app.dataset.spiser;
+      void el.app.offsetWidth;              // restart the animations
+      el.app.dataset.spiseArt = food.kind;
+      el.app.dataset.spiser = food.id;
+      setTimeout(() => {
+        delete el.app.dataset.spiser;
+        delete el.app.dataset.spiseArt;
+        state.eating = null;
+        resolve();
+      }, { drik: 5400, drop: 2800 }[food.kind] || 5200);
+    });
+  }
+
+  async function feed(id) {
+    closeTray();
+    if (state.feeding) return;
+    if (el.app.dataset.play === 'out') {
+      say(`${state.name} er ude at lege – rør musen, så kommer den hjem og spiser 🎈`, 4500);
+      return;
+    }
+    state.feeding = true;                   // SSE pet_mad of this meal waits for the meal itself
+    let answer;
+    try {
+      answer = await send('POST', '/api/pet/mad', { item: id });
+    } catch (err) {
+      state.feeding = false;
+      say(`Øv – ${err.message}`, 5000);
+      return;
+    }
+    const food = answer.item || state.menu.find((m) => m.id === id) || { id, name: id, kind: 'mad' };
+    if (!answer.spiste) {
+      state.feeding = false;
+      applyFood(answer.mad);
+      pulse('nej', 700);
+      say(foodSay(answer.grund), 5000);
+      return;
+    }
+    const craved = state.craving === food.id;
+    await eat(food);
+    state.feeding = false;
+    applyFood(answer.mad);
+    jump();
+    floatEmoji(craved ? '😍' : food.kind === 'mad' ? '😋' : '⚡', craved ? 4 : 2);
+    say(craved ? 'Præcis hvad jeg drømte om! 😍' : foodSay(food.id), 4500);
+    for (const later of state.laterProgress.splice(0)) celebrateProgress(later);
+  }
+
+  el.feed.addEventListener('click', () => (el.tray.hidden ? openTray() : closeTray()));
+  el.trayClose.addEventListener('click', closeTray);
 
   async function loadPlay() {
     try {
@@ -939,6 +1225,10 @@
     const today = state.todayS || 0;
     const lines = [cheer('pet')];
     if (today >= 60) lines.push(`I dag: ${words(today)} 💪`);
+    if (hatchedFood() && (state.hunger === 'sulten' || state.hunger === 'skrubsulten')) {
+      const dream = CRAVINGS[state.craving];
+      lines.splice(0, lines.length, dream ? `Jeg kunne godt spise ${dream}` : foodSay(state.hunger));
+    }
     say(lines[Math.floor(Math.random() * lines.length)], 3500);
   });
 
@@ -1043,7 +1333,7 @@
     return { start, count: () => parts.length };
   })();
   window.__klippe = { celebrate, fx, state, applyStatus, applyStage, applyJob, applyPlay, lookReport,
-    renderMessages, applySettings, celebrateProgress, openPanel };   // for tests
+    renderMessages, applySettings, celebrateProgress, openPanel, applyFood, feed, openTray };   // for tests
 
   // ---------------------------------------------------------------- events
   function connectEvents() {
@@ -1095,6 +1385,11 @@
         celebrateProgress(JSON.parse(event.data));
       } catch { /* ignore */ }
     });
+    source.addEventListener('pet_mad', (event) => {
+      try {
+        if (!state.feeding) applyFood(JSON.parse(event.data));
+      } catch { /* ignore */ }
+    });
     source.addEventListener('say', (event) => {
       try {
         say(JSON.parse(event.data).tekst, 6000);
@@ -1134,10 +1429,16 @@
     setInterval(() => renderMessages(state.messages), 60e3);   // expired messages go
     await loadMessages();
     loadPet();
+    loadFood();
+    setInterval(loadFood, 60e3);           // it gets hungry slowly: once a minute is plenty
     window.addEventListener('resize', () => reportLook());
     loadPlay();
     connectEvents();
     setTimeout(() => say(`Hej! Jeg er ${state.name} 👋`), 600);
+    setTimeout(() => {
+      const hungry = state.hunger === 'sulten' || state.hunger === 'skrubsulten';
+      if (hatchedFood() && hungry && firstToday('sult-hej')) say(`${foodSay(state.hunger)} Tryk på 🍔 Mad`, 7000);
+    }, 3000);
   }
 
   init();

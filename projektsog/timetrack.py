@@ -154,6 +154,12 @@ class TimeStore:
                 "SELECT project, database, uid, folder, bucket, start, end, timeline FROM segments"
                 " WHERE end > ? AND start < ? ORDER BY start", (start, end)).fetchall()
 
+    def total_s(self) -> float:
+        """All time ever logged (Klippe's hunger burns on it)."""
+        with self._lock:
+            row = self._conn.execute("SELECT SUM(end - start) FROM segments WHERE end > start").fetchone()
+        return float(row[0] or 0.0)
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()

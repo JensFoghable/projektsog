@@ -12,6 +12,11 @@ one. Whether it does is decided by this PC's own secret (made once) and the date
 the same office end up different. Seasonal trophies can only be earned in their season, and the
 secret ones show "???" until they are earned.
 
+Klippe also gets hungry (SPEC §18.6): it burns energy while you work (and a little otherwise, but
+never below "a bit peckish"), and you feed it from a small menu – durum, McDonald's, Faxe Kondi
+Booster and Monster Mango Loco. The energy drinks give it a rush for a while. What it has eaten
+counts for a few trophies of its own.
+
 Everything lives in ``%LOCALAPPDATA%\\Projektsog\\pet.json``; it is recomputed every few minutes
 (idempotent: a trophy, once earned, stays).
 """
@@ -87,11 +92,16 @@ ITEMS = [
     Item("cigaret", "mund", "Cigaret", "legendarisk"),
     Item("ingen-haand", "haand", "Ingen", default=True),
     Item("kaffe", "haand", "Kaffekop"),
+    Item("durum", "haand", "Durum"),
+    Item("pommes", "haand", "Pommes frites"),
+    Item("booster", "haand", "Faxe Kondi Booster"),
+    Item("mangoloco", "haand", "Monster Mango Loco"),
     Item("awp", "haand", "AWP", "legendarisk"),
     Item("ingen-aura", "aura", "Ingen", default=True),
     Item("varm", "aura", "Varm glød"),
     Item("kold", "aura", "Kold glød"),
     Item("hjerter", "aura", "Hjerter"),
+    Item("lyn", "aura", "Lyn", "sjælden"),
     Item("stjernestoev", "aura", "Stjernestøv", "legendarisk"),
 ]
 ITEMS_BY_ID = {item.id: item for item in ITEMS}
@@ -100,6 +110,64 @@ DEFAULTS = {item.slot: item.id for item in ITEMS if item.default}
 # Found, never earned: (item, chance per workday with ≥ 1 hour).
 FINDS = [("kosmos", 0.03), ("neon", 0.03), ("regnbue", 0.005), ("stjernestoev", 0.005),
          ("solbriller", 0.004), ("cigaret", 0.004), ("awp", 0.003)]
+
+
+# --------------------------------------------------------------------------------------
+# Food and hunger
+# --------------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Food:
+    id: str
+    name: str
+    kind: str                  # "mad" (food) | "drik" (an energy drink) | "drop" (Booster on a drip)
+    points: float              # how much fuller it makes Klippe (satiety 0–100)
+    energy_min: float = 0.0    # minutes of energy rush
+    mcd: bool = False          # from McDonald's
+
+    @property
+    def energy(self) -> bool:
+        return self.energy_min > 0
+
+
+MENU = [
+    Food("durum", "Durum", "mad", 60),
+    Food("bigmac", "Big Mac", "mad", 45, mcd=True),
+    Food("nuggets", "Chicken McNuggets", "mad", 30, mcd=True),
+    Food("pommes", "Pommes frites", "mad", 20, mcd=True),
+    Food("booster", "Faxe Kondi Booster", "drik", 10, energy_min=20),
+    Food("mangoloco", "Monster Mango Loco", "drik", 12, energy_min=25),
+    Food("drop", "Booster-drop", "drop", 15, energy_min=45),
+]
+MENU_BY_ID = {food.id: food for food in MENU}
+
+FULL = 100.0
+START_SATIETY = 35.0       # a new Klippe is a little hungry: its first meal can come at once
+WORK_BURN = 20.0           # satiety per hour of logged work: full to empty in 5 hours of work
+REST_BURN = 4.0            # per hour otherwise (nights, weekends) …
+REST_FLOOR = 30.0          # … but never below this: nobody comes back to a starving Klippe
+TOO_FULL = 90.0            # no more food from here (a drink or a drip is fine)
+DRINKS_MAX = 3             # energy drinks (and drips) …
+DRINKS_WINDOW_S = 2 * 3600.0   # … within two hours, then its heart pounds
+ENERGY_MAX_S = 3600.0      # a rush never lasts longer than an hour from now
+MEAL_LOG_MAX = 300
+
+
+def satiety_after(satiety: float, work_s: float, rest_s: float) -> float:
+    """How full Klippe is after ``work_s`` of logged work and ``rest_s`` of other time."""
+    value = satiety - max(0.0, work_s) / 3600.0 * WORK_BURN
+    if value > REST_FLOOR:
+        value = max(REST_FLOOR, value - max(0.0, rest_s) / 3600.0 * REST_BURN)
+    return max(0.0, min(FULL, value))
+
+
+def _number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _food_dict(food: Food) -> dict[str, Any]:
+    return {"id": food.id, "name": food.name, "kind": food.kind, "points": food.points,
+            "energy_min": food.energy_min, "mcd": food.mcd}
 
 
 # --------------------------------------------------------------------------------------
@@ -125,6 +193,8 @@ class Stats:
     moves: int = 0
     games: int = 0
     caught: int = 0
+    eaten: dict[str, int] = field(default_factory=dict)            # menu item → times
+    drinks_day: int = 0              # most energy drinks on one day
     hatched: bool = False
     goal_s: float = 6 * 3600.0
     today: str = ""
@@ -171,10 +241,12 @@ def longest_weekday_run(worked_days: Iterable[str]) -> int:
 
 
 def compute_stats(segments: Iterable[tuple], imports: Iterable[dict[str, Any]] = (), *,
-                  counters: dict[str, Any] | None = None, hatched: bool = False,
+                  counters: dict[str, Any] | None = None, eaten: dict[str, Any] | None = None,
+                  meals: Iterable[tuple[float, str]] = (), hatched: bool = False,
                   goal_hours: float = 6.0, today: date | None = None) -> Stats:
     """``segments``: rows of TimeStore.between() (project, database, uid, folder, bucket, start,
-    end, timeline); ``imports``: the import helper's history."""
+    end, timeline); ``imports``: the import helper's history; ``eaten``: menu item → times;
+    ``meals``: the latest meals as (time, item)."""
     st = Stats(hatched=hatched, goal_s=goal_hours * 3600.0, today=(today or date.today()).isoformat())
     rows = sorted((r for r in segments if r[6] > r[5]), key=lambda r: r[5])
     lines: set[tuple[str, str]] = set()
@@ -217,6 +289,13 @@ def compute_stats(segments: Iterable[tuple], imports: Iterable[dict[str, Any]] =
     counters = counters or {}
     st.games = int(counters.get("games") or 0)
     st.caught = int(counters.get("caught") or 0)
+    st.eaten = {k: int(v) for k, v in (eaten or {}).items() if k in MENU_BY_ID and isinstance(v, int)}
+    drinks: dict[str, int] = {}
+    for at, item in meals:
+        if item in MENU_BY_ID and MENU_BY_ID[item].energy:
+            day = datetime.fromtimestamp(at).date().isoformat()
+            drinks[day] = drinks.get(day, 0) + 1
+    st.drinks_day = max(drinks.values(), default=0)
     return st
 
 
@@ -317,6 +396,17 @@ TROPHIES = [
     # Klippe
     Trophy("leg10", "Klippe", "Legekammerat", "Klippe har leget med musen 10 gange", 10, lambda st: st.games, unit="lege"),
     Trophy("fanget", "Klippe", "Fanget!", "Fang Klippe i at lege 5 gange", 5, lambda st: st.caught, unit="gange"),
+    # Food
+    Trophy("velbekomme", "Mad", "Velbekomme", "Giv Klippe noget at spise eller drikke", 1,
+           lambda st: sum(st.eaten.values())),
+    Trophy("durum10", "Mad", "Durumkongen", "Giv Klippe 10 durum", 10, lambda st: st.eaten.get("durum", 0),
+           "durum", unit="durum"),
+    Trophy("mcd10", "Mad", "Stamkunde", "Giv Klippe 10 ting fra McDonald's", 10,
+           lambda st: sum(n for k, n in st.eaten.items() if MENU_BY_ID[k].mcd), "pommes", unit="ting"),
+    Trophy("booster10", "Mad", "Booster-holdet", "Klippe har drukket 10 Faxe Kondi Booster", 10,
+           lambda st: st.eaten.get("booster", 0), "booster", unit="dåser"),
+    Trophy("mango10", "Mad", "Loco for mango", "Klippe har drukket 10 Monster Mango Loco", 10,
+           lambda st: st.eaten.get("mangoloco", 0), "mangoloco", unit="dåser"),
     # Seasons: only in their season
     Trophy("jul", "Sæson", "Juleklipper", "Arbejd mindst en time en dag i december", 1,
            _any_day(lambda st, d, day: day.month == 12 and st.worked(d)), "nissehue"),
@@ -330,6 +420,8 @@ TROPHIES = [
     Trophy("skuddag", "Hemmelig", "Skuddag", "Arbejdede den 29. februar", 1,
            _any_day(lambda st, d, day: day.month == 2 and day.day == 29 and st.days[d] >= 1800), "propelhat", secret=True),
     Trophy("praecis", "Hemmelig", "På minuttet", "En dag, der endte præcis på dagens mål", 1, _days(_on_the_minute), secret=True),
+    Trophy("sukkerchok", "Hemmelig", "Sukkerchok", "3 energidrikke på én dag", 3, lambda st: st.drinks_day, "lyn",
+           secret=True),
 ]
 TROPHIES_BY_ID = {t.id: t for t in TROPHIES}
 
@@ -412,9 +504,16 @@ class PetProgress:
                 log.warning("could not read %s: %s", self._path, exc)
         if not isinstance(data.get("secret"), str) or len(data["secret"]) < 16:
             data["secret"] = secrets.token_hex(16)          # this PC's own luck
-        for key in ("unlocked", "found", "equipped", "counters"):
+        for key in ("unlocked", "found", "equipped", "counters", "mad"):
             if not isinstance(data.get(key), dict):
                 data[key] = {}
+        mad = data["mad"]
+        if not isinstance(mad.get("spist"), dict):
+            mad["spist"] = {}
+        if not isinstance(mad.get("log"), list):
+            mad["log"] = []
+        mad["log"] = [entry for entry in mad["log"] if isinstance(entry, list) and len(entry) == 2
+                      and isinstance(entry[0], (int, float)) and entry[1] in MENU_BY_ID]
         return data
 
     def _save(self) -> None:
@@ -442,7 +541,9 @@ class PetProgress:
                 log.debug("no import history", exc_info=True)
         with self._lock:
             counters = dict(self._data["counters"])
-        return compute_stats(rows, imports, counters=counters,
+            eaten = dict(self._data["mad"]["spist"])
+            meals = [(entry[0], entry[1]) for entry in self._data["mad"]["log"]]
+        return compute_stats(rows, imports, counters=counters, eaten=eaten, meals=meals,
                              hatched=bool(self.cfg.get("widget_hatched", False)),
                              goal_hours=float(self.cfg.get("widget_daily_goal_hours", 6) or 6),
                              today=self._today())
@@ -451,8 +552,10 @@ class PetProgress:
         """Recompute; new trophies and finds are kept and announced (``pet_progress``)."""
         st = self.stats()
         now = self._clock()
+        work = self._work_s()
         fresh: list[dict[str, Any]] = []
         with self._lock:
+            self._hunger(now, work)                 # kept up to date: a restart goes on from here
             first = not self._data["unlocked"] and not self._data.get("computed")
             for trophy in TROPHIES:
                 if trophy.id not in self._data["unlocked"] and trophy.measure(st) >= trophy.goal:
@@ -463,10 +566,8 @@ class PetProgress:
                     self._data["found"][item] = {"at": now, "day": day}
                     fresh.append(self._news(item=ITEMS_BY_ID[item], day=day))
             self._stats = st
-            changed = bool(fresh) or not self._data.get("computed")
             self._data["computed"] = now
-            if changed:
-                self._save()
+            self._save()
         if fresh:
             log.info("Klippe: %s", ", ".join(n["name"] for n in fresh))
             self.bus.publish("pet_progress", {"nye": fresh, "foerste": first, **self.counts()})
@@ -525,6 +626,101 @@ class PetProgress:
                 counters["caught"] = int(counters.get("caught") or 0) + 1
             self._save()
         self._wake.set()
+
+    # -- food and hunger (SPEC §18.6) ----------------------------------------------------------
+    def _work_s(self) -> float | None:
+        """All time ever logged, in seconds (what Klippe burns its food on); None when the time
+        store cannot be read right now (closed on exit, busy) – never a made-up 0."""
+        store = getattr(self._tracker, "store", None)
+        if store is None:
+            return 0.0
+        try:
+            total = getattr(store, "total_s", None)
+            if callable(total):
+                return float(total())
+            return sum(r[6] - r[5] for r in store.between(0.0, self._clock() + 86400) if r[6] > r[5])
+        except Exception:
+            log.debug("no time for Klippe's hunger", exc_info=True)
+            return None
+
+    def _hunger(self, now: float, work_s: float | None) -> dict[str, Any]:
+        """Brings the satiety up to ``now`` (under the lock) and returns the food record."""
+        mad = self._data["mad"]
+        if not (_number(mad.get("maet")) and _number(mad.get("ved"))):
+            mad.update(maet=START_SATIETY, ved=now, arbejde_s=work_s)
+            return mad
+        if work_s is None:                  # the time is not known now: the anchor stays as it is
+            return mad
+        if not _number(mad.get("arbejde_s")):
+            mad["arbejde_s"] = work_s       # first time known: nothing worked since
+        satiety = float(mad["maet"])
+        if work_s < mad["arbejde_s"]:
+            # Time taken back (the tracker trims a pause it had counted as work): give back what
+            # Klippe burnt on it.
+            satiety = min(FULL, satiety + (mad["arbejde_s"] - work_s) / 3600.0 * WORK_BURN)
+        worked = max(0.0, work_s - mad["arbejde_s"])
+        rest = max(0.0, now - mad["ved"] - worked)
+        mad.update(maet=satiety_after(satiety, worked, rest), ved=now, arbejde_s=work_s)
+        return mad
+
+    def _food_state(self, mad: dict[str, Any], now: float) -> dict[str, Any]:
+        energy = mad.get("energi")
+        rush = None
+        if isinstance(energy, dict) and energy.get("item") in MENU_BY_ID \
+                and isinstance(energy.get("til"), (int, float)) and energy["til"] > now:
+            start = energy.get("fra")
+            rush = {"item": energy["item"], "name": MENU_BY_ID[energy["item"]].name, "til": energy["til"],
+                    "fra": start if isinstance(start, (int, float)) else None, "left_s": round(energy["til"] - now)}
+        drip = mad.get("drop")
+        bag = None                          # the drip's own bag: it stays until empty, whatever is drunk
+        if isinstance(drip, dict) and _number(drip.get("fra")) and _number(drip.get("til")) and drip["til"] > now:
+            bag = {"fra": drip["fra"], "til": drip["til"]}
+        return {"maet": round(float(mad["maet"]), 1), "energi": rush, "drop": bag, "spist": dict(mad["spist"]),
+                "menu": [_food_dict(food) for food in MENU]}
+
+    def food(self) -> dict[str, Any]:
+        """``GET /api/pet/mad``: how full Klippe is, an energy rush, what it has eaten, the menu."""
+        now = self._clock()
+        work = self._work_s()
+        with self._lock:
+            return self._food_state(self._hunger(now, work), now)
+
+    def feed(self, item: Any) -> dict[str, Any]:
+        """``POST /api/pet/mad {item}``. Klippe says no to food when it is full (``grund``
+        "maet") and to a fourth energy drink or drip within two hours ("hjerte")."""
+        food = MENU_BY_ID.get(item) if isinstance(item, str) else None
+        if food is None:
+            raise ValueError("Ugyldig værdi: item")
+        now = self._clock()
+        work = self._work_s()
+        with self._lock:
+            mad = self._hunger(now, work)
+            reason = None
+            if food.kind == "mad" and mad["maet"] >= TOO_FULL:
+                reason = "maet"
+            elif food.energy and sum(1 for at, i in mad["log"] if MENU_BY_ID[i].energy
+                                     and 0 <= now - at < DRINKS_WINDOW_S) >= DRINKS_MAX:
+                reason = "hjerte"
+            if reason is None:
+                mad["maet"] = min(FULL, mad["maet"] + food.points)
+                if food.energy:
+                    energy = mad.get("energi")
+                    until = energy.get("til") if isinstance(energy, dict) else None
+                    start = max(now, until) if isinstance(until, (int, float)) else now
+                    mad["energi"] = {"item": food.id, "fra": now,
+                                     "til": min(now + ENERGY_MAX_S, start + food.energy_min * 60)}
+                if food.kind == "drop":
+                    mad["drop"] = {"fra": now, "til": now + food.energy_min * 60}
+                mad["log"].append([now, food.id])
+                del mad["log"][:-MEAL_LOG_MAX]
+                mad["spist"][food.id] = int(mad["spist"].get(food.id) or 0) + 1
+                self._save()
+            state = self._food_state(mad, now)
+        if reason is None:
+            log.info("Klippe: %s", food.name)
+            self.bus.publish("pet_mad", state)
+            self._wake.set()                        # its food trophies
+        return {"ok": True, "spiste": reason is None, "grund": reason, "item": _food_dict(food), "mad": state}
 
     # -- the API ------------------------------------------------------------------------------
     def counts(self) -> dict[str, int]:

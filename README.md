@@ -208,12 +208,20 @@ at slå det fra igen.
 - **Vokser:** fra æg til baby, junior, pro og legende med al den tid, du har registreret, og viser
   🔥 dage i træk med mindst en times arbejde. Klik på den, så bliver den glad.
 
-**Trofæer og garderobe:** Klik på 🏆 øverst i Klippe. Der er 40 trofæer – for at nå dagens mål,
+**Trofæer og garderobe:** Klik på 🏆 øverst i Klippe. Der er 47 trofæer – for at nå dagens mål,
 holde pauser, gå hjem til tiden, arbejde stabilt (kun hverdage tæller), bruge alle Resolves sider,
 overføre kort og meget mere; nogle kun i bestemte måneder, og nogle er hemmelige. Mange giver en ny
 ting til garderoben: farver, striber, hatte, briller, noget i munden eller hånden og en aura. De
 sjældne og legendariske ting – blandt andet seje solbriller, en cigaret og en AWP, som Klippe skyder
 efter musen med, når du er væk – findes kun ved held på en arbejdsdag, og hver pc har sit eget held.
+
+**Mad og sult:** Klippe bliver sulten, mens du arbejder (og lidt om natten, men aldrig mere end
+„lidt sulten"), og så drømmer den om mad i en tankeboble, og maven knurrer. Tryk på **🍔 Mad** og
+giv den en durum, en Big Mac, nuggets, pommes frites, en Faxe Kondi Booster, en Monster Mango Loco –
+eller et **Booster-drop** direkte i armen. Den spiser med store bid og bøvser efter en dåse, og
+energidrikkene giver den lyn og turbo et stykke tid; droppet bliver stående, til posen er tom. Er
+den mæt, siger den nej tak, og efter tre energidrikke på to timer hamrer hjertet. Mad giver også
+et par trofæer – og nogle af dem en ny ting i hånden.
 
 **Beskeder:** Når en Claude-session vil bruge Resolve, er færdig eller venter på dig, kommer
 beskeden op nede ved Klippe med knapperne (f.eks. **Byg nu**) og en lille lyd – den tager ikke

@@ -217,5 +217,141 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(pet.equipped(), ach.DEFAULTS)
 
 
+class WorkStore:
+    """A time store whose total work the test moves forward."""
+
+    def __init__(self) -> None:
+        self.work = 0.0
+
+    def total_s(self) -> float:
+        return self.work
+
+    def between(self, start, end):
+        return []
+
+
+class FoodTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.cfg = Config(path=os.path.join(self.dir.name, "config.json"))
+        self.path = os.path.join(self.dir.name, "pet.json")
+        self.now = datetime(2026, 3, 2, 9).timestamp()        # a Monday morning
+        self.tracker = FakeTracker([])
+        self.tracker.store = WorkStore()
+        self.bus = FakeBus()
+
+    def pet(self) -> ach.PetProgress:
+        return ach.PetProgress(self.cfg, self.bus, tracker=self.tracker, path=self.path, clock=lambda: self.now,
+                               today=lambda: date(2026, 3, 2))
+
+    def later(self, *, work_h: float = 0.0, rest_h: float = 0.0) -> None:
+        self.now += (work_h + rest_h) * 3600
+        self.tracker.store.work += work_h * 3600
+
+    def test_hunger_burns_on_work_and_only_a_little_otherwise(self) -> None:
+        self.assertEqual(ach.satiety_after(100, 3600, 0), 100 - ach.WORK_BURN)
+        self.assertEqual(ach.satiety_after(100, 0, 3600), 100 - ach.REST_BURN)
+        self.assertEqual(ach.satiety_after(50, 0, 10 * 24 * 3600), ach.REST_FLOOR)   # a holiday: peckish, no worse
+        self.assertEqual(ach.satiety_after(20, 0, 3600), 20)                         # rest never makes it worse
+        self.assertEqual(ach.satiety_after(10, 5 * 3600, 0), 0)
+        pet = self.pet()
+        self.assertEqual(pet.food()["maet"], ach.START_SATIETY)                      # a new Klippe is a bit hungry
+        self.later(work_h=1)
+        self.assertEqual(pet.food()["maet"], ach.START_SATIETY - ach.WORK_BURN)
+        self.later(rest_h=12)
+        self.assertEqual(pet.food()["maet"], ach.START_SATIETY - ach.WORK_BURN)      # below the floor already
+
+    def test_feeding_counts_keeps_and_says_no_when_full(self) -> None:
+        pet = self.pet()
+        answer = pet.feed("durum")
+        self.assertEqual((answer["spiste"], answer["grund"], answer["mad"]["maet"]), (True, None, 95.0))
+        self.assertEqual(self.bus.events[-1], ("pet_mad", answer["mad"]))
+        self.assertEqual([m["id"] for m in answer["mad"]["menu"]], [f.id for f in ach.MENU])
+        refused = pet.feed("bigmac")                                                 # ≥ 90: no more food
+        self.assertEqual((refused["spiste"], refused["grund"], refused["mad"]["maet"]), (False, "maet", 95.0))
+        self.later(work_h=2)
+        self.assertTrue(pet.feed("bigmac")["spiste"])
+        again = self.pet()                                                           # a restart
+        self.assertEqual(again.food()["spist"], {"durum": 1, "bigmac": 1})
+        self.assertEqual(again.food()["maet"], 95 - 2 * ach.WORK_BURN + 45)
+        for item in (None, "pizza", 3):
+            with self.subTest(item=item), self.assertRaisesRegex(ValueError, "Ugyldig værdi: item"):
+                pet.feed(item)
+
+    def test_energy_drinks_the_drip_and_a_pounding_heart(self) -> None:
+        pet = self.pet()
+        first = pet.feed("booster")["mad"]
+        self.assertEqual(first["energi"]["item"], "booster")
+        self.assertEqual(first["energi"]["til"] - self.now, 20 * 60)
+        self.assertEqual(first["energi"]["fra"], self.now)
+        self.later(rest_h=0.1)
+        drip = pet.feed("drop")["mad"]["energi"]                                     # stacks on what is left …
+        self.assertEqual((drip["item"], drip["til"] - self.now), ("drop", 14 * 60 + 45 * 60))
+        mango = pet.feed("mangoloco")["mad"]["energi"]                               # … but at most an hour
+        self.assertEqual((mango["item"], mango["til"] - self.now), ("mangoloco", ach.ENERGY_MAX_S))
+        heart = pet.feed("booster")                                                  # a fourth within two hours
+        self.assertEqual((heart["spiste"], heart["grund"]), (False, "hjerte"))
+        self.assertTrue(pet.feed("pommes")["spiste"])                                # food is still fine
+        self.later(rest_h=2)
+        self.assertTrue(pet.feed("booster")["spiste"])
+        self.later(rest_h=1.1)
+        self.assertIsNone(pet.food()["energi"])                                      # the rush is over
+
+    def test_food_trophies(self) -> None:
+        pet = self.pet()
+        for _ in range(3):
+            pet.feed("booster")
+        pet.feed("pommes")
+        news = {n["id"]: n for n in pet.refresh()}
+        self.assertIn("velbekomme", news)
+        self.assertEqual(news["sukkerchok"]["reward"]["id"], "lyn")                  # secret: 3 on one day
+        st = pet.stats()
+        self.assertEqual((st.eaten, st.drinks_day), ({"booster": 3, "pommes": 1}, 3))
+        st = ach.compute_stats([], eaten={"durum": 10, "bigmac": 4, "nuggets": 3, "pommes": 3, "mangoloco": 9,
+                                          "pizza": 99})
+        self.assertTrue(earned(st, "durum10") and earned(st, "mcd10"))
+        self.assertFalse(earned(st, "mango10"))
+        self.assertEqual(trophy("durum10").reward, "durum")
+        self.assertTrue(trophy("sukkerchok").secret)
+
+    def test_an_unreadable_time_store_leaves_the_anchor_alone(self) -> None:
+        self.tracker.store.work = 200 * 3600.0                                       # a long history
+        pet = self.pet()
+        pet.feed("durum")
+        broken = mock.patch.object(WorkStore, "total_s", side_effect=RuntimeError("closed"))
+        with broken:                                                                  # time.db closed on exit
+            self.assertEqual(pet.food()["maet"], 95.0)
+            pet.note_game("quit", True)                                              # … and saved
+        self.assertEqual(self.pet().food()["maet"], 95.0)                            # not the whole history burnt
+
+    def test_a_trimmed_pause_is_given_back(self) -> None:
+        pet = self.pet()
+        pet.food()
+        self.later(work_h=0.5)                                                       # a pause counted as work …
+        self.assertEqual(pet.food()["maet"], ach.START_SATIETY - 10)
+        self.tracker.store.work -= 0.5 * 3600                                        # … and taken back
+        self.assertEqual(pet.food()["maet"], ach.START_SATIETY)
+
+    def test_the_drip_keeps_its_own_bag(self) -> None:
+        pet = self.pet()
+        bag = pet.feed("drop")["mad"]["drop"]
+        self.assertEqual((bag["fra"], bag["til"] - self.now), (self.now, 45 * 60))
+        self.later(rest_h=10 / 60)
+        state = pet.feed("booster")["mad"]                                           # a drink meanwhile
+        self.assertEqual((state["energi"]["item"], state["drop"]), ("booster", bag))   # the bag stays
+        self.later(rest_h=36 / 60)
+        self.assertIsNone(pet.food()["drop"])                                        # empty after 45 min
+        self.assertEqual(pet.food()["energi"]["item"], "booster")                    # the rush goes on
+
+    def test_a_broken_food_record_starts_over(self) -> None:
+        with open(self.path, "w", encoding="utf-8") as fh:
+            fh.write('{"mad": {"maet": "x", "spist": [], "log": [[1, "durum"], ["x", "durum"], [2, "pizza"], 5]}}')
+        pet = self.pet()
+        self.assertEqual(pet._data["mad"]["log"], [[1, "durum"]])
+        self.assertEqual(pet.food()["maet"], ach.START_SATIETY)
+        self.assertEqual(pet.food()["spist"], {})
+
+
 if __name__ == "__main__":
     unittest.main()
