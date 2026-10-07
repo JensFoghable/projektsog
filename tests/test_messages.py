@@ -315,7 +315,7 @@ class CallTests(BoardCase):
 
     def test_two_calls_ring_until_neither_does(self) -> None:
         self.board.post(ASK)
-        self.board.post({**ASK, "tag": "koe:venter-2", "session": "Jens"})
+        self.board.post({**ASK, "tag": "koe:venter-2", "session": "Mette"})
         self.assertEqual(self.rings, [True])                   # one ringtone for both
         self.board.answer("koe:venter")
         self.assertEqual(self.rings, [True])
@@ -512,7 +512,7 @@ class KeptTests(unittest.TestCase):
     def test_a_call_is_kept_answered_or_missed_and_never_rings_again(self) -> None:
         first = self.board()
         first.post(ASK)
-        first.post({**ASK, "tag": "koe:venter-2", "session": "Jens"})
+        first.post({**ASK, "tag": "koe:venter-2", "session": "Mette"})
         first.answer("koe:venter-2")
         first.post(WAIT)
         first.post(DEMO, internal=True)
