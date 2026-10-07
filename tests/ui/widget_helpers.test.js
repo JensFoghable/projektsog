@@ -100,6 +100,50 @@ test('messages: what needs you first, quiet ones last, expired gone', () => {
   assert.equal(w.quietLine(3), '📬 3 beskeder · vis');
 });
 
+test('a call: who rings, missed or ringing, and only until it is answered', () => {
+  const call = { tag: 'koe:venter', titel: '🎬 Mette vil bruge Resolve', opkald: true, besvaret: false, ringer: true };
+  assert.equal(w.isCall(call), true);
+  assert.equal(w.isCall({ ...call, besvaret: true }), false);              // answered: a plain card
+  assert.equal(w.isCall({ tag: 'x', titel: 'Claude · færdig' }), false);   // no buttons: never a call
+  assert.equal(w.isCall(null), false);
+  assert.equal(w.callerName({ ...call, session: 'Jonas' }), 'Jonas');      // the session first
+  assert.equal(w.callerName(call), 'Mette');                               // else the name in the title
+  assert.equal(w.callerName({ titel: 'Lise Marie vil bruge Resolve' }), 'Lise Marie');
+  assert.equal(w.callerName({ titel: '🔐 Noget skal have lov', session: '  ' }), 'Claude');
+  assert.equal(w.callLine(call), '📞 Mette ringer');
+  assert.equal(w.callLine({ ...call, ringer: false }), '📞 Ubesvaret opkald fra Mette');
+});
+
+test('the robot crew: the sheet, the muzzle, what Klippe says', () => {
+  assert.deepEqual(w.ROBOT_POSES, ['robot-a', 'robot-b', 'robot-baer', 'robot-klip', 'robot-hop', 'robot-fraek', 'robot-panik']);
+  assert.equal(w.isRobotSheet(w.ROBOT_POSES), true);
+  assert.equal(w.isRobotSheet(['normal', 'happy']), false);
+  assert.equal(w.isRobotSheet(['robot-a', 'aim']), false);                 // all of them, or Klippe's sheet
+  assert.equal(w.isRobotSheet([]), false);
+  assert.deepEqual(w.ROBOT_COUNT, { egg: 4, baby: 5, junior: 7, pro: 9, legend: 12 });
+  // The end of the barrel in the mirrored aim pose: (100 − 92·S, 180 − 54.75·S).
+  assert.deepEqual(w.muzzle('legend'), { x: 8, y: 125.25 });
+  assert.deepEqual(w.muzzle('legend', 'hoejre'), { x: 192, y: 125.25 });     // aiming right: as drawn
+  const baby = w.muzzle('baby');
+  assert.ok(Math.abs(baby.x - 31.92) < 1e-9 && Math.abs(baby.y - 139.485) < 1e-9);
+  assert.equal(w.muzzle('egg'), null);
+  assert.equal(w.directorLine(() => 0), 'Action! 🎬');
+  assert.equal(w.directorLine(() => 0.4, 5), 'Flot, robot nr. 3! 🤖');
+  for (let i = 0; i < 20; i += 1) assert.ok(w.directorLine(Math.random, 12).length > 3);
+  const build = { aktiv: true, navn: 'Mette', projekt: 'Rikke Lindholm', opgave: '', demo: false, ude: false };
+  assert.equal(w.buildLine({ ...build, projekt: '' }), '🤖 Mette bygger i Resolve – Klippe dirigerer robotterne');
+  assert.equal(w.buildLine(build, 'Bobby'), '🤖 Mette bygger i Rikke Lindholm – Bobby dirigerer robotterne');
+  assert.equal(w.buildLine({ ...build, opgave: 'Portræt v2' }), '🤖 Mette bygger „Portræt v2“ – Klippe dirigerer robotterne');
+  assert.ok(w.buildLine({ ...build, opgave: 'x'.repeat(200) }).includes('…'));
+  assert.equal(w.buildLine({ ...build, ude: true }), '🤖 Robotterne klipper ude på skærmen – rør musen, så går de ind');
+  assert.equal(w.buildLine({ ...build, demo: true, navn: 'Demo', projekt: 'Robotterne øver sig' }),
+    '🤖 Robotterne øver sig – Klippe dirigerer');
+  assert.equal(w.buildLine({ ...build, aktiv: false }), null);
+  assert.equal(w.buildLine(null), null);
+  assert.equal(w.doneLine(build), '✅ Mette er færdig – klar til at klippe!');
+  assert.equal(w.doneLine({ ...build, demo: true }), 'Robotterne er færdige med at øve! 🎉');
+});
+
 test('hatched by hand: at least a baby, the level stays the hours', () => {
   const egg = w.stageFor(2);
   const baby = w.stageFor(2, true);

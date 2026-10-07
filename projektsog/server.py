@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from .resolve_bridge import ResolveBridge
     from .importer import Importer
     from .achievements import PetProgress
+    from .crew import Crew
     from .updater import Updater
     from .messages import MessageBoard
     from .petplay import PetPlay
@@ -136,6 +137,7 @@ class Server:
         self.messages: "MessageBoard | None" = None
         self.progress: "PetProgress | None" = None
         self.updater: "Updater | None" = None
+        self.crew: "Crew | None" = None           # the robot crew (SPEC §21), with the widget
         self.web_dir = web_dir or os.path.join(package_dir, "web")
         self.assets_dir = assets_dir or os.path.join(package_dir, "assets")
         self.sse_heartbeat_s = sse_heartbeat_s
@@ -294,6 +296,9 @@ class Server:
             ("POST", r"/api/messages", self._messages_post),
             ("DELETE", r"/api/messages", self._messages_remove),
             ("POST", r"/api/messages/click", self._messages_click),
+            ("POST", r"/api/messages/svar", self._messages_answer),
+            ("GET", r"/api/bygger", self._build_state),
+            ("POST", r"/api/bygger/demo", self._build_demo),
             ("GET", r"/api/events", None),
         ]
         return [_Route(method, re.compile(pattern), handler) for method, pattern, handler in table]
@@ -495,6 +500,24 @@ class Server:
 
     def _messages_click(self, req: _Request) -> Any:
         return self._board().click(req.body.get("tag"), req.body.get("knap"))
+
+    def _messages_answer(self, req: _Request) -> Any:
+        return self._board().answer(req.body.get("tag"))
+
+    # -- the robot crew (SPEC §21) ---------------------------------------------------------
+    def _crew(self) -> "Crew":
+        if self.crew is None:
+            raise ValueError("Robotterne er ikke startet")
+        return self.crew
+
+    def _build_state(self, req: _Request) -> Any:
+        return self._crew().state()
+
+    def _build_demo(self, req: _Request) -> Any:
+        call = req.body.get("opkald", False)
+        if not isinstance(call, bool):
+            raise ValueError("Ugyldig værdi: opkald")
+        return self._crew().demo(call)
 
     def _get_settings(self, req: _Request) -> Any:
         return self._settings_payload()

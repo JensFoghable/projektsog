@@ -409,7 +409,8 @@ class AppHarness:
             config=self._config, indexer=self._indexer, bridge=self._bridge,
             tracker=self._tracker, importer=self._importer,
             controller=self._controller, server=self._server, window=self._window, widget=self._widget,
-            petplay=self._petplay, tray=self._tray, hotkeys=self._hotkeys, updater=self._updater)
+            petplay=self._petplay, crew=self._crew, messages=self._messages, tray=self._tray,
+            hotkeys=self._hotkeys, updater=self._updater)
         self.app = app.App(app.parse_args(list(flags)), self.instance, components=components,
                            exit_deadline_s=exit_deadline_s, hotkey_recheck_s=hotkey_recheck_s)
         test.addCleanup(self.app.exit_sequence)     # stops the app's threads
@@ -475,12 +476,30 @@ class AppHarness:
         self.widget = fakes.FakeWidget(self.journal, "widget")
         return self.widget
 
-    def _petplay(self, cfg, bus, *, widget, bridge, importer, base_url: str, wardrobe, on_game) -> fakes.FakePetPlay:
+    def _petplay(self, cfg, bus, *, widget, bridge, importer, base_url: str, wardrobe, on_game,
+                 crew_active) -> fakes.FakePetPlay:
         self.journal.append("petplay.create")
         assert (widget, bridge, importer) == (self.widget, self.bridge, self.importer)
         assert base_url == "http://127.0.0.1:4711"
+        self.crew_active = crew_active
         self.petplay = fakes.FakePetPlay(self.journal, "petplay")
         return self.petplay
+
+    def _crew(self, cfg, bus, *, widget, watch, look, wardrobe, petplay_busy, messages,
+              base_url: str) -> fakes.FakeCrew:
+        self.journal.append("crew.create")
+        assert widget is self.widget and messages is self.messages
+        assert (look, petplay_busy) == (self.petplay.look, self.petplay.busy)   # what Klippe looks like, its games
+        assert base_url == "http://127.0.0.1:4711"
+        self.crew_watch = watch
+        self.crew_wardrobe = wardrobe
+        self.crew = fakes.FakeCrew(self.journal, "crew")
+        return self.crew
+
+    def _messages(self, cfg, bus, *, shown, on_internal, path: str) -> fakes.FakeMessages:
+        self.messages_kwargs = {"shown": shown, "on_internal": on_internal, "path": path}
+        self.messages = fakes.FakeMessages()
+        return self.messages
 
     def _updater(self, cfg, bus, *, repo_dir: str, data_dir: str, autostart) -> "FakeUpdater":
         assert repo_dir == app.REPO_DIR and autostart == self.controller.get_run_at_login
@@ -533,8 +552,8 @@ class AppStartupTests(unittest.TestCase):
     STARTUP = ["config", "indexer.create", "indexer.start", "bridge.create", "bridge.start",
                "tracker.create", "tracker.start",
                "controller.create", "importer.create", "server.create", "server.start",
-               "window.create", "widget.create", "petplay.create", "widget.start", "petplay.start",
-               "tray.create", "tray.start", "hotkeys.create", "hotkeys.start",
+               "window.create", "widget.create", "petplay.create", "crew.create", "widget.start",
+               "petplay.start", "crew.start", "tray.create", "tray.start", "hotkeys.create", "hotkeys.start",
                "importer.start"]
 
     def test_startup_order_and_wiring(self) -> None:
@@ -560,6 +579,21 @@ class AppStartupTests(unittest.TestCase):
         self.assertIs(h.controller.window, h.window)
         self.assertIs(h.controller.hotkeys, h.managers[0])
 
+    def test_the_robot_crew_is_wired_up(self) -> None:
+        h = AppHarness(self, "--background")
+        h.app.start()
+        self.assertIs(h.server.crew, h.crew)
+        self.assertIsInstance(h.crew_watch, app.KoeWatch)
+        self.assertEqual(h.crew_wardrobe, h.app.progress.equipped)     # the AWP comes from the wardrobe
+        self.assertEqual(h.messages_kwargs["path"], os.path.join(config.app_dir(), "messages.json"))
+        # PetPlay plays no game while the robots build …
+        self.assertFalse(h.crew_active())
+        h.crew.returns["active"] = True
+        self.assertTrue(h.crew_active())
+        # … and a "projektsog:" button of a message Projektsøg posted itself goes to the crew.
+        h.messages_kwargs["on_internal"]("projektsog:demo")
+        self.assertEqual(h.crew.called("handle_uri"), [(("projektsog:demo",), {})])
+
     def test_background_preloads_instead_of_showing(self) -> None:
         h = AppHarness(self, "--background")
         h.app.start()
@@ -569,8 +603,11 @@ class AppStartupTests(unittest.TestCase):
     def test_no_window_mode_is_headless(self) -> None:
         h = AppHarness(self, "--no-window", "--rescan", "--port", "48000")
         h.app.start()
-        for absent in ("window.create", "tray.create", "hotkeys.create"):
+        for absent in ("window.create", "tray.create", "hotkeys.create", "crew.create"):
             self.assertNotIn(absent, h.journal)
+        self.assertIsNone(h.app.crew)                   # no Klippe, no robots
+        with self.assertRaisesRegex(ValueError, "Robotterne er ikke startet"):
+            h.messages_kwargs["on_internal"]("projektsog:demo")
         self.assertEqual(h.indexer.called("scan_now"), [((None,), {"full": True})])
         self.assertLess(h.journal.index("indexer.start"), h.journal.index("indexer.scan_now"))
         self.assertEqual(h.server.called("start"), [((48000,), {})])
@@ -731,7 +768,7 @@ class AppRuntimeTests(unittest.TestCase):
 
 class ExitSequenceTests(unittest.TestCase):
     EXIT = ["hotkeys.stop", "tray.stop", "importer.stop", "tracker.stop", "bridge.stop", "indexer.stop",
-            "server.stop", "petplay.close", "widget.close", "window.close", "instance.release"]
+            "server.stop", "crew.close", "petplay.close", "widget.close", "window.close", "instance.release"]
 
     def test_exit_order_and_cleanup(self) -> None:
         h = AppHarness(self)
@@ -743,6 +780,7 @@ class ExitSequenceTests(unittest.TestCase):
         h.app.exit_sequence()
         self.assertEqual(h.journal[mark:], self.EXIT)
         self.assertTrue(h.updater.closed)
+        self.assertEqual(len(h.messages.called("close")), 1)       # a ringing phone stops
         (_, kwargs), = h.indexer.called("stop")
         self.assertAlmostEqual(kwargs["timeout"], 1.5)
         self.assertIsNone(h.controller.hotkeys)

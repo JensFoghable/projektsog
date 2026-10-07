@@ -584,14 +584,14 @@ class SchedulerTests(unittest.TestCase):
         self.now = 100.0
         self.play = self.make()
 
-    def make(self, rng: float = 0.5) -> petplay.PetPlay:
+    def make(self, rng: float = 0.5, **kwargs) -> petplay.PetPlay:
         def spawn(argv, on_out, on_exit):
             child = FakeChild(argv, on_out, on_exit)
             self.children.append(child)
             return child
         play = petplay.PetPlay(self.cfg, self.bus, widget=FakeWidget(), bridge=self.bridge,
                                importer=self.importer, probe=self.probe, sprites=self.sprites, spawn=spawn,
-                               rng=RNG(rng), clock=lambda: self.now, log_file="x.log")
+                               rng=RNG(rng), clock=lambda: self.now, log_file="x.log", **kwargs)
         play.set_look(LOOK)
         return play
 
@@ -771,6 +771,74 @@ class SchedulerTests(unittest.TestCase):
         self.children[0].on_exit("touched")
         self.assertIn("Musen lå ikke stille", self.bus.events[-1][1]["message"])
 
+    # -- the robot crew (SPEC §21.3) ---------------------------------------------------------
+    def test_no_game_while_the_robots_build(self) -> None:
+        building = [True]
+        self.play = self.make(crew_active=lambda: building[0])
+        self.idle_for(6)
+        self.assertEqual(self.children, [])                # Klippe directs the robots
+        with self.assertRaisesRegex(ValueError, "Klippe dirigerer robotterne lige nu 🤖"):
+            self.play.play_now()
+        self.assertEqual(self.play.status()["state"], "ready")
+        building[0] = False                                # the build is done: the pause still counts
+        self.idle_for(7)
+        self.assertEqual(len(self.children), 1)
+
+    def test_a_build_that_begins_while_the_sprites_are_drawn_wins(self) -> None:
+        building = [False]
+        seen: list[bool] = []
+        self.play = self.make(crew_active=lambda: building[0])
+
+        def ensure(stage, outfit, wearing=None):         # drawing the sheet takes seconds …
+            seen.append(self.play.busy())                 # … and the robots must wait meanwhile
+            building[0] = True                            # a session takes Resolve right then
+            return "C:\sheets\klippe.png"
+        self.sprites.ensure = ensure
+        self.idle_for(6)
+        self.assertEqual((seen, self.children), ([True], []))
+        self.assertFalse(self.play.busy())
+
+    def test_a_build_ends_the_wait_for_play_now(self) -> None:
+        building = [False]
+        self.play = self.make(crew_active=lambda: building[0])
+        self.play.play_now()
+        self.probe.idle = 0.3
+        self.play.step()
+        self.assertTrue(self.play.busy())                  # waiting for a still mouse
+        building[0] = True
+        self.play.step()
+        self.assertEqual(self.bus.events[-1][1]["state"], "ready")
+        self.assertEqual(self.bus.events[-1][1]["message"], "Klippe dirigerer robotterne lige nu 🤖")
+        self.assertFalse(self.play.busy())
+        self.probe.idle = 2
+        self.play.step()
+        self.assertEqual(self.children, [])
+
+    def test_a_crew_that_fails_to_answer_blocks_nothing(self) -> None:
+        self.play = self.make(crew_active=lambda: 1 / 0)
+        self.idle_for(6)
+        self.assertEqual(len(self.children), 1)
+
+    def test_look_and_busy_for_the_crew(self) -> None:
+        play = petplay.PetPlay(self.cfg, self.bus, widget=FakeWidget(), probe=self.probe, sprites=self.sprites,
+                               spawn=lambda argv, out, end: self.children.append(FakeChild(argv, out, end))
+                               or self.children[-1], clock=lambda: self.now)
+        self.assertIsNone(play.look())
+        play.set_look(LOOK)
+        look = play.look()
+        self.assertEqual(look, {"stage": "baby", "outfit": "color", "pet": (25.0, 40.0, 210.0, 210.0),
+                                "view": (260.0, 448.0)})
+        look["stage"] = "legend"                           # a copy
+        self.assertEqual(play.look()["stage"], "baby")
+        self.assertFalse(play.busy())
+        play.play_now()
+        self.assertTrue(play.busy())                       # "Vis legen nu" waits
+        self.probe.idle = 2
+        play.step()
+        self.assertTrue(play.busy())                       # a game
+        self.children[0].on_exit("done")
+        self.assertFalse(play.busy())
+
     def test_the_page_report_is_checked(self) -> None:
         for bad in (None, [], {"stage": "dragon"}, {**LOOK, "outfit": "hat"},
                     {**LOOK, "pet": {"x": 1, "y": 2, "w": 0, "h": 3}}, {**LOOK, "view": {"w": "x", "h": 1}},
@@ -796,6 +864,9 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(petplay.play_blocker(**{**base, "enabled": False, "locked": True}), "off")
         self.assertIsNone(petplay.play_blocker(**{**base, "manual": True, "idle_s": 2, "fullscreen": True}))
         self.assertEqual(petplay.play_blocker(**{**base, "manual": True, "idle_s": 1}), "busy")
+        self.assertEqual(petplay.play_blocker(**{**base, "building": True}), "bygger")
+        self.assertEqual(petplay.play_blocker(**{**base, "manual": True, "idle_s": 2, "building": True}), "bygger")
+        self.assertEqual(petplay.play_blocker(**{**base, "building": True, "locked": True}), "locked")
 
 
 class SpriteSheetTests(unittest.TestCase):

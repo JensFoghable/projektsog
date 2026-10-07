@@ -17,10 +17,13 @@ A game starts only when
 * the screen is not locked, nothing runs in full screen on that monitor (nor a presentation or
   a game, as Windows sees it), and Windows does not activate windows under the mouse,
 * Resolve is not playing back (a render is fine – Klippe gets bored waiting too) and no camera
-  card is being transferred (Klippe is busy carrying files then).
+  card is being transferred (Klippe is busy carrying files then),
+* no Claude session is building in Resolve (``crew_active``): Klippe directs the robot crew
+  then (crew.py).
 
 "Vis legen nu" (``play_now``) starts a game as soon as the mouse has been still for a moment,
-whatever the pause, the age (an egg plays as the baby it will be) or Resolve.
+whatever the pause, the age (an egg plays as the baby it will be) or Resolve – but not while
+the robots build.
 """
 
 from __future__ import annotations
@@ -70,6 +73,7 @@ MESSAGES = {
                             "over dem"),
     "still": "Musen lå ikke stille – klik igen, og slip musen et par sekunder",
     "sprites": "Klippe kunne ikke tegnes – se loggen",
+    "bygger": "Klippe dirigerer robotterne lige nu 🤖",
 }
 
 _CREATE_NO_WINDOW = 0x08000000
@@ -219,9 +223,9 @@ class DesktopProbe:
 
 def play_blocker(*, enabled: bool, widget: bool, look: bool, locked: bool, focus_follows: bool,
                  idle_s: float, threshold_s: float, played: bool, transfer: bool, playback: bool,
-                 fullscreen: bool, manual: bool) -> str | None:
+                 fullscreen: bool, manual: bool, building: bool = False) -> str | None:
     """Why no game may start now (None: it may). ``manual``: "Vis legen nu" – it only waits for
-    a still mouse."""
+    a still mouse. ``building``: the robots build (no game, not even "Vis legen nu")."""
     if not enabled:
         return "off"
     if not widget:
@@ -232,6 +236,8 @@ def play_blocker(*, enabled: bool, widget: bool, look: bool, locked: bool, focus
         return "locked"
     if focus_follows:
         return "focus-follows-mouse"
+    if building:
+        return "bygger"
     if manual:
         return None if idle_s >= MANUAL_STILL_S else "busy"
     if idle_s < threshold_s:
@@ -282,9 +288,10 @@ def clean_look(data: Any) -> dict[str, Any]:
 # The sprite sheet
 # --------------------------------------------------------------------------------------
 
-def sprite_signature(web_dir: str) -> str:
-    """Changes whenever the pet's drawing (widget.html/css/js) or the sheet layout changes."""
-    digest = hashlib.sha1(f"{POSES}|{CELL_CSS}|{SHEET_SCALE}".encode())
+def sprite_signature(web_dir: str, layout: str | None = None) -> str:
+    """Changes whenever the pet's drawing (widget.html/css/js) or the sheet layout changes
+    (``layout``: another sheet drawn by the same page, such as the robots')."""
+    digest = hashlib.sha1((layout or f"{POSES}|{CELL_CSS}|{SHEET_SCALE}").encode())
     for name in ("widget.html", "widget.css", "widget.js"):
         try:
             with open(os.path.join(web_dir, name), "rb") as fh:
@@ -339,45 +346,66 @@ class SpriteSheets:
             return path
         os.makedirs(self.folder, exist_ok=True)
         self._remove_old(os.path.basename(path).rsplit("-", 1)[1])
-        temp = path + ".part.png"
-        if not self._render(self.url(stage, outfit, wearing), temp):
+        if not render_sheet(self.url(stage, outfit, wearing), path, self.expected_size(), self._render):
             return None
-        if png_size(temp) != self.expected_size():
-            log.warning("the sprite sheet came out wrong: %s", png_size(temp))
-            _remove(temp)
-            return None
-        os.replace(temp, path)
         log.info("rendered Klippe's sprites (%s, %s)", stage, outfit)
         return path
 
     def _render(self, url: str, out: str) -> bool:
-        edge = self._edge or winui.edge_path()
-        if not edge:
-            log.error("Microsoft Edge was not found – cannot draw Klippe's sprites")
-            return False
-        _remove(out)
-        width, height = CELL_CSS * len(POSES), CELL_CSS
-        args = [edge, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--mute-audio",
-                "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync",
-                "--default-background-color=00000000", f"--force-device-scale-factor={SHEET_SCALE}",
-                f"--user-data-dir={self.profile_dir}", f"--window-size={width},{height}",
-                f"--screenshot={out}", url]
-        try:
-            self._run(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                      timeout=SPRITE_TIMEOUT_S, creationflags=_CREATE_NO_WINDOW, check=False)
-        except (OSError, subprocess.SubprocessError) as exc:
-            log.warning("rendering Klippe's sprites failed: %s", exc)
-            return False
-        return os.path.isfile(out)
+        return render_page(url, out, (CELL_CSS * len(POSES), CELL_CSS), edge=self._edge,
+                           profile_dir=self.profile_dir, run=self._run, what="Klippe's sprites")
 
     def _remove_old(self, keep_suffix: str) -> None:
-        try:
-            names = os.listdir(self.folder)
-        except OSError:
-            return
-        for name in names:
-            if name.startswith("klippe-") and name.endswith(".png") and not name.endswith(keep_suffix):
-                _remove(os.path.join(self.folder, name))
+        remove_old(self.folder, "klippe-", keep_suffix)
+
+
+def render_page(url: str, out: str, size_css: tuple[int, int], *, edge: str | None, profile_dir: str,
+                run: Callable[..., Any] = subprocess.run, what: str = "the sprites") -> bool:
+    """Headless Edge draws ``url`` (``size_css`` CSS pixels at SHEET_SCALE×, on transparency)
+    into the PNG ``out``; False when it could not."""
+    edge = edge or winui.edge_path()
+    if not edge:
+        log.error("Microsoft Edge was not found – cannot draw %s", what)
+        return False
+    _remove(out)
+    width, height = size_css
+    args = [edge, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--mute-audio",
+            "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync",
+            "--default-background-color=00000000", f"--force-device-scale-factor={SHEET_SCALE}",
+            f"--user-data-dir={profile_dir}", f"--window-size={width},{height}",
+            f"--screenshot={out}", url]
+    try:
+        run(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=SPRITE_TIMEOUT_S, creationflags=_CREATE_NO_WINDOW, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("rendering %s failed: %s", what, exc)
+        return False
+    return os.path.isfile(out)
+
+
+def render_sheet(url: str, path: str, expected: tuple[int, int], render: Callable[[str, str], bool]) -> bool:
+    """``render(url, temp)`` into a temporary file next to ``path``; only a sheet of exactly the
+    ``expected`` size (device pixels) replaces ``path``."""
+    temp = path + ".part.png"
+    if not render(url, temp):
+        return False
+    if png_size(temp) != expected:
+        log.warning("the sprite sheet came out wrong: %s", png_size(temp))
+        _remove(temp)
+        return False
+    os.replace(temp, path)
+    return True
+
+
+def remove_old(folder: str, prefix: str, keep_suffix: str) -> None:
+    """Remove the ``<prefix>…png`` sheets of an older drawing (all but ``…keep_suffix``)."""
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return
+    for name in names:
+        if name.startswith(prefix) and name.endswith(".png") and not name.endswith(keep_suffix):
+            _remove(os.path.join(folder, name))
 
 
 def _remove(path: str) -> None:
@@ -391,26 +419,31 @@ def _remove(path: str) -> None:
 # The helper process
 # --------------------------------------------------------------------------------------
 
-def child_argv() -> list[str]:
-    """``[pythonw.exe next to sys.executable (else sys.executable), -m, CHILD_MODULE]``."""
+def child_argv(module: str = CHILD_MODULE) -> list[str]:
+    """``[pythonw.exe next to sys.executable (else sys.executable), -m, module]``."""
     pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
-    return [pythonw if os.path.isfile(pythonw) else sys.executable, "-m", CHILD_MODULE]
+    return [pythonw if os.path.isfile(pythonw) else sys.executable, "-m", module]
 
 
 class _Child:
-    """One running game: events from its stdout; ``stop()`` asks it to end (and kills it if it
-    does not)."""
+    """One running helper (a game, or the robot crew): events from its stdout – ``out``, any
+    other event to ``on_event`` (when given), and the ``home`` reason once it has ended;
+    ``send()`` writes a line to its stdin, ``stop()`` asks it to end (and kills it if it does
+    not)."""
 
     def __init__(self, argv: list[str], on_out: Callable[[], None],
-                 on_exit: Callable[[str], None]) -> None:
+                 on_exit: Callable[[str], None],
+                 on_event: Callable[[dict[str, Any]], None] | None = None, *, name: str = "petplay") -> None:
         env = dict(os.environ)
         env["PYTHONPATH"] = os.pathsep.join(p for p in (_REPO_ROOT, env.get("PYTHONPATH")) if p)
         self._on_out = on_out
         self._on_exit = on_exit
+        self._on_event = on_event
+        self._stdin_lock = threading.Lock()
         self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.DEVNULL, cwd=config.app_dir(), env=env,
                                      creationflags=_CREATE_NO_WINDOW, close_fds=True)
-        threading.Thread(target=self._read, name=f"petplay-{self.proc.pid}", daemon=True).start()
+        threading.Thread(target=self._read, name=f"{name}-{self.proc.pid}", daemon=True).start()
 
     def _read(self) -> None:
         reason: str | None = None
@@ -427,6 +460,12 @@ class _Child:
                     self._on_out()
                 elif message.get("event") == "home":
                     reason = str(message.get("reason") or "done")
+                    self._close_stdin()                # its stdin reader ends at once: a clean exit
+                elif self._on_event is not None:
+                    try:
+                        self._on_event(message)
+                    except Exception:
+                        log.exception("handling %s from the helper failed", message.get("event"))
         except (OSError, ValueError):
             pass
         finally:
@@ -434,22 +473,55 @@ class _Child:
                 self.proc.wait(5.0)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+            self._close_pipes()
             self._on_exit(reason or "error")
+
+    def _close_stdin(self) -> None:
+        with self._stdin_lock:
+            try:
+                if self.proc.stdin is not None:
+                    self.proc.stdin.close()
+            except (OSError, ValueError):
+                pass
+
+    def _close_pipes(self) -> None:
+        with self._stdin_lock:
+            for pipe in (self.proc.stdin, self.proc.stdout):
+                try:
+                    if pipe is not None:
+                        pipe.close()
+                except (OSError, ValueError):
+                    pass
 
     def alive(self) -> bool:
         return self.proc.poll() is None
 
+    def send(self, line: str) -> None:
+        """One line to the helper's stdin (lost when it has gone already)."""
+        with self._stdin_lock:
+            try:
+                if self.proc.stdin is not None and not self.proc.stdin.closed:
+                    self.proc.stdin.write(line.encode("utf-8") + b"\n")
+                    self.proc.stdin.flush()
+            except (OSError, ValueError):
+                pass
+
     def stop(self, wait: float = QUIT_WAIT_S) -> None:
-        try:
-            if self.proc.stdin is not None:
-                self.proc.stdin.write(b"quit\n")
-                self.proc.stdin.close()
-        except OSError:
-            pass
+        with self._stdin_lock:
+            stdin = self.proc.stdin
+            if stdin is not None and not stdin.closed:
+                try:
+                    stdin.write(b"quit\n")
+                except (OSError, ValueError):
+                    pass
+                try:
+                    stdin.close()                  # EOF: the helper ends by itself as well
+                except (OSError, ValueError):
+                    pass
         try:
             self.proc.wait(wait)
         except subprocess.TimeoutExpired:
-            log.warning("the game did not stop – ending it")
+            log.warning("the helper did not stop – ending it")
             self.proc.kill()
 
 
@@ -466,12 +538,14 @@ class PetPlay:
                  rng: random.Random | None = None, clock: Callable[[], float] = time.monotonic,
                  log_file: str | None = None,
                  wardrobe: Callable[[], dict[str, str]] | None = None,
-                 on_game: Callable[[str, bool], None] | None = None) -> None:
+                 on_game: Callable[[str, bool], None] | None = None,
+                 crew_active: Callable[[], bool] | None = None) -> None:
         self.cfg = cfg
         self.bus = bus
         self._widget = widget
         self._bridge = bridge
         self._importer = importer
+        self._crew_active = crew_active
         self._probe = probe or DesktopProbe()
         self._sprites = sprites or SpriteSheets(base_url)
         self._spawn = spawn or _Child
@@ -491,6 +565,7 @@ class PetPlay:
         self._state = "ready"                 # ready | waiting | out
         self._message = ""
         self._manual_until: float | None = None
+        self._launching = False                       # _launch is drawing sprites / spawning
         self._played_tick: int | None = None  # the pause that already had its game
         self._rolled: tuple[int, bool] | None = None   # (pause, feels like playing?)
         self._timecode: tuple[Any, str] | None = None
@@ -534,11 +609,25 @@ class PetPlay:
             self._look = look
         return {"ok": True}
 
+    def look(self) -> dict[str, Any] | None:
+        """How the widget page last said the pet looks (a copy), None before its first report."""
+        with self._lock:
+            return dict(self._look) if self._look is not None else None
+
+    def busy(self) -> bool:
+        """A game is on, about to start (its sprites being drawn), or "Vis legen nu" waits for a
+        still mouse."""
+        with self._lock:
+            return self._child is not None or self._manual_until is not None or self._launching
+
     def play_now(self) -> dict[str, Any]:
         """"Vis legen nu": a game as soon as the mouse has been still for a moment."""
+        building = self._building()
         with self._lock:
             if not self.cfg.get("widget_enabled", False):
                 raise ValueError(MESSAGES["off"])
+            if building:
+                raise ValueError(MESSAGES["bygger"])
             if self._child is not None:
                 raise ValueError("Klippe leger allerede 🎈")
             self._manual_until = self._clock() + MANUAL_WAIT_S
@@ -587,7 +676,8 @@ class PetPlay:
             enabled=enabled, widget=shown, look=look is not None, locked=self._probe.locked(),
             focus_follows=self._probe.focus_follows_mouse(), idle_s=idle, threshold_s=threshold,
             played=played, transfer=quiet and self._transfer_busy(), playback=quiet and self._playing(now),
-            fullscreen=quiet and bool(hwnd) and self._probe.fullscreen(hwnd), manual=manual)
+            fullscreen=quiet and bool(hwnd) and self._probe.fullscreen(hwnd), manual=manual,
+            building=self._building())
         if reason is not None:
             if manual and reason != "busy":
                 self._end_manual(MESSAGES.get(reason, MESSAGES["still"]))
@@ -610,6 +700,16 @@ class PetPlay:
         with self._lock:
             self._manual_until = None
             self._set_state("ready", message)
+
+    def _building(self) -> bool:
+        """A Claude session builds (or the robots' demo runs): Klippe directs the crew."""
+        if self._crew_active is None:
+            return False
+        try:
+            return bool(self._crew_active())
+        except Exception:
+            log.debug("could not ask the robot crew", exc_info=True)
+            return False
 
     def _transfer_busy(self) -> bool:
         if self._importer is None:
@@ -648,9 +748,17 @@ class PetPlay:
 
     # -- a game ----------------------------------------------------------------------------
     def _launch(self, look: dict[str, Any], hwnd: int, tick: int, manual: bool) -> None:
-        stage = "baby" if look["stage"] == "egg" else look["stage"]
         with self._lock:
             self._played_tick = tick                 # one game per pause, whatever happens
+            self._launching = True                   # busy() while the sprites may take seconds
+        try:
+            self._launch_game(look, hwnd, tick, manual)
+        finally:
+            with self._lock:
+                self._launching = False
+
+    def _launch_game(self, look: dict[str, Any], hwnd: int, tick: int, manual: bool) -> None:
+        stage = "baby" if look["stage"] == "egg" else look["stage"]
         try:
             wearing = dict(self._wardrobe())
         except Exception:
@@ -670,8 +778,13 @@ class PetPlay:
             argv += ["--pet", ",".join(str(v) for v in look["pet"])]
         if look.get("view"):
             argv += ["--view", ",".join(str(v) for v in look["view"])]
+        building = self._building()                  # a build may have begun while the sprites were drawn
         with self._lock:
             if self._stop.is_set():
+                return
+            if building:
+                if manual:
+                    self._end_manual(MESSAGES["bygger"])
                 return
             try:
                 self._child = self._spawn(argv, self._on_out, self._on_exit)

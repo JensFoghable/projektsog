@@ -282,6 +282,38 @@ class FakePetPlay(Fake):
     """projektsog.petplay.PetPlay stand-in."""
     def start(self) -> None: return self._call("start")
     def close(self) -> None: return self._call("close")
+    def look(self) -> dict | None: return self._call("look")
+    def busy(self) -> bool: return bool(self._call("busy"))
+
+
+class FakeCrew(Fake):
+    """projektsog.crew.Crew stand-in (never reads the Resolve queue or starts a helper)."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.returns.update({"active": False, "state": {"aktiv": False}, "demo": {"aktiv": True}})
+
+    def start(self) -> None: return self._call("start")
+    def close(self) -> None: return self._call("close")
+    def active(self) -> bool: return bool(self._call("active"))
+    def state(self) -> dict: return self._call("state")
+    def demo(self, call: bool) -> dict: return self._call("demo", call)
+    def handle_uri(self, uri: str) -> None: return self._call("handle_uri", uri)
+
+
+class FakeMessages(Fake):
+    """projektsog.messages.MessageBoard stand-in."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.returns.update({"post": {"ok": True, "vist": False}, "list": {"messages": []}})
+
+    def post(self, data: Any, *, internal: bool = False) -> dict: return self._call("post", data, internal=internal)
+    def list(self) -> dict: return self._call("list")
+    def remove(self, tag: Any) -> dict: return self._call("remove", tag)
+    def click(self, tag: Any, index: Any) -> dict: return self._call("click", tag, index)
+    def answer(self, tag: Any) -> dict: return self._call("answer", tag)
+    def close(self) -> None: return self._call("close")
 
 
 class FakeTray(Fake):

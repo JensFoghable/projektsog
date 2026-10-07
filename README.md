@@ -230,6 +230,23 @@ flere, bladrer du med ‹ ›, og det, der venter på dit svar, kommer forrest. 
 færdig og ikke skal have svar, kommer stille: ingen lyd, kun en lille linje „📬 1 besked · vis".
 × lukker en besked. Er Klippe slået fra, viser køen sin egen Windows-besked i stedet.
 
+**Telefonen:** Vil en session bygge („🎬 Mette vil bruge Resolve"), ringer det: Klippe får en rød
+telefon, der ryster i op til 30 sekunder („📞 Mette ringer"), og der lyder en kort, lav og lidt sjov
+„trrring-trrring … klap!" – én gang. Tryk på **Tag telefonen** (eller på telefonen) – Klippe svarer
+„Hallo?", og så kommer spørgsmålet med **Byg nu**. Tager du den ikke, bliver det et ubesvaret opkald.
+Beskeder, der bare venter på dit svar i sessionen, ringer aldrig. Vil du hellere have den almindelige
+beskedlyd, så slå **Klippes egen ringelyd, når en session vil bygge** fra.
+
+**Robotterne:** Mens en Claude-session bygger i Resolve, står Klippe med en megafon og dirigerer, og
+små robotter arbejder i kassen. Rører du hverken mus eller tastatur i 3 sekunder, kommer en hel
+sværm af robotter ud på skærmen ved siden af Klippe og bygger en tidslinje langs bunden: nogle bærer
+klip ud af kassen, andre klipper dem over med saks. De kan ikke klikkes på, de tager aldrig fokus, og
+rører du musen eller tastaturet, løber de straks ind i kassen igen (og kommer ud igen, når du holder
+pause). Når sessionen er færdig, jubler de og går hjem, og Klippe fejrer det. Har Klippe AWP'en i
+hånden, bliver en robot af og til uartig – så sigter Klippe og skyder den. Slå det fra med
+**Robotterne må komme ud på skærmen, mens en Claude-session bygger**, eller prøv det med
+**🤖 Vis robotterne** og **📞 Prøv telefonen** under 🏆.
+
 Navn og dagens mål kan ændres samme sted. Klippe kører i sit eget lille vindue og tager aldrig
 fokus fra Resolve.
 
@@ -238,9 +255,9 @@ bryde ud af boksen og lege med musen på sin skærm: ride på den, flyve med den
 og så lægge den tilbage præcis, hvor den lå, og flyve hjem. Rører du musen eller tastaturet,
 stopper legen med det samme, og musen er tilbage, hvor du slap den. Klippe klikker aldrig.
 Babyen leger i hver pause, en junior hver anden, en pro sjældent – et æg aldrig. Der leges højst
-én gang pr. pause og aldrig under afspilning i Resolve, mens et kort overføres, i fuld skærm eller
-på en låst skærm (en render er fin). Slå det fra med **Klippe må lege med musen i pauser**, eller
-prøv det med **Vis legen nu**.
+én gang pr. pause og aldrig under afspilning i Resolve, mens et kort overføres, mens en session
+bygger, i fuld skærm eller på en låst skærm (en render er fin). Slå det fra med **Klippe må lege
+med musen i pauser**, eller prøv det med **Vis legen nu**.
 
 ## Import af kort
 

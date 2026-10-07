@@ -1563,4 +1563,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # End without the interpreter's shutdown: the stdin reader thread may still be blocked in a read
+    # on the pipe, and finalising sys.stdin under it is a fatal error (0xC0000005) – "home" and the
+    # log are written already.
+    status = main()
+    logging.shutdown()
+    os._exit(status)

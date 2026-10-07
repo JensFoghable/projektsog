@@ -155,6 +155,11 @@ DEFAULTS: dict[str, Any] = {
     # Resolve, a transfer, in full screen or on a locked screen; any touch ends the game.
     "widget_play": True,
     "widget_play_idle_minutes": 5,
+    # The phone and the robot crew (SPEC §21): a session that wants to build rings (Windows' call
+    # sound), and while it builds a swarm of robots edits beside Klippe on its screen – any touch
+    # of mouse or keyboard sends them back into the box.
+    "widget_ring": True,
+    "widget_crew": True,
 }
 
 VALID_RESOLVE_FOLLOW = ("off", "notify", "open")

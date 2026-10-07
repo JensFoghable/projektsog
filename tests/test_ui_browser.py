@@ -1693,7 +1693,8 @@ class WidgetTests(UiCase):
                                                                                      "mund": "cigaret"}}})
         self.wait("document.querySelector('#app').dataset.haand === 'awp'")
         for part in (".haand--awp", ".briller--solbriller", ".mund--cigaret"):
-            self.assertNotEqual(self.js(f"getComputedStyle(document.querySelector('#pet {part}')).display"), "none")
+            self.assertNotEqual(self.js(f"getComputedStyle(document.querySelector('#pet {part}')).display"), "none",
+                                f"{part} hidden; #app: " + str(self.js("JSON.stringify(document.querySelector('#app').dataset)")))
 
     def test_klippe_breaks_out_and_comes_home(self) -> None:
         self.open_widget()
@@ -1713,13 +1714,32 @@ class WidgetTests(UiCase):
 
     def test_messages_from_the_claude_sessions_come_up_by_the_pet(self) -> None:
         self.open_widget()
-        message = {"tag": "koe:Mette", "titel": "Mette vil bruge Resolve", "tekst": "Projekt: Portræt · ca. 10 min",
+        message = {"tag": "koe:Mette", "titel": "🎬 Mette vil bruge Resolve", "tekst": "Projekt: Portræt · ca. 10 min",
                    "knapper": [{"tekst": "Byg nu", "uri": "resolvekoe:byg?navn=Mette&id=1"},
                                {"tekst": "Ikke nu", "uri": "resolvekoe:senere?navn=Mette&id=1"}],
-                   "session": "Mette", "udloeber_ved": time.time() + 600}
+                   "session": "Mette", "udloeber_ved": time.time() + 600, "opkald": True, "besvaret": False,
+                   "ringer": True}
+        # A call (SPEC §21.1): Klippe's red phone rings, and one line stands in for the card –
+        # no jump and no clap, the phone is the alarm.
         self.control("/api/_mock/publish", {"type": "messages", "data": {"messages": [message]}})
-        self.wait("!document.querySelector('#messages').hidden")
-        self.assertEqual(self.text(".message__title"), "Mette vil bruge Resolve")
+        self.wait("document.querySelector('#app').dataset.telefon === 'ringer'")
+        self.assertFalse(self.js("document.querySelector('#messages').hidden"))
+        self.assertEqual(self.text(".message--call .message__title"), "📞 Mette ringer")
+        self.assertEqual(self.js("[...document.querySelectorAll('.message__button')].map(b => b.textContent)"),
+                         ["Tag telefonen"])
+        for part in (".telefon", ".telefon__ringer"):
+            self.assertNotEqual(self.js(f"getComputedStyle(document.querySelector('#pet {part}')).display"), "none")
+        self.assertFalse(self.js("['jump', 'clap'].some(c => document.querySelector('#pet').classList.contains(c))"))
+        # Klippe takes it: the receiver to its ear, "Hallo? 📞" – then the real card, glowing, with "Byg nu".
+        self.page.click(".message--call .message__button")
+        self.assertEqual(self.wait_request("/api/messages/svar")["body"], {"tag": "koe:Mette"})
+        self.assertEqual(self.js("document.querySelector('#app').dataset.telefon"), "svarer")
+        self.assertNotEqual(self.js("getComputedStyle(document.querySelector('#pet .telefon__roer--oere')).display"),
+                            "none")
+        self.wait(f"{self.SAID}.includes('Hallo? 📞')")
+        self.wait("!!document.querySelector('.message:not(.message--call)')", timeout=4)
+        self.assertFalse(self.js("'telefon' in document.querySelector('#app').dataset"))
+        self.assertEqual(self.text(".message__title"), "🎬 Mette vil bruge Resolve")
         self.assertEqual(self.js("[...document.querySelectorAll('.message__button')].map(b => b.textContent)"),
                          ["Byg nu", "Ikke nu"])
         self.assertTrue(self.js("document.querySelector('.message').classList.contains('is-new')"))
@@ -1732,6 +1752,7 @@ class WidgetTests(UiCase):
         self.page.click(".message__close")
         self.assertEqual(self.wait_request("/api/messages", method="DELETE")["body"], {"tag": "koe:Mette"})
         # Several: one card at a time, ‹ 1/3 › to the others – never a long list.
+        message = {**message, "titel": "Mette vil bruge Resolve", "opkald": False, "besvaret": True, "ringer": False}
         many = [{**message, "tag": f"m{i}", "titel": f"Besked {i}", "udloeber_ved": time.time() + 600}
                 for i in range(3)]
         self.control("/api/_mock/publish", {"type": "messages", "data": {"messages": many}})
@@ -1757,6 +1778,136 @@ class WidgetTests(UiCase):
         self.control("/api/_mock/publish", {"type": "messages", "data": {"messages": [
             {**message, "udloeber_ved": time.time() - 1}]}})          # expired
         self.wait("document.querySelector('#messages').hidden")
+
+    def test_a_missed_call_and_answering_with_the_phone(self) -> None:
+        self.open_widget()
+        call = {"tag": "koe:Jonas", "titel": "🎬 Jonas vil bruge Resolve", "tekst": "",
+                "knapper": [{"tekst": "Byg nu", "uri": "resolvekoe:byg?navn=Jonas&id=2"}],
+                "udloeber_ved": time.time() + 600, "opkald": True, "besvaret": False, "ringer": False}
+        self.control("/api/_mock/publish", {"type": "messages", "data": {"messages": [call]}})
+        self.wait("document.querySelector('#app').dataset.telefon === 'ubesvaret'")
+        self.assertEqual(self.text(".message--call .message__title"), "📞 Ubesvaret opkald fra Jonas")
+        self.assertNotEqual(self.js("getComputedStyle(document.querySelector('#pet .telefon__ubesvaret')).display"), "none")
+        self.assertEqual(self.js("getComputedStyle(document.querySelector('#pet .telefon__ringer')).display"), "none")
+        self.assertEqual(self.text("#telefon-antal"), "1")
+        self.page.click("#telefon")                            # the phone itself answers too
+        self.assertEqual(self.wait_request("/api/messages/svar")["body"], {"tag": "koe:Jonas"})
+        self.wait("!!document.querySelector('.message.is-new:not(.message--call)')", timeout=4)
+        self.assertEqual(self.text(".message__button"), "Byg nu")
+        # Answered somewhere else: the card comes up the same way; a call taken back is gone.
+        ringing = {**call, "tag": "koe:Lise", "titel": "🎬 Lise vil bruge Resolve", "ringer": True}
+        self.control("/api/_mock/publish", {"type": "messages", "data": {"messages": [ringing]}})
+        self.wait("document.querySelector('#app').dataset.telefon === 'ringer'")
+        self.control("/api/_mock/publish", {"type": "messages", "data": {"messages": [
+            {**ringing, "besvaret": True, "ringer": False}]}})
+        self.wait("!('telefon' in document.querySelector('#app').dataset)"
+                  " && document.querySelector('.message.is-new .message__title')?.textContent === '🎬 Lise vil bruge Resolve'")
+        self.control("/api/_mock/publish", {"type": "messages", "data": {"messages": [ringing]}})
+        self.wait("document.querySelector('#app').dataset.telefon === 'ringer'")
+        self.control("/api/_mock/publish", {"type": "messages", "data": {"messages": []}})
+        self.wait("!('telefon' in document.querySelector('#app').dataset) && document.querySelector('#messages').hidden")
+
+    def test_klippe_directs_the_robot_crew(self) -> None:
+        self.open_widget()
+        shown = "getComputedStyle(document.querySelector('#pet {}')).display !== 'none'"
+        self.page.click("#trophies")
+        self.page.click("#demo-robots")                        # "🤖 Vis robotterne" – Klippe is off
+        self.wait(f"{self.SAID}.includes('Øv – Slå Klippe til først')")
+        self.control("/api/settings", {"widget_enabled": True})
+        self.page.click("#trophies")
+        self.page.click("#demo-robots")
+        self.assertEqual(self.wait_request("/api/bygger/demo", count=2)["body"], {"opkald": False})
+        self.wait("document.querySelector('#app').dataset.bygger === 'demo' && document.querySelector('#panel').hidden")
+        self.assertEqual(self.text("#mood"), "🤖 Robotterne øver sig – Klippe dirigerer")
+        self.wait(f"{self.SAID}.includes('Action! 🎬')")
+        # Robots home: three mini robots work on a little timeline; Klippe directs with a megaphone.
+        self.assertEqual(self.js("document.querySelectorAll('#pet .crew .mini use').length"), 3)
+        for part in (".crew", ".megafon"):
+            self.assertTrue(self.js(shown.format(part)), part)
+        self.assertFalse(self.js(shown.format(".luge")))
+        # Out on the screen: the mini robots are gone, the hatch they left through glows.
+        build = self.js("window.__klippe.state.build")
+        self.control("/api/_mock/publish", {"type": "bygger", "data": {**build, "ude": True}})
+        self.wait("'ude' in document.querySelector('#app').dataset")
+        self.assertFalse(self.js(shown.format(".crew")))
+        self.assertTrue(self.js(shown.format(".luge")))
+        self.assertEqual(self.text("#mood"), "🤖 Robotterne klipper ude på skærmen – rør musen, så går de ind")
+        # With the AWP Klippe turns to the robots and aims: the end of the barrel is exactly where the
+        # helper starts its laser, (100 − 92·S, 180 − 54.75·S) in the pet's units, at every stage.
+        self.control("/api/_mock/publish", {"type": "pet_look", "data": {"equipped": {"haand": "awp"}}})
+        self.control("/api/_mock/publish", {"type": "robot", "data": {"haendelse": "sigter", "ram": False}})
+        self.wait("'sigter' in document.querySelector('#app').dataset"
+                  " && document.querySelector('#app').dataset.haand === 'awp'")
+        self.assertFalse(self.js(shown.format(".megafon")))
+        barrel = """(() => { const svg = document.querySelector('#pet').getBoundingClientRect();
+            const b = document.querySelector('#pet .awp__brake').getBoundingClientRect(), k = svg.width / 200;
+            return [(b.left - svg.left) / k, (b.top + b.height / 2 - svg.top) / k]; })()"""
+        for hours, scale in ((6, 0.74), (30, 0.86), (120, 0.95), (400, 1.0)):
+            with self.subTest(scale=scale):
+                self.js(f"window.__klippe.state.hours = {hours}; window.__klippe.applyStage()")
+                x, y = self.js(barrel)
+                self.assertAlmostEqual(x, 100 - 92 * scale, delta=0.3)
+                self.assertAlmostEqual(y, 180 - 54.75 * scale, delta=0.3)
+        # The robots to the right of the widget: Klippe aims as drawn, the barrel ends on the right.
+        self.control("/api/_mock/publish", {"type": "robot", "data": {"haendelse": "sigter", "ram": False,
+                                                                       "retning": "hoejre"}})
+        self.wait("document.querySelector('#app').dataset.sigter === 'hoejre'")
+        right = """(() => { const svg = document.querySelector('#pet').getBoundingClientRect();
+            const b = document.querySelector('#pet .awp__brake').getBoundingClientRect(), k = svg.width / 200;
+            return [(b.right - svg.left) / k, (b.top + b.height / 2 - svg.top) / k]; })()"""
+        x, y = self.js(right)
+        self.assertAlmostEqual(x, 100 + 92 * 1.0, delta=0.3)
+        self.assertAlmostEqual(y, 180 - 54.75 * 1.0, delta=0.3)
+        self.control("/api/_mock/publish", {"type": "robot", "data": {"haendelse": "skud", "ram": True}})
+        self.wait("document.querySelector('#pet').classList.contains('skud')")
+        self.control("/api/_mock/publish", {"type": "robot", "data": {"haendelse": "sigter-slut", "ram": False}})
+        self.wait("!('sigter' in document.querySelector('#app').dataset)")
+        # Done: fireworks.
+        self.control("/api/_mock/publish", {"type": "bygger", "data": {**build, "aktiv": False, "faerdig": True,
+                                                                        "varighed_s": 45}})
+        self.wait("!('bygger' in document.querySelector('#app').dataset)")
+        self.wait(f"{self.SAID}.includes('Robotterne er færdige med at øve! 🎉')")
+        self.assertFalse(self.js(shown.format(".crew")) or self.js(shown.format(".luge")))
+        self.assertEqual(self.js("window.__klippe.state.build"), None)
+        # "📞 Prøv telefonen": the demo call rings.
+        self.page.click("#trophies")
+        self.page.click("#demo-call")
+        self.assertEqual(self.wait_request("/api/bygger/demo", count=3)["body"], {"opkald": True})
+        self.wait("document.querySelector('.message--call .message__title')?.textContent === '📞 Demo ringer'")
+
+    def test_the_robot_sprite_sheet(self) -> None:
+        """widget.html?sprites=robot-…&cell=120 (crew.py): seven 120-px cells on transparency, each a deep
+        copy of the robot standing on its feet at y 57 of its 60 units, facing right, nothing moving."""
+        poses = ["robot-a", "robot-b", "robot-baer", "robot-klip", "robot-hop", "robot-fraek", "robot-panik"]
+        self.page.set_viewport(840, 120)
+        self.page.navigate(self.server.url + "widget.html?sprites=" + ",".join(poses) + "&cell=120")
+        cells = self.js("""[...document.querySelectorAll('.sprite--robot')].map((c) => {
+            const r = c.getBoundingClientRect(), k = c.querySelector('svg').getBoundingClientRect().width / 60;
+            const units = (box) => ({ left: (box.left - r.left) / k, right: (box.right - r.left) / k,
+              top: (box.top - r.top) / k, bottom: (box.bottom - r.top) / k });
+            const feet = [...c.querySelectorAll('.robot__fod')].map((f) => units(f.getBoundingClientRect()).bottom);
+            const face = units(c.querySelector('.robot__skaerm').getBoundingClientRect());
+            return { pose: c.dataset.pose, x: r.left, y: r.top, w: r.width, h: r.height, k, feet: Math.max(...feet),
+              all: units(c.querySelector('.robot').getBoundingClientRect()), face: (face.left + face.right) / 2,
+              uses: c.querySelectorAll('use, animate, [id]').length }; })""")
+        self.assertEqual([c["pose"] for c in cells], poses)
+        for i, cell in enumerate(cells):
+            with self.subTest(pose=cell["pose"]):
+                self.assertEqual((cell["x"], cell["y"], cell["w"], cell["h"], cell["k"]), (120 * i, 0, 120, 120, 2))
+                self.assertAlmostEqual(cell["feet"], 57, delta=1)
+                box = cell["all"]
+                self.assertTrue(box["left"] >= 0 and box["top"] >= 0 and box["right"] <= 60.5 and box["bottom"] <= 58.5,
+                                box)
+                self.assertGreater(cell["face"], 31)                # it looks to the right
+                self.assertEqual(cell["uses"], 0)                   # a copy, no ids, no SMIL
+        self.assertEqual(self.js("document.getAnimations().length"), 0)
+        self.assertEqual(self.js("[getComputedStyle(document.documentElement).backgroundColor,"
+                                 " getComputedStyle(document.body).backgroundColor]"), ["rgba(0, 0, 0, 0)"] * 2)
+        # The poses differ where they should: a clip, scissors, horns, a sweat drop.
+        for pose, part in (("robot-baer", ".robot__klip"), ("robot-klip", ".robot__saks"),
+                           ("robot-fraek", ".robot__horn"), ("robot-panik", ".robot__panik")):
+            self.assertEqual(self.js(f"""[...document.querySelectorAll('.sprite--robot')].filter((c) =>
+                getComputedStyle(c.querySelector('{part}')).display !== 'none').map((c) => c.dataset.pose)"""), [pose])
 
     def test_the_sprite_sheet_for_the_games(self) -> None:
         """widget.html?sprites=… rendered by headless Edge: every pose, on transparency."""

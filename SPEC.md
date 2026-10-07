@@ -1360,7 +1360,7 @@ cancelled and its temp file removed).
   skip its own notification. Same tag replaces; ≤ 20 messages (oldest dropped); expired ones
   are pruned. A card: SSE `messages {"messages": [...]}` (newest first; `tid`, `udloeber_ved`,
   `lyd` added) and, when shown and the title/text is new and `lyd`, Windows'
-  "SystemNotification" sound. `visning: "boble"` is a passing note: SSE `say {"tekst"}`,
+  "SystemNotification" sound – except a call (§21.1), which rings instead. `visning: "boble"` is a passing note: SSE `say {"tekst"}`,
   nothing kept (a card with that tag is removed).
 * `DELETE /api/messages {tag}` → `{"ok": true}` (also for an unknown tag). `GET /api/messages`.
 * `POST /api/messages/click {tag, knap}` → the message is removed and its button's uri is
@@ -1369,7 +1369,8 @@ cancelled and its temp file removed).
   spaces or control characters. An unknown tag/button → 400 "Beskeden er der ikke længere".
 * The widget shows ONE card at a time right under the pet, above a transfer, with its buttons,
   × and – when there are more – "‹ 1 / 3 ›". Order: normal before quiet, newest first; a new
-  normal message comes to the front and makes Klippe jump and clap (not for `lyd: false`).
+  normal message comes to the front and makes Klippe jump and clap (not for `lyd: false`; an
+  unanswered call is shown as a ringing phone instead of its card, §21.1).
   Quiet messages alone are folded into one line "📬 2 beskeder · vis" (click: the cards, ▾ folds
   them again). Text is clamped to 4 lines. Messages are never shown in the search window.
 
@@ -1409,3 +1410,129 @@ cancelled and its temp file removed).
   version · Version fra 5. okt. · tjekket for 5 minutter siden" + [Søg efter opdatering]; "Ny
   version klar · Fra 5. okt.: <commit title>" + [Opdater nu] (primary) and an accent dot on ⚙;
   busy texts with the button disabled; `blocked`/`error` as a warning hint.
+
+## 21. The phone and the robot crew (`messages.py`, `crew.py`, `crew_child.py`, `web/widget.*`)
+
+### 21.1 A call rings (`messages.py`, widget)
+
+* A **call** is a card (`visning` "kort") with `prioritet` "normal" and at least one button –
+  today only the queue's "🎬 Mette vil bruge Resolve · Byg nu" (`koe:venter`). Messages that
+  just wait for the user (no buttons: "🔐 … skal have lov", "Claude · …", "💬 …") never ring.
+* Every stored message gets `opkald` (bool: it is a call) and `besvaret` (bool). A call posted
+  with `lyd` true and a new tag or a new title/text starts unanswered (`besvaret` false); a call
+  posted with `lyd` false (the queue re-posting it silently) keeps `besvaret` of the message it
+  replaces, or is answered (`besvaret` true = a plain card) when there was none. A non-call is
+  always `besvaret` true. Both fields are kept in messages.json.
+* **Ringing**: while Klippe is shown (`shown()`), a new unanswered call rings (`ringer`, the phone
+  shakes in the widget) until it is answered, clicked, removed, expired, or for `RING_S` = 30 s
+  (the call stays unanswered: a
+  missed call), or as soon as `widget_enabled` is switched off (a config listener; the call stays
+  missed). Its sound, when the phone starts ringing: Klippe's own short, quiet ring (< 1 s, peak
+  0.2 of full scale: two little bell trills and a clapper "klap", made by `ringtone_samples()` into
+  `%LOCALAPPDATA%\Projektsog\klippe-ring-1.wav`, played once with `SND_FILENAME|SND_ASYNC`) instead
+  of "SystemNotification"; with `widget_ring` off "SystemNotification" once (a call that starts
+  ringing while another already rings gets the notification too). Sound calls are injected
+  (`ring(on: bool)`, `sound()`); tests never make a sound.
+  Snapshot field `ringer` (bool) = this call is ringing now; every change publishes `messages`.
+* `POST /api/messages/svar {tag}` → `{"ok": true}`: the call is answered (`besvaret` true,
+  `ringer` false, the ring stops if no other call rings); unknown tag → 400 "Beskeden er der
+  ikke længere". A click (`/click`) or × also ends its ringing.
+* Internal scheme `projektsog:` – only for messages Projektsøg posts itself (`post(data,
+  internal=True)`); `click` hands such a uri to the `on_internal(uri)` callback instead of
+  `os.startfile`. Posting it from outside → 400 like any other scheme.
+* Widget: an unanswered call is not a card. Klippe holds a ringing red phone (it shakes, "RING!"
+  marks; still and with a red "1" when missed), the messages area shows one line-card "📞
+  Mette ringer" (caller: `session`, else the name in "🎬 <navn> vil bruge Resolve", else
+  "Claude"; missed: "📞 Ubesvaret opkald fra Mette") with the button "Tag telefonen" and ×.
+  Clicking the phone or the button answers (`/svar`): Klippe holds the receiver to its ear
+  ("Hallo? 📞", 1.6 s), then the real card appears (glowing) with "Byg nu". No jump/clap for a
+  call (the phone is the alarm). Reduced motion: no shaking.
+
+### 21.2 Building (`crew.py` – `KoeWatch`)
+
+* The queue's state file is found through its registered link handler, never a fixed path:
+  (default) of `HKCU\Software\Classes\resolvekoe\shell\open\command` (else
+  `HKEY_CLASSES_ROOT\resolvekoe\shell\open\command`), split like a Windows command line, the
+  argument ending in `koe.py` → `<its folder>\state\koe.json`. Not found → no builds (looked up
+  again every 60 s). The file is only read (no mutex, never written); a failed read (being
+  replaced, bad JSON) keeps the last answer.
+* A **build** is `holder` = `{navn, projekt, opgave, pid, siden, opdateret}` with a str `navn`,
+  `now − opdateret ≤ 3600` s and its pid alive (`OpenProcess`; no pid = alive). Read every 2 s.
+* **Demo**: `POST /api/bygger/demo {opkald: bool}`: `opkald` false → a demo build ("Demo" ·
+  "Robotterne øver sig") for `DEMO_S` = 45 s; `opkald` true → Projektsøg posts a demo call
+  (tag `demo:opkald`, "🎬 Demo vil bruge Resolve", button "Byg nu" → `projektsog:demo`) whose
+  click starts that demo build. 400 when Klippe is off ("Slå Klippe til først").
+* State and SSE `bygger`: `{aktiv, navn, projekt, opgave, siden, demo, ude, retning, faerdig,
+  varighed_s}` – `ude`: the robots are out on the screen now; `retning` ("venstre"|"hoejre", null
+  when home): the side of the box they went out through; `faerdig` true only in the one event
+  that ends a build (with `varighed_s`). Published on every change. `GET /api/bygger` → the
+  current state (`faerdig` false); the widget asks again whenever its event stream (re)opens and
+  every 30 s while a build is shown, so a lost event never leaves it building.
+
+### 21.3 The robots (`crew.py` – `Crew`, helper `crew_child.py`)
+
+* `Crew(cfg, bus, *, widget, watch, look, wardrobe, petplay_busy, base_url, probe, sprites,
+  spawn, clock)` – a thread (every 0.5 s). While a build is on, the robots come out of the
+  widget onto its monitor when ALL hold: `widget_enabled` and `widget_crew` (default on), the
+  widget window shown, its look reported (`PetPlay.look()`), the build running ≥ 2 s, no mouse
+  or keyboard input for `CREW_IDLE_S` = 3 s (`GetLastInputInfo`; the "Byg nu" click itself is
+  input), not locked, nothing full screen (`windows_quiet` / `fullscreen_beside`), no Klippe
+  game (`petplay_busy()`), the robot sprites rendered. A demo build only needs the first three,
+  the idle rule and the lock rule.
+* Any input sends them home at once (the helper sees the input tick change): they run back into
+  the box within 0.5 s and the helper ends ("touched"); they come out again after the next
+  3 s of stillness while the build lasts. When the build ends while they are out, the helper
+  gets `done`: the timeline gets a shine, the robots cheer (1.2 s) and march home (≤ 2 s).
+* PetPlay starts no idle game while a build is on, and "Vis legen nu" is refused then ("Klippe
+  dirigerer robotterne lige nu 🤖"); it asks again after drawing its sprites, just before the
+  game starts. `PetPlay.busy()` = a game child, one being launched, or a manual wait.
+* Number of robots by Klippe's stage: egg 4, baby 5, junior 7, pro 9, legend 12.
+* **Sprites**: headless Edge renders `widget.html?sprites=<ROBOT_POSES>&cell=120` (the robot
+  branch of the sprite page, every pose in a 120-px cell, 2×, transparent) to
+  `%LOCALAPPDATA%\Projektsog\pet\robot-<sig>.png`, size (120·7·2, 240); `sig` like Klippe's
+  sheets (widget files + poses); old `robot-*.png` are removed. `ROBOT_POSES` = `robot-a`
+  (standing/walk 1, the reference), `robot-b` (walk 2), `robot-baer` (a clip held above the
+  head), `robot-klip` (cutting with scissors), `robot-hop` (cheering, arms up), `robot-fraek`
+  (naughty: red eyes, little horns, grin), `robot-panik` (panic: wide eyes, sweat). They face
+  right; the helper mirrors them.
+* Helper command line (`pythonw -m projektsog.crew_child`): `--sprites PNG --poses <7 poses>
+  --cell 120 --sheet-scale 2 --widget <hwnd> --pet x,y,w,h --view w,h --stage <stage>
+  --robots N --awp 0|1 --seed S --input-tick T --log-file F`. stdin: `done` (finale, then
+  home), `quit`/EOF (stop now). stdout JSON lines: `{"event":"side","side":"left"|"right"}`
+  and `{"event":"out"}` after the first frame, `{"event":"aim","side":…}`,
+  `{"event":"shot","hit":bool}`, `{"event":"aim-end"}`, then exactly one
+  `{"event":"home","reason":"done"|"touched"|"locked"|"quit"|"timeout"|"error"}` (`timeout` =
+  60 min). Unknown events are ignored by the main process, which closes the helper's stdin on
+  `home`; the helper (like `petplay_child`) ends with `os._exit` after `home` and its log are
+  written – a stdin reader still blocked in a read must not meet the interpreter's shutdown.
+* The scene: one layered window (`WS_EX_LAYERED|TRANSPARENT|TOPMOST|TOOLWINDOW|NOACTIVATE`,
+  `HTTRANSPARENT` – clicks go through, it never takes focus) over a band of the widget's monitor
+  work area from the floor up to just above Klippe's AWP muzzle; ≤ 30 fps, only the dirty box is
+  updated, topmost re-asserted every 2 s. The robots walk out through the widget's side facing
+  the larger free part of the monitor and build a "timeline" on the floor beside it: two tracks
+  of rounded clip blocks (blue video V1, green audio A1) that grow away from the widget; carriers
+  bring clips from the box (`robot-baer`), cutters snip clips (`robot-klip`, a spark, the clip
+  splits), the rest walk between jobs (`robot-a`/`robot-b`). A full timeline gets a playhead
+  sweep and starts over with new colours. Sizes scale with the monitor's DPI (`unit`).
+* **AWP**: when Klippe wears the AWP (`--awp 1`), once per outing after 15–40 s (and again at
+  most every 60 s) one robot turns naughty (`robot-fraek`: leaves its job, dances or runs off
+  with a clip). The helper emits `aim`; Klippe in the widget turns towards the robots and takes
+  the aiming pose; a red laser runs from its muzzle (the aim pose's barrel end, mirrored, from
+  the widget's pet rect; as drawn when the robots work to the right of the widget) to the robot
+  (`hunt_plan`), each shot emits `shot`, the robot panics
+  (`robot-panik`) after a miss and bursts into sparks on the kill; `aim-end`; a new robot walks
+  out of the box 1.5 s later. Main → SSE `robot {haendelse: "sigter"|"skud"|"sigter-slut",
+  ram, retning}` (`retning` with "sigter": "venstre" = mirrored aim pose, "hoejre" = as drawn).
+* **Widget**: while a build is on (`data-bygger`), Klippe directs with a megaphone and says a
+  line now and then ("Action! 🎬", "Klip! ✂️", "Mere tempo! 📣" …); the mood line names the
+  session and what it builds. Robots home (`ude` false): three mini robots work in the box
+  (carry, cut, tap) beside a little timeline that grows; with the AWP one of them is naughty now
+  and then (every 45–90 s) and Klippe shoots it in the box. Robots out (`ude` true): the mini
+  robots are gone and an open hatch glows at the box's side. `faerdig` → fireworks and "✅ <navn>
+  er færdig – klar til at klippe!". `robot` events drive Klippe's aim (`data-sigter`: mirrored
+  aim pose) and the recoil. The 🏆 panel's footer gets "🤖 Vis robotterne" and "📞 Prøv
+  telefonen" (`/api/bygger/demo`).
+* Settings (Indstillinger ▸ Klippe): `widget_crew` (bool, default true) "Robotterne må komme ud
+  på skærmen, mens en Claude-session bygger"; `widget_ring` (bool, default true) "Klippes
+  egen ringelyd, når en session vil bygge".
+* Exit: `crew.close()` first (the helper is told `quit` and ends on stdin EOF by itself).

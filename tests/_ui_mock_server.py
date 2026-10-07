@@ -53,6 +53,13 @@ ends all open streams (to exercise reconnects), and ``POST /api/_mock/set-online
 letter) and publishes what the Indexer and the bridge do (§15.1, §15.9): ``events`` "all"
 (default: sources + index_updated + status + resolve), "sources" (only the ``sources`` event,
 like a backend without §15.1) or "none".
+
+Messages and the robot crew (§19, §21): a published ``messages`` event is what the board holds
+(``GET /api/messages``; ``POST /api/messages/svar {tag}`` answers a call and publishes it again,
+``DELETE`` removes one), a published ``bygger`` event is the crew's state (``GET /api/bygger``).
+``POST /api/bygger/demo {opkald}`` (400 while Klippe is off): ``opkald`` true rings the demo call
+(it stops ringing after ``RING_S``; its "Byg nu" starts the demo build), false starts a fake
+``DEMO_S`` demo build that ends with ``faerdig``. ``robot`` events only come from tests.
 """
 
 from __future__ import annotations
@@ -105,6 +112,15 @@ HOTKEY_RE = re.compile(r"^((ctrl|alt|shift|win)\+)+(space|[a-z0-9]|f([1-9]|1[0-9
 HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")
 RESOLVE_SCRIPTING_ERROR = ("Slå ekstern scripting til i DaVinci Resolve: Preferences ▸ System ▸ "
                            "General ▸ External scripting using = Local")
+# The robot crew and the phone (SPEC §21), like crew.py and messages.py.
+DEMO_S = 45.0
+RING_S = 30.0
+BYGGER_IDLE: dict[str, Any] = {"aktiv": False, "navn": None, "projekt": None, "opgave": None, "siden": None,
+                               "demo": False, "ude": False, "faerdig": False, "varighed_s": None}
+DEMO_CALL: dict[str, Any] = {"tag": "demo:opkald", "titel": "🎬 Demo vil bruge Resolve",
+                             "tekst": "Robotterne vil vise, hvad de kan (ca. 1 min).",
+                             "knapper": [{"tekst": "Byg nu", "uri": "projektsog:demo"}], "session": "Demo",
+                             "lyd": True, "visning": "kort", "prioritet": "normal"}
 
 
 # --------------------------------------------------------------------------------------
@@ -440,6 +456,10 @@ class MockBackend:
         self.importer = MockImporter(self.bus)
         # Klippe's hunger: the real rules (achievements.py), kept in memory, a little hungry.
         self.food = achievements.PetProgress({}, self.bus, tracker=self.time)
+        # Messages (§19, §21.1) and the robot crew's build (§21.2): see the module docstring.
+        self.messages: list[dict[str, Any]] = []
+        self.bygger: dict[str, Any] = dict(BYGGER_IDLE)
+        self._build_generation = 0
 
     def next_id(self) -> int:
         self._next_id += 1
@@ -890,6 +910,106 @@ class MockBackend:
         status = self.pet_status()
         self.bus.publish("pet", status)
         return status
+
+    # -- messages, the phone and the robot crew (messages.py, crew.py) -----------------------
+    def set_messages(self, data: Any) -> None:
+        """Test control: a published ``messages`` event is what the board holds now."""
+        if isinstance(data, dict) and isinstance(data.get("messages"), list):
+            with self.lock:
+                self.messages = [dict(m) for m in data["messages"] if isinstance(m, dict)]
+
+    def messages_payload(self) -> dict[str, Any]:
+        with self.lock:
+            return {"messages": [dict(m) for m in self.messages]}
+
+    def publish_messages(self) -> None:
+        self.bus.publish("messages", self.messages_payload())
+
+    def answer_call(self, tag: Any) -> dict[str, Any]:
+        """POST /api/messages/svar: the call is answered (and rings no more)."""
+        with self.lock:
+            message = next((m for m in self.messages if m.get("tag") == tag), None)
+            if message is None:
+                raise ValueError("Beskeden er der ikke længere")
+            message.update(besvaret=True, ringer=False)
+        self.publish_messages()
+        return {"ok": True}
+
+    def click_message(self, tag: Any) -> None:
+        """A message's button. Only the demo call's "Byg nu" does something here (the demo build);
+        other messages stay, so a test can go on with the same card."""
+        if tag != DEMO_CALL["tag"]:
+            return
+        with self.lock:
+            self.messages = [m for m in self.messages if m.get("tag") != tag]
+        self.publish_messages()
+        self.start_demo_build()
+
+    def remove_message(self, tag: Any) -> None:
+        with self.lock:
+            kept = [m for m in self.messages if m.get("tag") != tag]
+            changed = len(kept) != len(self.messages)
+            self.messages = kept
+        if changed:
+            self.publish_messages()
+
+    def build_state(self) -> dict[str, Any]:
+        with self.lock:
+            return dict(self.bygger)
+
+    def set_build(self, data: Any) -> None:
+        """Test control: a published ``bygger`` event is the crew's state now (it ends a fake build)."""
+        if isinstance(data, dict):
+            with self.lock:
+                self._build_generation += 1
+                self.bygger = ({**BYGGER_IDLE, **data, "faerdig": False} if data.get("aktiv")
+                               else dict(BYGGER_IDLE))
+
+    def build_demo(self, call: bool) -> dict[str, Any]:
+        """POST /api/bygger/demo: the demo call rings, or the demo build starts."""
+        with self.lock:
+            if not self.settings["widget_enabled"]:
+                raise ValueError("Slå Klippe til først")
+        if not call:
+            return self.start_demo_build()
+        now = time.time()
+        message = {**DEMO_CALL, "knapper": [dict(b) for b in DEMO_CALL["knapper"]], "tid": now,
+                   "udloeber_ved": now + 600, "opkald": True, "besvaret": False, "ringer": True}
+        with self.lock:
+            self.messages = [message] + [m for m in self.messages if m.get("tag") != DEMO_CALL["tag"]]
+        self.publish_messages()
+        threading.Thread(target=self._stop_ringing, args=(message,), name="mock-ring", daemon=True).start()
+        return self.build_state()
+
+    def _stop_ringing(self, message: dict[str, Any]) -> None:
+        if self.stopping.wait(RING_S):
+            return
+        with self.lock:
+            if not message.get("ringer") or not any(m is message for m in self.messages):
+                return
+            message["ringer"] = False                      # a missed call
+        self.publish_messages()
+
+    def start_demo_build(self) -> dict[str, Any]:
+        with self.lock:
+            self._build_generation += 1
+            generation = self._build_generation
+            self.bygger = {**BYGGER_IDLE, "aktiv": True, "navn": "Demo", "projekt": "Robotterne øver sig",
+                           "opgave": "", "siden": time.time(), "demo": True}
+            state = dict(self.bygger)
+        self.bus.publish("bygger", dict(state))
+        threading.Thread(target=self._end_demo_build, args=(generation,), name="mock-build", daemon=True).start()
+        return state
+
+    def _end_demo_build(self, generation: int) -> None:
+        if self.stopping.wait(DEMO_S):
+            return
+        with self.lock:
+            if generation != self._build_generation:
+                return
+            done = {**self.bygger, "aktiv": False, "faerdig": True, "varighed_s": int(DEMO_S)}
+            self.bygger = dict(BYGGER_IDLE)
+        self.bus.publish("bygger", done)
 
     def set_mode(self, source_id: int, mode: str, flags: frozenset[str]) -> dict[str, Any]:
         if mode not in ("auto", "include", "exclude"):
@@ -1428,7 +1548,9 @@ class MockHandler(BaseHTTPRequestHandler):
         elif route == "/api/widget/play":
             self._json(backend.pet_status())
         elif route == "/api/messages":
-            self._json({"messages": []})
+            self._json(backend.messages_payload())
+        elif route == "/api/bygger":
+            self._json(backend.build_state())
         elif route == "/api/pet":
             self._json(backend.pet_trophies())
         elif route == "/api/pet/mad":
@@ -1512,8 +1634,16 @@ class MockHandler(BaseHTTPRequestHandler):
             self._json(backend.pet_play_now())
         elif (method, route) == ("POST", "/api/widget/look"):
             self._json({"ok": True})
-        elif (method, route) in (("POST", "/api/messages/click"), ("DELETE", "/api/messages")):
+        elif (method, route) == ("POST", "/api/messages/click"):
+            backend.click_message(body.get("tag"))
             self._json({"ok": True})
+        elif (method, route) == ("DELETE", "/api/messages"):
+            backend.remove_message(body.get("tag"))
+            self._json({"ok": True})
+        elif (method, route) == ("POST", "/api/messages/svar"):
+            self._json(backend.answer_call(body.get("tag")))
+        elif (method, route) == ("POST", "/api/bygger/demo"):
+            self._json(backend.build_demo(bool(body.get("opkald"))))
         elif (method, route) == ("POST", "/api/update/check"):
             self._json(backend.update_check())
         elif (method, route) == ("POST", "/api/update/install"):
@@ -1527,6 +1657,15 @@ class MockHandler(BaseHTTPRequestHandler):
         elif (method, route) == ("POST", "/api/_mock/publish"):  # test control: push any SSE event
             if body.get("type") == "update":
                 backend.set_update(body.get("data"))
+            elif body.get("type") == "messages":
+                backend.set_messages(body.get("data"))
+            elif body.get("type") == "bygger":
+                backend.set_build(body.get("data"))
+            elif body.get("type") == "pet_look":      # what Klippe wears now, as /api/pet says too
+                equipped = (body.get("data") or {}).get("equipped")
+                if isinstance(equipped, dict):
+                    with backend.lock:
+                        backend.pet_equipped.update(equipped)
             backend.bus.publish(str(body.get("type", "")), body.get("data"))
             self._json({"ok": True})
         elif (method, route) == ("POST", "/api/_mock/drop-events"):  # test control: end all SSE streams

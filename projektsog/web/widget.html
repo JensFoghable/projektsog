@@ -133,6 +133,93 @@
             <g class="bid bid--3" fill="#000"><circle cx="-2" cy="-10" r="6"/><circle cx="-3" cy="0" r="6.5"/><circle cx="-2" cy="10" r="6"/></g>
             <g class="bid bid--4" fill="#000"><rect x="2" y="-20" width="20" height="40"/></g>
           </mask>
+
+          <!-- The robot crew (SPEC §21.3): one little robot, 60×60 units, facing right, standing on
+               its feet at y 57. Its pose comes from CSS variables (--robot-*, widget.css), so the
+               same drawing works through <use> in the box and deep-cloned on the sprite sheet. -->
+          <g id="robot-tegning" class="robot">
+            <g class="robot__arme-v">
+              <path class="robot__arm-linje" d="M21 38.5 Q 11 37 8.5 23"/><circle class="robot__haand" cx="8.5" cy="22.5" r="2.3"/>
+              <path class="robot__arm-linje" d="M39 38.5 Q 49 37 51.5 23"/><circle class="robot__haand" cx="51.5" cy="22.5" r="2.3"/>
+            </g>
+            <g class="robot__arme-op">
+              <path class="robot__arm-linje" d="M21 38.5 Q 3 32 12 11.5"/>
+              <path class="robot__arm-linje" d="M39 38.5 Q 57 32 48 11.5"/>
+            </g>
+            <g class="robot__arm robot__arm--bag">
+              <path class="robot__arm-linje" d="M21 38.5 Q 16.5 41 16 45.5"/><circle class="robot__haand" cx="16" cy="46" r="2.3"/>
+            </g>
+            <g class="robot__ben robot__ben--bag">
+              <rect class="robot__laeg" x="23.5" y="45" width="4.4" height="9" rx="1.6"/>
+              <rect class="robot__fod" x="22.6" y="52.6" width="8.4" height="4.4" rx="2.2"/>
+            </g>
+            <g class="robot__ben robot__ben--for">
+              <rect class="robot__laeg" x="32.1" y="45" width="4.4" height="9" rx="1.6"/>
+              <rect class="robot__fod" x="31.2" y="52.6" width="8.4" height="4.4" rx="2.2"/>
+            </g>
+            <rect class="robot__krop" x="19.5" y="34.5" width="21" height="14" rx="3.5"/>
+            <rect class="robot__panel" x="24" y="38" width="12" height="7" rx="1.5"/>
+            <circle class="robot__led" cx="27" cy="41.5" r="1.1"/><circle class="robot__led robot__led--gul" cx="30.5" cy="41.5" r="1.1"/>
+            <path class="robot__maaler" d="M33.6 43.6 v-4.2"/>
+            <path class="robot__antenne" d="M19.5 13 L 16.6 7.6"/>
+            <circle class="robot__lys" cx="16.2" cy="6.6" r="2.1">
+              <animate attributeName="opacity" values="1;1;.2;1" keyTimes="0;.55;.75;1" dur="1.4s" repeatCount="indefinite"/>
+            </circle>
+            <rect class="robot__hoved" x="14" y="15" width="32" height="21" rx="5.5"/>
+            <circle class="robot__bolt" cx="16.4" cy="26.4" r="1.5"/>
+            <rect class="robot__klapper" x="13.2" y="12.4" width="33.6" height="5.6" rx="1.6"/>
+            <path class="robot__striber" d="M16.4 12.9 h3 l-1.5 4.7 h-3 Z M22.4 12.9 h3 l-1.5 4.7 h-3 Z M28.4 12.9 h3 l-1.5 4.7 h-3 Z M34.4 12.9 h3 l-1.5 4.7 h-3 Z M40.4 12.9 h3 l-1.5 4.7 h-3 Z"/>
+            <g class="robot__horn"><path d="M21.6 12.6 L 23.2 6.8 L 26.2 12.4 Z"/><path d="M33.8 12.4 L 36.8 6.8 L 38.4 12.6 Z"/></g>
+            <g class="robot__ansigt" transform="translate(1.2 0)">
+              <rect class="robot__skaerm" x="19.6" y="19.8" width="23.6" height="13" rx="4"/>
+              <ellipse class="robot__kind" cx="23.6" cy="30" rx="1.6" ry=".9"/><ellipse class="robot__kind" cx="40.2" cy="30" rx="1.6" ry=".9"/>
+              <g class="robot__oejne"><ellipse cx="27.6" cy="25.6" rx="2.3" ry="2.9"/><ellipse cx="36.4" cy="25.6" rx="2.3" ry="2.9"/></g>
+              <path class="robot__mund" d="M29.3 29.4 Q 32 31.4 34.7 29.4"/>
+              <g class="robot__glad">
+                <path class="robot__streg" d="M25.3 26.8 Q 27.6 23 29.9 26.8 M34.1 26.8 Q 36.4 23 38.7 26.8"/>
+                <path class="robot__grin" d="M28.6 28.6 Q 32 33 35.4 28.6 Z"/>
+              </g>
+              <g class="robot__fraek">
+                <path class="robot__streg" d="M24.6 22.2 L 30.2 24.4 M39.4 22.2 L 33.8 24.4"/>
+                <path class="robot__grin" d="M27.4 28.4 Q 32 33.4 36.6 28.4 Z"/>
+                <path class="robot__taender" d="M29.6 29.2 v1.5 M32 29.5 v1.9 M34.4 29.2 v1.5"/>
+              </g>
+              <g class="robot__panik">
+                <circle class="robot__hvid" cx="27.4" cy="25.4" r="3.4"/><circle class="robot__hvid" cx="36.6" cy="25.4" r="3.4"/>
+                <circle class="robot__pupil" cx="28" cy="25" r="1.2"/><circle class="robot__pupil" cx="37.2" cy="25" r="1.2"/>
+                <ellipse class="robot__o" cx="32.2" cy="30.4" rx="1.6" ry="1.3"/>
+                <path class="robot__sved" d="M9.6 16.6 Q 12.6 21.2 9.6 23.2 Q 6.6 21.2 9.6 16.6 Z"/>
+              </g>
+            </g>
+            <g class="robot__saks">
+              <path class="robot__klinge robot__klinge--top" d="M51.4 37.6 L 59.6 38.5 L 51.4 39.3 Z"/>
+              <path class="robot__klinge robot__klinge--bund" d="M51.4 37.6 L 59.6 38.5 L 51.4 39.3 Z"/>
+              <path class="robot__greb" d="M51.4 38.5 L 49.6 36.6 M51.4 38.5 L 49.6 40.4"/>
+              <circle class="robot__greb" cx="48.6" cy="35.8" r="1.5"/><circle class="robot__greb" cx="48.6" cy="41.2" r="1.5"/>
+            </g>
+            <g class="robot__arm robot__arm--for">
+              <g class="robot__hammer">
+                <path class="robot__skaft" d="M44 46 L 47.6 52"/>
+                <rect class="robot__hammerhoved" x="44.6" y="50.6" width="7" height="3.2" rx=".8" transform="rotate(-34 48.1 52.2)"/>
+              </g>
+              <path class="robot__arm-linje" d="M39 38.5 Q 43.5 41 44 45.5"/><circle class="robot__haand" cx="44" cy="46" r="2.3"/>
+            </g>
+            <g class="robot__klip">
+              <rect class="robot__klip-blok" x="10" y="2.6" width="40" height="8" rx="2"/>
+              <path class="robot__klip-billeder" d="M13.5 4.4 h5 v4.4 h-5 Z M20.5 4.4 h5 v4.4 h-5 Z M27.5 4.4 h5 v4.4 h-5 Z M34.5 4.4 h5 v4.4 h-5 Z M41.5 4.4 h5 v4.4 h-5 Z"/>
+              <circle class="robot__haand" cx="12" cy="11" r="2.4"/><circle class="robot__haand" cx="48" cy="11" r="2.4"/>
+            </g>
+          </g>
+          <!-- the hatch the robots go out through (SPEC §21.3) -->
+          <radialGradient id="luge-lys" cx="50%" cy="85%" r="75%">
+            <stop offset="0%" stop-color="#fff8d6"/>
+            <stop offset="45%" stop-color="#ffd36b"/>
+            <stop offset="100%" stop-color="#e0802a"/>
+          </radialGradient>
+          <radialGradient id="luge-glod" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#ffd36b" stop-opacity=".55"/>
+            <stop offset="100%" stop-color="#ffd36b" stop-opacity="0"/>
+          </radialGradient>
         </defs>
         <ellipse class="pet__glow" cx="100" cy="120" rx="90" ry="80" fill="url(#glow)"/>
         <g class="aura aura--hjerter">
@@ -172,6 +259,41 @@
           </g>
         </g>
 
+        <!-- a Claude session builds (SPEC §21.3): three mini robots work on a little timeline left of
+             Klippe – or, while the crew is out on the screen, the hatch they left through glows -->
+        <g class="crew">
+          <g class="tidslinje">
+            <rect class="tidslinje__spor" x="-16" y="186" width="66" height="4.6" rx="1.4"/>
+            <rect class="tidslinje__spor" x="-16" y="191.4" width="66" height="4.6" rx="1.4"/>
+            <g class="tidslinje__klip">
+              <path class="tidslinje__v1" d="M-15.4 186.6 h7.6 v3.4 h-7.6 Z M-7 186.6 h10.7 v3.4 h-10.7 Z M4.5 186.6 h5.5 v3.4 h-5.5 Z M10.7 186.6 h11.7 v3.4 h-11.7 Z M23.3 186.6 h6.5 v3.4 h-6.5 Z M30.6 186.6 h9.7 v3.4 h-9.7 Z M41 186.6 h7.6 v3.4 h-7.6 Z"/>
+              <path class="tidslinje__a1" d="M-15.4 192 h12.6 v3.4 h-12.6 Z M-2 192 h8.5 v3.4 h-8.5 Z M7.2 192 h11.5 v3.4 h-11.5 Z M19.6 192 h5.4 v3.4 h-5.4 Z M25.7 192 h13.6 v3.4 h-13.6 Z M40.1 192 h8.5 v3.4 h-8.5 Z"/>
+            </g>
+          </g>
+          <g class="mini mini--baerer" transform="translate(-24 155.5) scale(.5)">
+            <g class="mini__krop"><use href="#robot-tegning"/></g>
+            <path class="mini__poff" d="M30 14 L 32.8 27.4 L 42.9 18.2 L 37.3 30.7 L 50.9 29.2 L 39 36 L 50.9 42.8 L 37.3 41.3 L 42.9 53.8 L 32.8 44.6 L 30 58 L 27.2 44.6 L 17.1 53.8 L 22.7 41.3 L 9.1 42.8 L 21 36 L 9.1 29.2 L 22.7 30.7 L 17.1 18.2 L 27.2 27.4 Z"/>
+          </g>
+          <g class="mini mini--banker" transform="translate(0 155.5) scale(.5)">
+            <g class="mini__krop"><use href="#robot-tegning"/></g>
+            <path class="mini__poff" d="M30 14 L 32.8 27.4 L 42.9 18.2 L 37.3 30.7 L 50.9 29.2 L 39 36 L 50.9 42.8 L 37.3 41.3 L 42.9 53.8 L 32.8 44.6 L 30 58 L 27.2 44.6 L 17.1 53.8 L 22.7 41.3 L 9.1 42.8 L 21 36 L 9.1 29.2 L 22.7 30.7 L 17.1 18.2 L 27.2 27.4 Z"/>
+          </g>
+          <g class="mini mini--klipper" transform="translate(17 155.5) scale(.5)">
+            <g class="mini__krop"><use href="#robot-tegning"/></g>
+            <path class="mini__poff" d="M30 14 L 32.8 27.4 L 42.9 18.2 L 37.3 30.7 L 50.9 29.2 L 39 36 L 50.9 42.8 L 37.3 41.3 L 42.9 53.8 L 32.8 44.6 L 30 58 L 27.2 44.6 L 17.1 53.8 L 22.7 41.3 L 9.1 42.8 L 21 36 L 9.1 29.2 L 22.7 30.7 L 17.1 18.2 L 27.2 27.4 Z"/>
+          </g>
+        </g>
+        <g class="luge">
+          <ellipse class="luge__glod" cx="4" cy="172" rx="30" ry="26" fill="url(#luge-glod)"/>
+          <path class="luge__lys" d="M-6 184 L 14 184 L 30 197 L -12 197 Z"/>
+          <rect class="luge__ramme" x="-8" y="157" width="24" height="28" rx="3"/>
+          <rect class="luge__hul" x="-5.5" y="159.5" width="19" height="25" rx="2" fill="url(#luge-lys)"/>
+          <path class="luge__fare" d="M-8 157 h24 v3.4 h-24 Z"/>
+          <path class="luge__fare-striber" d="M-6 157 h2.6 l-2 3.4 h-2.6 Z M-0.8 157 h2.6 l-2 3.4 h-2.6 Z M4.4 157 h2.6 l-2 3.4 h-2.6 Z M9.6 157 h2.6 l-2 3.4 h-2.6 Z M14.8 157 h1.2 v1.4 l-1.2 2 h-1.4 Z"/>
+          <path class="luge__laage" d="M-8 158 L -15 154 L -15 187 L -8 185 Z"/>
+          <path class="luge__nitter" d="M-12.6 160 v.1 M-12.6 172 v.1 M-12.6 183.4 v.1"/>
+        </g>
+
         <!-- the clapper creature -->
         <g class="body">
           <!-- Booster on a drip (SPEC §18.6): the stand rolls in and stays while the rush lasts, the bag slowly emptying -->
@@ -184,6 +306,17 @@
             <rect class="foot" x="70" y="164" width="22" height="14" rx="7"/>
             <rect class="foot" x="108" y="164" width="22" height="14" rx="7"/>
             <path class="arm arm--left" d="M50 132 Q 36 138 34 150"/>
+            <!-- a build: Klippe directs the robots with a megaphone in its left hand (SPEC §21.3) -->
+            <g class="megafon">
+              <g transform="translate(35 151) rotate(155)">
+                <path class="megafon__greb" d="M5 2.6 L 6.4 8.6 L 9.2 8.6 L 8.6 3.4 Z"/>
+                <rect class="megafon__mund" x="-3" y="-2.3" width="5.6" height="4.6" rx="1.6"/>
+                <path class="megafon__tragt" d="M2 -3 L 18 -8.6 L 18 8.6 L 2 3 Z"/>
+                <path class="megafon__baand" d="M10 -5.8 L 13.6 -7 L 13.6 7 L 10 5.8 Z"/>
+                <ellipse class="megafon__kant" cx="18.4" cy="0" rx="2.6" ry="8.8"/>
+                <ellipse class="megafon__hul" cx="18.9" cy="0" rx="1.6" ry="7"/>
+              </g>
+            </g>
             <path class="arm arm--right" d="M150 132 Q 164 138 166 150"/>
             <rect class="drop__tape" x="30" y="146.5" width="8" height="5" rx="1" transform="rotate(25 34 149)"/>
             <rect class="slate" x="48" y="82" width="104" height="88" rx="18"/>
@@ -297,6 +430,7 @@
             <rect class="awp__scope" x="144" y="135" width="30" height="8" rx="4"/>
             <circle class="awp__lens" cx="174" cy="139" r="4.5"/>
             <path class="awp__mount" d="M152 143 L152 146 M166 143 L166 146"/>
+            <path class="awp__flash" d="M206 151.25 L 210 147 L 211 149.6 L 219 145.5 L 214.5 150 L 223 151.25 L 214.5 152.5 L 219 157 L 211 152.9 L 210 155.5 Z"/>
           </g>
           <g class="haand haand--durum"><use href="#mad-durum" transform="translate(175 150) rotate(14) scale(.9)"/></g>
           <g class="haand haand--pommes"><use href="#mad-pommes" transform="translate(176 153) rotate(6) scale(.9)"/></g>
@@ -333,6 +467,33 @@
             <g class="krummer"><circle cx="96" cy="155" r="1.5"/><circle cx="103" cy="157" r="1.2"/><circle cx="108" cy="155" r="1.6"/></g>
             <text class="boevs" x="146" y="112">BØVS!</text>
           </g>
+        </g>
+
+        <!-- a call (SPEC §21.1): a red retro telephone beside Klippe – it rings (shakes, "RING!"),
+             shows a red badge when missed, and its receiver goes to Klippe's ear when answered.
+             Scaled with Klippe like .body, so the receiver finds the ear at every stage. -->
+        <g class="telefon" id="telefon">
+          <path class="telefon__ledning telefon__ledning--gaffel" d="M159.5 163 c -4 2 -1 4.5 -4 6.5 c -3 2 0 4.5 -3 6.5 c -2 2 2 3.4 5.5 3"/>
+          <path class="telefon__ledning telefon__ledning--oere" d="M158 141 c 4.5 3 -4 5 0 8 c 4.5 3 -4 5 0 8 c 4.5 3 -4 5 0 8 c 3 2 1.5 4 3.5 5"/>
+          <g class="telefon__ring">
+            <path class="telefon__krop" d="M161.5 166 Q 163 162.2 168 162.2 H 184 Q 189 162.2 190.5 166 L 194.6 181 Q 195.6 185 191.6 185 H 160.4 Q 156.4 185 157.4 181 Z"/>
+            <path class="telefon__gaffel" d="M163.5 163 v-3.4 h4 v3.4 M184.5 163 v-3.4 h4 v3.4"/>
+            <circle class="telefon__skive" cx="176" cy="174.5" r="7.2"/>
+            <g class="telefon__huller">
+              <circle cx="178.3" cy="170.5" r="1.05"/><circle cx="180.2" cy="172.6" r="1.05"/><circle cx="180.5" cy="175.5" r="1.05"/>
+              <circle cx="179.1" cy="177.9" r="1.05"/><circle cx="176.5" cy="179.1" r="1.05"/><circle cx="173.7" cy="178.5" r="1.05"/>
+              <circle cx="171.8" cy="176.4" r="1.05"/><circle cx="171.5" cy="173.5" r="1.05"/><circle cx="172.9" cy="171.1" r="1.05"/>
+            </g>
+            <circle class="telefon__midte" cx="176" cy="174.5" r="2"/>
+            <path class="telefon__roer telefon__roer--gaffel" d="M157 160.5 Q 156 154 162 154 H 190 Q 196 154 195 160.5 Q 194.5 163 191.5 163 H 188 Q 186.5 159 184 159 H 168 Q 165.5 159 164 163 H 160.5 Q 157.5 163 157 160.5 Z"/>
+            <g class="telefon__ringer">
+              <path d="M152 152 q -3 4 0 8 M148 149 q -4.5 7 0 14 M200 152 q 3 4 0 8 M204 149 q 4.5 7 0 14"/>
+              <text x="176" y="149">RING!</text>
+            </g>
+            <g class="telefon__ubesvaret"><circle cx="193.5" cy="156" r="6.4"/><text x="193.5" y="159.2" id="telefon-antal">1</text></g>
+          </g>
+          <path class="telefon__roer telefon__roer--oere" transform="translate(160 120) rotate(90) translate(-176 -158.5)"
+                d="M157 160.5 Q 156 154 162 154 H 190 Q 196 154 195 160.5 Q 194.5 163 191.5 163 H 188 Q 186.5 159 184 159 H 168 Q 165.5 159 164 163 H 160.5 Q 157.5 163 157 160.5 Z"/>
         </g>
 
         <!-- while a card is transferred: Klippe carries the files from the card to the folder -->
@@ -406,6 +567,10 @@
     <footer class="panel__foot">
       <button type="button" class="panel__play" id="panel-play">🎮 Lad Klippe lege nu</button>
       <span class="panel__hint">Slip musen bagefter</span>
+      <div class="panel__demo">
+        <button type="button" class="panel__demo-button" id="demo-robots" title="Robotterne øver sig et minut – som når en Claude-session bygger">🤖 Vis robotterne</button>
+        <button type="button" class="panel__demo-button" id="demo-call" title="Telefonen ringer, som når en session vil bruge Resolve">📞 Prøv telefonen</button>
+      </div>
     </footer>
   </section>
   <section class="tray" id="tray" role="dialog" aria-label="Giv Klippe mad" hidden>

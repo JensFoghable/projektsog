@@ -44,6 +44,7 @@ from .achievements import PetProgress
 from .messages import MessageBoard
 from .updater import Updater
 from .petplay import PetPlay, window_shown
+from .crew import Crew, KoeWatch
 from .widget import PetWindow
 from .timetrack import TimeTracker
 from .tray import TrayIcon
@@ -618,6 +619,7 @@ class Components:
     window: Callable[[str, str], AppWindow] = AppWindow
     widget: Callable[..., PetWindow] = PetWindow
     petplay: Callable[..., PetPlay] = PetPlay
+    crew: Callable[..., Crew] = Crew
     messages: Callable[..., MessageBoard] = MessageBoard
     progress: Callable[..., PetProgress] = PetProgress
     updater: Callable[..., Updater] = Updater
@@ -699,6 +701,7 @@ class App:
         self.window: AppWindow | None = None
         self.widget: PetWindow | None = None
         self.petplay: PetPlay | None = None
+        self.crew: Crew | None = None
         self.messages: MessageBoard | None = None
         self.progress: PetProgress | None = None
         self.updater: Updater | None = None
@@ -754,8 +757,9 @@ class App:
         self.server = c.server(cfg, bus, self.indexer, self.bridge, self.controller,
                                parse_hotkey=hotkey.parse_hotkey, tracker=self.tracker,
                                importer=self.importer)
-        # Messages from other programs (the Claude sessions' Resolve queue), shown by Klippe.
-        self.messages = c.messages(cfg, bus, shown=self._klippe_shown,
+        # Messages from other programs (the Claude sessions' Resolve queue), shown by Klippe; a
+        # "projektsog:" button of a message we posted ourselves (the demo call) goes to the crew.
+        self.messages = c.messages(cfg, bus, shown=self._klippe_shown, on_internal=self._internal_uri,
                                    path=os.path.join(config.app_dir(), "messages.json"))
         self.server.messages = self.messages
         # Klippe's trophies and wardrobe (achievements.py): from the time and the cards.
@@ -777,10 +781,18 @@ class App:
             self.widget = c.widget(cfg, f"http://{HOST}:{port}/widget.html")
             self.petplay = c.petplay(cfg, bus, widget=self.widget, bridge=self.bridge,
                                      importer=self.importer, base_url=f"http://{HOST}:{port}",
-                                     wardrobe=self.progress.equipped, on_game=self.progress.note_game)
+                                     wardrobe=self.progress.equipped, on_game=self.progress.note_game,
+                                     crew_active=self._crew_active)
             self.server.petplay = self.petplay
+            # The robot crew (crew.py): while a Claude session builds in Resolve, Klippe directs
+            # robots that come out on its screen when nobody is at the PC.
+            self.crew = c.crew(cfg, bus, widget=self.widget, watch=KoeWatch(), look=self.petplay.look,
+                               wardrobe=self.progress.equipped, petplay_busy=self.petplay.busy,
+                               messages=self.messages, base_url=f"http://{HOST}:{port}")
+            self.server.crew = self.crew
             self.widget.start()
             self.petplay.start()
+            self.crew.start()
             self._start_tray()
             self._spawn(self._forward_notifications, "notify-forwarder")
             self._hotkey_settings = _hotkey_settings(cfg.snapshot())
@@ -803,6 +815,18 @@ class App:
         hwnd = getattr(widget, "hwnd", None) if widget is not None else None
         return bool(self.cfg is not None and self.cfg.get("widget_enabled", False)
                     and hwnd and window_shown(hwnd))
+
+    def _crew_active(self) -> bool:
+        """The robots build (Klippe directs them and does not play meanwhile)."""
+        crew = self.crew
+        return bool(crew is not None and crew.active())
+
+    def _internal_uri(self, uri: str) -> None:
+        """A "projektsog:" button of a message Projektsøg posted itself (MessageBoard.click)."""
+        crew = self.crew
+        if crew is None:
+            raise ValueError("Robotterne er ikke startet")
+        crew.handle_uri(uri)
 
     def request_exit(self) -> None:
         """"Afslut" / /api/quit: only signals; the main thread runs the exit sequence."""
@@ -848,9 +872,10 @@ class App:
             steps["indexer"] = lambda: indexer.stop(timeout=worker_timeout)
         if self.server is not None:
             steps["server"] = self.server.stop
-        # A game ends first: the helper puts the pointer back where it was.
-        windows = [w.close for w in (self.petplay, self.progress, self.updater, self.widget, self.window)
-                   if w is not None]
+        # The robots go first (they are told to quit and do not wait), a ringing phone stops, then
+        # a game ends: the helper puts the pointer back where it was.
+        windows = [w.close for w in (self.crew, self.messages, self.petplay, self.progress, self.updater,
+                                     self.widget, self.window) if w is not None]
         if windows:
             steps["window"] = lambda: [close() for close in windows]
         for name, budget in budgets.items():

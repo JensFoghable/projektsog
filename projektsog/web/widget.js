@@ -260,6 +260,72 @@
     return `📬 ${count === 1 ? '1 besked' : `${count} beskeder`} · vis`;
   }
 
+  // ---------------------------------------------------------------- the phone and the robot crew (SPEC §21)
+  /** A call that still waits for an answer: Klippe shows a phone instead of its card. */
+  function isCall(m) {
+    return Boolean(m && m.opkald && !m.besvaret);
+  }
+
+  /** Who calls: the session, else the name in "🎬 Mette vil bruge Resolve", else "Claude". */
+  function callerName(m) {
+    const session = String((m && m.session) || '').trim();
+    if (session) return session;
+    const match = /^\s*(?:🎬\s*)?(.+?)\s+vil bruge Resolve/u.exec(String((m && m.titel) || ''));
+    return match ? match[1] : 'Claude';
+  }
+
+  /** "📞 Mette ringer" – or, once it has stopped ringing, "📞 Ubesvaret opkald fra Mette". */
+  function callLine(m) {
+    return m && m.ringer ? `📞 ${callerName(m)} ringer` : `📞 Ubesvaret opkald fra ${callerName(m)}`;
+  }
+
+  /** The robot sprite sheet's poses (crew.py ROBOT_POSES), in that order. */
+  const ROBOT_POSES = ['robot-a', 'robot-b', 'robot-baer', 'robot-klip', 'robot-hop', 'robot-fraek', 'robot-panik'];
+  const ROBOT_COUNT = { egg: 4, baby: 5, junior: 7, pro: 9, legend: 12 };   // the crew out on the screen
+  const BODY_SCALE = { baby: 0.74, junior: 0.86, pro: 0.95, legend: 1 };     // .body in widget.css
+
+  /** `?sprites=` asks for the robots' sheet (every pose a robot pose), not Klippe's. */
+  function isRobotSheet(poses) {
+    return poses.length > 0 && poses.every((pose) => pose.startsWith('robot'));
+  }
+
+  /** The end of the barrel in Klippe's aim pose (data-sigter), in pet SVG units (0…200): where the
+   *  robots' helper starts the laser – mirrored when it aims to the left (the robots work to the
+   *  left of the widget), as drawn to the right. null for an egg – it has no hands. */
+  function muzzle(stage, direction = 'venstre') {
+    const s = BODY_SCALE[stage];
+    return s ? { x: 100 + (direction === 'hoejre' ? 92 : -92) * s, y: 180 - 54.75 * s } : null;
+  }
+
+  const DIRECTOR_LINES = ['Action! 🎬', 'Klip! ✂️', 'Mere tempo! 📣', 'Flot, robot nr. {n}! 🤖', 'Pas på tidslinjen! 😬',
+    'Tag den fra toppen! 🔁', 'Ro på settet! 🤫', 'Den her bliver en klassiker! 🏆'];
+
+  /** What Klippe shouts through the megaphone now and then; `robots`: how many there are. */
+  function directorLine(random = Math.random, robots = 3) {
+    const line = DIRECTOR_LINES[Math.floor(random() * DIRECTOR_LINES.length) % DIRECTOR_LINES.length];
+    return line.replace('{n}', String(1 + (Math.floor(random() * robots) % robots)));
+  }
+
+  function shorten(text, max = 48) {
+    const t = String(text || '').trim();
+    return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+  }
+
+  /** The line under the pet while a session builds (`bygger` state), or null. */
+  function buildLine(b, name = 'Klippe') {
+    if (!b || !b.aktiv) return null;
+    if (b.ude) return '🤖 Robotterne klipper ude på skærmen – rør musen, så går de ind';
+    if (b.demo) return `🤖 ${shorten(b.projekt || b.opgave) || 'Robotterne øver sig'} – ${name} dirigerer`;
+    const task = shorten(b.opgave);
+    const what = task ? `„${task}“` : b.projekt ? `i ${shorten(b.projekt)}` : 'i Resolve';
+    return `🤖 ${b.navn || 'Claude'} bygger ${what} – ${name} dirigerer robotterne`;
+  }
+
+  /** What Klippe says when a build is done. */
+  function doneLine(b) {
+    return b && b.demo ? 'Robotterne er færdige med at øve! 🎉' : `✅ ${(b && b.navn) || 'Claude'} er færdig – klar til at klippe!`;
+  }
+
   const CHEERS = {
     hour: (n) => [`${n} ${n === 1 ? 'time' : 'timer'} i dag! 🎉`, `${n} t i kassen – godt klippet! 🎬`, `Time nr. ${n}! Du er on fire 🔥`],
     goal: () => ['Dagens mål er nået! 🏆', 'MÅL! Hele dagens mål er i hus 🎆'],
@@ -281,7 +347,9 @@
 
   const helpers = { stageFor, moodFor, outfitFor, crossedHours, crossedMarks, dayStreak, isoDate, hm, words,
     moodLine, cheer, transferInfo, jobLine, messageOrder, quietLine, trophyProgress, progressLine, parsePynt,
-    hungerLevel, foodLine, foodSay, foodHint, dropLeft, STAGES, FOCUS_STARS, BREAK_NUDGES };
+    hungerLevel, foodLine, foodSay, foodHint, dropLeft, isCall, callerName, callLine, isRobotSheet, muzzle,
+    directorLine, buildLine, doneLine, STAGES, FOCUS_STARS, BREAK_NUDGES, ROBOT_POSES, ROBOT_COUNT, BODY_SCALE,
+    DIRECTOR_LINES };
   if (typeof module === 'object' && module.exports) module.exports = helpers;
   if (typeof document === 'undefined') return;
 
@@ -293,9 +361,11 @@
   // ===========================================================================================
 
   const PARTY_POSES = new Set(['happy', 'cheer']);
-  // The drip's falling drop is SMIL (it has to run inside <use>), which reduced motion does not stop.
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  // The drip's falling drop and the robots' antenna light are SMIL (it has to run inside <use>),
+  // which reduced motion does not stop.
   if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    for (const animate of document.querySelectorAll('#mad-drop animate')) animate.remove();
+    for (const animate of document.querySelectorAll('#mad-drop animate, #robot-tegning animate')) animate.remove();
   }
   const query = new URLSearchParams(window.location.search);
   if (query.has('sprites')) {
@@ -305,6 +375,10 @@
 
   function renderSprites(params) {
     const poses = (params.get('sprites') || 'normal').split(',').filter(Boolean);
+    if (isRobotSheet(poses)) {
+      renderRobotSprites(poses, Number(params.get('cell')) || 120);
+      return;
+    }
     const stage = params.get('stage') === 'egg' ? 'baby' : (params.get('stage') || 'baby');
     const cell = Number(params.get('cell')) || 240;
     const pynt = parsePynt(params.get('pynt'));
@@ -326,6 +400,33 @@
     document.body.replaceChildren(sheet);
   }
 
+  /** The robot crew's sheet (crew.py): each pose in a `cell`-px cell, the 60-unit drawing filling
+   *  it (2 CSS px per unit at 120), facing right. Deep copies, not <use>: the pose CSS reaches in. */
+  function renderRobotSprites(poses, cell) {
+    const drawing = document.getElementById('robot-tegning');
+    const sheet = document.createElement('div');
+    sheet.className = 'sheet';
+    for (const pose of poses) {
+      const box = document.createElement('div');
+      box.className = 'sprite sprite--robot';
+      box.dataset.pose = pose;
+      box.style.width = `${cell}px`;
+      box.style.height = `${cell}px`;
+      const svg = document.createElementNS(SVG_NS, 'svg');
+      svg.setAttribute('class', 'robot-ark');
+      svg.setAttribute('viewBox', '0 0 60 60');
+      svg.setAttribute('aria-hidden', 'true');
+      const copy = drawing.cloneNode(true);
+      copy.removeAttribute('id');
+      for (const animate of copy.querySelectorAll('animate')) animate.remove();   // nothing moves
+      svg.append(copy);
+      box.append(svg);
+      sheet.append(box);
+    }
+    document.documentElement.classList.add('sprites');
+    document.body.replaceChildren(sheet);
+  }
+
   // ===========================================================================================
   // Page
   // ===========================================================================================
@@ -333,6 +434,8 @@
   const STATUS_POLL_MS = 5000;
   const HISTORY_POLL_MS = 10 * 60e3;
   const BUBBLE_MS = 5500;
+  const ANSWER_MS = 1600;                    // "Hallo? 📞" – the receiver at the ear, then the card
+  const AIM_MAX_MS = 20e3;                   // a lost "sigter-slut" never leaves Klippe aiming
   const REDUCED = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const $ = (id) => document.getElementById(id);
@@ -346,7 +449,8 @@
     transferBar: $('transfer-bar'), transferSub: $('transfer-sub'),
     hunger: $('hunger'), maet: $('maet'), maetBar: $('maet-bar'), energi: $('energi'), feed: $('feed'),
     tray: $('tray'), trayGrid: $('tray-grid'), trayClose: $('tray-close'), dream: $('drom-mad'),
-    eatBite: $('mad-bid'), eatThing: $('mad-ting'),
+    eatBite: $('mad-bid'), eatThing: $('mad-ting'), phone: $('telefon'), phoneCount: $('telefon-antal'),
+    demoRobots: $('demo-robots'), demoCall: $('demo-call'),
   };
 
   const state = {
@@ -354,8 +458,10 @@
     name: 'Klippe', goalH: 6, bubbles: [], bubbleTimer: 0, seenJobs: new Set(), cards: null, project: null,
     job: null, jobsStarted: new Set(), lookSent: '', lookTimer: 0, hatched: false, hatching: false,
     messages: [], messagesSeen: new Set(), messagesLoaded: false, messageTag: null, messagesOpen: false,
-    pet: null, panelTab: 'trophies',
+    pet: null, panelTab: 'trophies', looks: 0, equipped: null,
     food: null, menu: [], hunger: null, energy: null, craving: null, eating: null, feeding: false, laterProgress: [],
+    answering: null, revealTag: null, callTags: new Set(),
+    build: null, directorTimer: 0, naughtyTimer: 0, naughty: null, aimTimer: 0,
   };
 
   // ---------------------------------------------------------------- memory (per day)
@@ -532,12 +638,13 @@
       el.mood.textContent = `${state.name} ${verb} ${state.eating.name} ${state.eating.kind === 'drop' ? '💉' : '😋'}`;
       return;
     }
+    const building = buildLine(state.build, state.name);
     const job = jobLine(transferInfo(state.job), state.job);
     const mood = moodFor(state.status);
     const food = hatchedFood();
     const hungry = foodLine(food, mood, state.name, state.craving);
     const rush = food && food.energi && mood === 'working' ? '⚡ ' : '';   // turbo editing
-    el.mood.textContent = job || hungry || `${rush}${moodLine(state.status, state.name)}`;
+    el.mood.textContent = building || job || hungry || `${rush}${moodLine(state.status, state.name)}`;
   }
 
   // ---------------------------------------------------------------- the games (petplay.py)
@@ -589,14 +696,25 @@
     return `${m.tag}|${m.titel}|${m.tekst}`;
   }
 
+  /** A call shows as a phone until it is answered – and while Klippe says "Hallo?". */
+  function shownAsCall(m) {
+    return isCall(m) || m.tag === state.answering;
+  }
+
   /** One card at a time (never a long list): the one that needs you, ‹ 1/3 › to the others.
-   *  Quiet messages alone only show a small "📬 2 beskeder · vis" line. */
+   *  Quiet messages alone only show a small "📬 2 beskeder · vis" line. An unanswered call is a
+   *  ringing phone and one line instead of its card (SPEC §21.1). */
   function renderMessages(list) {
     const messages = messageOrder(list);
     const fresh = messages.filter((m) => !state.messagesSeen.has(messageKey(m)));
     for (const m of messages) state.messagesSeen.add(messageKey(m));
     state.messages = messages;
-    const loud = fresh.find((m) => m.prioritet !== 'stille');
+    // A call answered – here after Klippe's "Hallo?", or anywhere else – shows its real card, glowing.
+    const answered = messages.filter((m) => !shownAsCall(m)
+      && (m.tag === state.revealTag || state.callTags.has(m.tag)));
+    state.revealTag = null;
+    state.callTags = new Set(messages.filter(shownAsCall).map((m) => m.tag));
+    const loud = fresh.find((m) => m.prioritet !== 'stille') || answered[0];
     if (loud) state.messageTag = loud.tag;               // what needs you comes to the front
     let index = messages.findIndex((m) => m.tag === state.messageTag);
     // A quiet one stays in front only while you are looking at the quiet ones.
@@ -617,15 +735,82 @@
       });
       el.messages.replaceChildren(line);
     } else {
-      el.messages.replaceChildren(messageCard(messages[index], fresh.includes(messages[index]), index, messages.length));
+      const m = messages[index];
+      el.messages.replaceChildren(shownAsCall(m) ? callCard(m, index, messages.length)
+        : messageCard(m, fresh.includes(m) || answered.includes(m), index, messages.length));
     }
     el.messages.hidden = !messages.length;
-    if (loud && loud.lyd !== false && state.messagesLoaded) {
+    renderPhone(messages);
+    // No jump and clap for a call: the phone is the alarm.
+    if (loud && loud.lyd !== false && !shownAsCall(loud) && !answered.includes(loud) && state.messagesLoaded) {
       jump();
       pulse('clap', 950);
     }
     state.messagesLoaded = true;
     reportLook();
+  }
+
+  /** data-telefon: ringer (an unanswered call rings), ubesvaret (missed: a red badge), svarer. */
+  function renderPhone(messages) {
+    const calls = messages.filter(isCall);
+    const phone = state.answering ? 'svarer' : calls.some((m) => m.ringer) ? 'ringer' : calls.length ? 'ubesvaret' : null;
+    if (phone) {
+      el.app.dataset.telefon = phone;
+    } else {
+      delete el.app.dataset.telefon;
+    }
+    el.phoneCount.textContent = String(Math.min(9, Math.max(1, calls.length)));
+  }
+
+  /** The line a call shows instead of its card: "📞 Mette ringer" · Tag telefonen · ×. */
+  function callCard(m, index = 0, count = 1) {
+    const answering = m.tag === state.answering;
+    const card = node('article', `message message--call${answering ? '' : m.ringer ? ' is-ringing' : ' is-missed'}`);
+    card.dataset.tag = m.tag;
+    card.append(node('p', 'message__title', answering ? `📞 ${state.name} tager telefonen …` : callLine(m)));
+    if (!answering) {
+      const row = node('div', 'message__buttons');
+      const button = node('button', 'message__button', 'Tag telefonen');
+      button.type = 'button';
+      button.addEventListener('click', () => answerCall(m.tag));
+      row.append(button);
+      card.append(row);
+    }
+    card.append(smallButton('message__close', '×', 'Afvis opkaldet', () => closeMessage(m.tag)));
+    if (count > 1) card.append(messagePager(index, count, false));
+    return card;
+  }
+
+  /** Klippe answers the call (the button or the phone itself): the receiver to its ear and
+   *  "Hallo? 📞" – then the call's real card comes up, glowing, with its "Byg nu". */
+  async function answerCall(tag) {
+    if (state.answering || !tag) return;
+    state.answering = tag;
+    renderMessages(state.messages);
+    say('Hallo? 📞', ANSWER_MS, true);
+    const held = new Promise((resolve) => setTimeout(resolve, ANSWER_MS));
+    let ok = true;
+    try {
+      await send('POST', '/api/messages/svar', { tag });
+    } catch (err) {
+      ok = false;
+      say(`Øv – ${err.message}`, 6000);
+    }
+    if (ok) {
+      const m = state.messages.find((x) => x.tag === tag);
+      if (m) Object.assign(m, { besvaret: true, ringer: false });    // its `messages` event may come later
+      await held;
+      state.revealTag = tag;
+    }
+    state.answering = null;
+    renderMessages(state.messages);
+    if (!ok) loadMessages();
+  }
+
+  /** The call the phone in Klippe's hand answers: the one on show, else the newest. */
+  function phoneCall() {
+    const shown = state.messages.find((m) => m.tag === state.messageTag);
+    return shown && isCall(shown) ? shown : state.messages.find(isCall);
   }
 
   function showMessage(step) {
@@ -677,25 +862,28 @@
     }
     card.append(smallButton('message__close', '×', 'Luk beskeden', () => closeMessage(m.tag)));
     const quietOnly = state.messages.every((x) => x.prioritet === 'stille');
-    if (count > 1 || quietOnly) {
-      const pager = document.createElement('div');
-      pager.className = 'message__pager';
-      if (count > 1) {
-        const where = document.createElement('span');
-        where.className = 'message__where';
-        where.textContent = `${index + 1} / ${count}`;
-        pager.append(smallButton('message__step', '‹', 'Forrige besked', () => showMessage(-1)), where,
-          smallButton('message__step', '›', 'Næste besked', () => showMessage(1)));
-      }
-      if (quietOnly) {
-        pager.append(smallButton('message__fold', '▾', 'Fold beskederne sammen', () => {
-          state.messagesOpen = false;
-          renderMessages(state.messages);
-        }));
-      }
-      card.append(pager);
-    }
+    if (count > 1 || quietOnly) card.append(messagePager(index, count, quietOnly));
     return card;
+  }
+
+  /** "‹ 1 / 3 ›" under a card – and ▾ to fold quiet messages up again. */
+  function messagePager(index, count, quietOnly) {
+    const pager = document.createElement('div');
+    pager.className = 'message__pager';
+    if (count > 1) {
+      const where = document.createElement('span');
+      where.className = 'message__where';
+      where.textContent = `${index + 1} / ${count}`;
+      pager.append(smallButton('message__step', '‹', 'Forrige besked', () => showMessage(-1)), where,
+        smallButton('message__step', '›', 'Næste besked', () => showMessage(1)));
+    }
+    if (quietOnly) {
+      pager.append(smallButton('message__fold', '▾', 'Fold beskederne sammen', () => {
+        state.messagesOpen = false;
+        renderMessages(state.messages);
+      }));
+    }
+    return pager;
   }
 
   async function send(method, path, body) {
@@ -733,6 +921,159 @@
     } catch { /* not there (yet) */ }
   }
 
+  el.phone.addEventListener('click', (event) => {
+    event.stopPropagation();                 // the phone, not a pat on the head
+    const call = phoneCall();
+    if (call) answerCall(call.tag);
+  });
+
+  // ---------------------------------------------------------------- the robot crew (SPEC §21.3)
+  /** `bygger` (SSE and GET /api/bygger): a Claude session builds. Klippe directs with a megaphone;
+   *  the robots work in the box (three minis on a little timeline) or out on the screen (`ude`:
+   *  only the open hatch is left). `faerdig` ends it with fireworks. */
+  function applyBuild(data) {
+    if (!data || typeof data !== 'object') return;
+    const before = state.build;
+    const on = Boolean(data.aktiv);
+    state.build = on ? data : null;
+    if (on) {
+      el.app.dataset.bygger = data.demo ? 'demo' : 'koe';
+    } else {
+      delete el.app.dataset.bygger;
+    }
+    if (on && data.ude) {
+      el.app.dataset.ude = data.retning === 'hoejre' ? 'hoejre' : 'venstre';    // the hatch they used
+    } else {
+      delete el.app.dataset.ude;
+    }
+    if (!on || data.ude) stopNaughty();       // no mini robots in the box to shoot at
+    if (on && !data.ude) scheduleNaughty();
+    if (!on) {
+      clearTimeout(state.directorTimer);
+      state.directorTimer = 0;
+      aim(false);
+    } else if (!state.directorTimer) {
+      scheduleDirector();
+    }
+    if (on && !before) say(directorLine(() => 0), 3500);                 // "Action! 🎬"
+    if (data.faerdig) celebrate(doneLine(data), 'fireworks', 4);
+    renderMoodLine();
+  }
+
+  function robotCount() {
+    return ROBOT_COUNT[el.app.dataset.stage] || ROBOT_COUNT.egg;
+  }
+
+  /** A director's line every 20–40 s while the robots build – unless Klippe is saying something. */
+  function scheduleDirector() {
+    clearTimeout(state.directorTimer);
+    state.directorTimer = setTimeout(() => {
+      state.directorTimer = 0;
+      if (!state.build) return;
+      if (!state.bubbleTimer && !state.eating) say(directorLine(Math.random, robotCount()), 4000);
+      scheduleDirector();
+    }, 20e3 + Math.random() * 20e3);
+  }
+
+  /** data-sigter: Klippe aims – towards the robots: "venstre" (mirrored) or "hoejre" (widget.css). */
+  function aim(on, direction = 'venstre') {
+    clearTimeout(state.aimTimer);
+    if (!on) {
+      delete el.app.dataset.sigter;
+      return;
+    }
+    el.app.dataset.sigter = direction === 'hoejre' ? 'hoejre' : 'venstre';
+    state.aimTimer = setTimeout(() => aim(false), AIM_MAX_MS);
+  }
+
+  /** A shot: the AWP kicks back and the muzzle flashes. */
+  function shoot() {
+    pulse('skud', 350);
+  }
+
+  /** `robot` events from the robots out on the screen: sigter (Klippe turns and aims), skud (each
+   *  shot, `ram` = a hit), sigter-slut. */
+  function applyRobot(data) {
+    const event = data && data.haendelse;
+    if (event === 'sigter' || event === 'skud') {
+      stopNaughty();
+      if (event === 'sigter' || !el.app.dataset.sigter) aim(true, data.retning);
+      if (event === 'skud') {
+        shoot();
+        if (data.ram) floatEmoji('💥', 1, 10);
+      }
+    } else if (event === 'sigter-slut') {
+      aim(false);
+    }
+  }
+
+  /** In the box, with the AWP: every 45–90 s one mini robot gets naughty – it dances with red eyes,
+   *  Klippe aims and shoots, the robot bursts and is back 2 s later. */
+  function scheduleNaughty() {
+    if (state.naughtyTimer || state.naughty) return;
+    state.naughtyTimer = setTimeout(naughtyRobot, 45e3 + Math.random() * 45e3);
+  }
+
+  function naughtyRobot() {
+    state.naughtyTimer = 0;
+    if (!state.build || state.build.ude) return;
+    const ready = el.app.dataset.haand === 'awp' && el.app.dataset.stage !== 'egg' && !REDUCED
+      && !el.app.dataset.sigter && el.app.dataset.play !== 'out'
+      && !el.app.dataset.transfer && !state.eating && !state.answering;   // the AWP is put away then
+    const minis = el.pet.querySelectorAll('.mini');
+    if (!ready || !minis.length) {
+      scheduleNaughty();
+      return;
+    }
+    const run = { mini: minis[Math.floor(Math.random() * minis.length)], timers: [] };
+    const later = (ms, fn) => run.timers.push(setTimeout(() => {
+      if (state.naughty === run) fn();
+    }, ms));
+    state.naughty = run;
+    run.mini.classList.add('is-fraek');
+    later(1400, () => aim(true));
+    later(2500, () => {
+      shoot();
+      floatEmoji('💥', 1, 12);
+      run.mini.classList.replace('is-fraek', 'is-poff');
+    });
+    later(3000, () => aim(false));
+    later(4500, () => run.mini.classList.replace('is-poff', 'is-tilbage'));
+    later(5100, () => {
+      run.mini.classList.remove('is-tilbage');
+      state.naughty = null;
+      scheduleNaughty();
+    });
+  }
+
+  function stopNaughty() {
+    clearTimeout(state.naughtyTimer);
+    state.naughtyTimer = 0;
+    const run = state.naughty;
+    if (!run) return;
+    run.timers.forEach(clearTimeout);
+    run.mini.classList.remove('is-fraek', 'is-poff', 'is-tilbage');
+    state.naughty = null;
+    aim(false);
+  }
+
+  async function loadBuild() {
+    try {
+      applyBuild({ ...(await get('/api/bygger')), faerdig: false });
+    } catch { /* no crew (yet) */ }
+  }
+
+  /** "🤖 Vis robotterne" / "📞 Prøv telefonen" in the 🏆 panel: the panel closes, so the box is seen. */
+  async function demo(call) {
+    el.panel.hidden = true;
+    try {
+      await send('POST', '/api/bygger/demo', { opkald: call });
+      if (!call) say('Robotterne øver sig – slip musen, så kommer de ud! 🤖', 4500);
+    } catch (err) {
+      say(`Øv – ${err.message}`, 5000);
+    }
+  }
+
   // ---------------------------------------------------------------- trophies and wardrobe (achievements.py)
   const SLOT_KEYS = ['farve', 'striber', 'hat', 'briller', 'mund', 'haand', 'aura'];
 
@@ -744,12 +1085,18 @@
   }
 
   async function loadPet() {
+    const looks = state.looks;
     try {
       state.pet = await get('/api/pet');
     } catch {
       return;
     }
-    applyWardrobe(state.pet.equipped);
+    // A change of clothes (SSE pet_look) that came while this was on its way is newer than it.
+    if (looks === state.looks) {
+      applyWardrobe(state.pet.equipped);
+    } else if (state.equipped) {
+      state.pet.equipped = { ...state.pet.equipped, ...state.equipped };
+    }
     el.trophyCount.textContent = String(state.pet.unlocked);
     if (!el.panel.hidden) renderPanel();
   }
@@ -883,6 +1230,8 @@
       say(`Øv – ${err.message}`, 5000);
     }
   });
+  el.demoRobots.addEventListener('click', () => demo(false));
+  el.demoCall.addEventListener('click', () => demo(true));
   for (const tab of el.panel.querySelectorAll('[data-panel-tab]')) {
     tab.addEventListener('click', () => {
       state.panelTab = tab.dataset.panelTab;
@@ -980,8 +1329,6 @@
       if (!state.feeding) applyFood(food);      // a meal brings its own state when it is eaten
     } catch { /* not there (yet) */ }
   }
-
-  const SVG_NS = 'http://www.w3.org/2000/svg';
 
   function dishIcon(id) {
     const svg = document.createElementNS(SVG_NS, 'svg');
@@ -1156,7 +1503,14 @@
   }
 
   // ---------------------------------------------------------------- reactions
-  function say(text, ms = BUBBLE_MS) {
+  /** A speech bubble, after the ones already waiting – or `now`, cutting in. */
+  function say(text, ms = BUBBLE_MS, now = false) {
+    if (now) {
+      state.bubbles.unshift({ text, ms });
+      clearTimeout(state.bubbleTimer);
+      nextBubble();
+      return;
+    }
     state.bubbles.push({ text, ms });
     if (!state.bubbleTimer) nextBubble();
   }
@@ -1190,12 +1544,13 @@
     state.partyTimer = setTimeout(() => el.app.classList.remove('party'), ms);
   }
 
-  function floatEmoji(emoji, count = 1) {
+  /** Emojis floating up from the stage – somewhere, or from `at` (% from the left). */
+  function floatEmoji(emoji, count = 1, at = null) {
     for (let i = 0; i < count; i += 1) {
       const node = document.createElement('span');
       node.className = 'float';
       node.textContent = emoji;
-      node.style.left = `${15 + Math.random() * 70}%`;
+      node.style.left = `${at == null ? 15 + Math.random() * 70 : at}%`;
       node.style.animationDelay = `${i * 0.12}s`;
       el.hearts.append(node);
       setTimeout(() => node.remove(), 2200 + i * 120);
@@ -1333,7 +1688,8 @@
     return { start, count: () => parts.length };
   })();
   window.__klippe = { celebrate, fx, state, applyStatus, applyStage, applyJob, applyPlay, lookReport,
-    renderMessages, applySettings, celebrateProgress, openPanel, applyFood, feed, openTray };   // for tests
+    renderMessages, applySettings, celebrateProgress, openPanel, applyFood, feed, openTray, answerCall,
+    applyBuild, applyRobot, aim, naughtyRobot };   // for tests
 
   // ---------------------------------------------------------------- events
   function connectEvents() {
@@ -1377,7 +1733,10 @@
     });
     source.addEventListener('pet_look', (event) => {
       try {
-        applyWardrobe(JSON.parse(event.data).equipped);
+        const equipped = JSON.parse(event.data).equipped;
+        state.looks += 1;
+        state.equipped = { ...(state.equipped || {}), ...equipped };
+        applyWardrobe(equipped);
       } catch { /* ignore */ }
     });
     source.addEventListener('pet_progress', (event) => {
@@ -1405,11 +1764,27 @@
         applyPlay(JSON.parse(event.data));
       } catch { /* ignore */ }
     });
+    source.addEventListener('bygger', (event) => {
+      try {
+        applyBuild(JSON.parse(event.data));
+      } catch { /* ignore */ }
+    });
+    source.addEventListener('robot', (event) => {
+      try {
+        applyRobot(JSON.parse(event.data));
+      } catch { /* ignore */ }
+    });
     source.addEventListener('settings', (event) => {
       try {
         applySettings(JSON.parse(event.data));
       } catch { /* ignore */ }
     });
+    // Events are not replayed: when the stream is (back) up, what it may have missed is asked for –
+    // a build that ended or a call that stopped ringing in a gap would otherwise stay on screen.
+    source.onopen = () => {
+      loadBuild();
+      loadMessages();
+    };
     source.onerror = () => {
       source.close();
       setTimeout(connectEvents, 5000);
@@ -1427,7 +1802,9 @@
     setInterval(() => applyJob(state.job), 60e3);   // a finished job's line goes away after a while
     setInterval(() => reportLook(true), 60e3);
     setInterval(() => renderMessages(state.messages), 60e3);   // expired messages go
+    setInterval(() => state.build && loadBuild(), 30e3);         // a lost "done" never leaves it building
     await loadMessages();
+    loadBuild();
     loadPet();
     loadFood();
     setInterval(loadFood, 60e3);           // it gets hungry slowly: once a minute is plenty
