@@ -45,6 +45,8 @@ from .messages import MessageBoard
 from .updater import Updater
 from .petplay import PetPlay, window_shown
 from .crew import Crew, KoeWatch
+from .kontor import Kontor
+from .levering import Levering
 from .widget import PetWindow
 from .timetrack import TimeTracker
 from .tray import TrayIcon
@@ -620,6 +622,9 @@ class Components:
     widget: Callable[..., PetWindow] = PetWindow
     petplay: Callable[..., PetPlay] = PetPlay
     crew: Callable[..., Crew] = Crew
+    koe: Callable[[], KoeWatch] = KoeWatch
+    kontor: Callable[..., Kontor] = Kontor
+    levering: Callable[..., Levering] = Levering
     messages: Callable[..., MessageBoard] = MessageBoard
     progress: Callable[..., PetProgress] = PetProgress
     updater: Callable[..., Updater] = Updater
@@ -702,6 +707,9 @@ class App:
         self.widget: PetWindow | None = None
         self.petplay: PetPlay | None = None
         self.crew: Crew | None = None
+        self.koe: KoeWatch | None = None
+        self.kontor: Kontor | None = None
+        self.levering: Levering | None = None
         self.messages: MessageBoard | None = None
         self.progress: PetProgress | None = None
         self.updater: Updater | None = None
@@ -748,6 +756,10 @@ class App:
         if args.rescan:
             self.indexer.scan_now(None, full=True)
         self.bridge = c.bridge(cfg, bus, self.indexer)
+        # The Claude sessions' Resolve queue (read-only): while a session holds Resolve the bridge
+        # relinks nothing (SPEC §22.2), and Klippe's robots build meanwhile (SPEC §21).
+        self.koe = c.koe()
+        self.bridge.queue_holder = self.koe.current
         self.bridge.start()
         self.tracker = c.tracker(cfg, self.bridge)
         self.tracker.start()
@@ -786,13 +798,23 @@ class App:
             self.server.petplay = self.petplay
             # The robot crew (crew.py): while a Claude session builds in Resolve, Klippe directs
             # robots that come out on its screen when nobody is at the PC.
-            self.crew = c.crew(cfg, bus, widget=self.widget, watch=KoeWatch(), look=self.petplay.look,
+            self.crew = c.crew(cfg, bus, widget=self.widget, watch=self.koe, look=self.petplay.look,
                                wardrobe=self.progress.equipped, petplay_busy=self.petplay.busy,
                                messages=self.messages, base_url=f"http://{HOST}:{port}")
             self.server.crew = self.crew
+            # Office Klippes (kontor.py): Klippe greets the colleagues' Klippes on the LAN and visits
+            # them with a new trophy. The delivery party (levering.py): a render into Final, or a new
+            # file in the project's Final folder.
+            self.kontor = c.kontor(cfg, bus, equipped=self.progress.equipped, stats=self.progress.stats,
+                                   look=self.petplay.look, shown=self._klippe_shown)
+            self.server.kontor = self.kontor
+            self.levering = c.levering(cfg, bus, bridge=self.bridge, shown=self._klippe_shown)
+            self.server.levering = self.levering
             self.widget.start()
             self.petplay.start()
             self.crew.start()
+            self.kontor.start()
+            self.levering.start()
             self._start_tray()
             self._spawn(self._forward_notifications, "notify-forwarder")
             self._hotkey_settings = _hotkey_settings(cfg.snapshot())
@@ -872,10 +894,10 @@ class App:
             steps["indexer"] = lambda: indexer.stop(timeout=worker_timeout)
         if self.server is not None:
             steps["server"] = self.server.stop
-        # The robots go first (they are told to quit and do not wait), a ringing phone stops, then
-        # a game ends: the helper puts the pointer back where it was.
-        windows = [w.close for w in (self.crew, self.messages, self.petplay, self.progress, self.updater,
-                                     self.widget, self.window) if w is not None]
+        # The robots go first (they are told to quit and do not wait), a ringing phone stops, the
+        # office and the delivery watch close, then a game ends: the helper puts the pointer back.
+        windows = [w.close for w in (self.crew, self.messages, self.kontor, self.levering, self.petplay,
+                                     self.progress, self.updater, self.widget, self.window) if w is not None]
         if windows:
             steps["window"] = lambda: [close() for close in windows]
         for name, budget in budgets.items():

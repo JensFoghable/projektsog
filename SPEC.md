@@ -95,7 +95,8 @@ Portable work disks are swapped during the day and must become searchable automa
    global keyboard hook may only be installed in an explicitly named smoke test that passes every
    event through and lasts < 2 s. Never call Resolve APIs that change state (`LoadProject`,
    `SetCurrentDatabase`, `CreateProject`, `ImportMedia`, `SetClipProperty`, `SaveProject`,
-   `OpenPage`, …). Read-only getters only.
+   `OpenPage`, …). Read-only getters only – with one narrow exception: `MediaPool.RelinkClips`
+   on the user's click, as specified in §22.2.
 3. **Stdlib only** (Python 3.14 on Windows): `ctypes`, `sqlite3`, `http.server`, `json`,
    `threading`, `subprocess`, `winreg`, … No `pip install`.
 4. Handle Unicode paths (æøå, parentheses, spaces), UNC paths, drive letters, paths > 260 chars
@@ -1401,8 +1402,15 @@ cancelled and its temp file removed).
   every file back. Files the updater never listed are never removed.
 * A git working copy: `git fetch --no-tags <repo url> main` (no prompt, no window), then
   `HEAD == FETCH_HEAD` or FETCH_HEAD an ancestor → up to date; HEAD not an ancestor → blocked
-  "Mappen har sine egne commits …"; a changed tracked file → blocked "Der er ændrede filer …";
-  no git → blocked. Install = `git merge --ff-only FETCH_HEAD`.
+  "Mappen har sine egne commits (en udviklers mappe) …". Install: changed tracked files (line
+  endings, an edited file) are put aside first – `git -c user.name=Projektsøg -c
+  user.email=projektsog@localhost stash push` (nothing is lost; given back with `stash pop` if
+  the update fails) – then `git merge --ff-only FETCH_HEAD`. Untracked files at paths the new
+  version adds (copied in by hand, or a zip-mode update) would stop the merge: those with the new
+  version's content (`hash-object` = `FETCH_HEAD:<path>`) are deleted, the rest are stashed too
+  (`stash push --include-untracked -- <paths>`); a failed merge pops every stash it made. git = PATH, else GitHub Desktop's
+  bundled git (newest `app-*`), else Git for Windows; a working copy without any git is updated
+  like a download (zip mode).
 * Then `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File install.ps1
   [-Python <python.exe next to sys.executable>] [-NoAutostart when "Start med Windows" is off]`,
   detached (breaks away from a job when allowed), output in `logs\opdatering.log`. It stops this
@@ -1544,3 +1552,104 @@ cancelled and its temp file removed).
   på skærmen, mens en Claude-session bygger"; `widget_ring` (bool, default true) "Klippes
   egen ringelyd, når en session vil bygge".
 * Exit: `crew.close()` first (the helper is told `quit` and ends on stdin EOF by itself).
+
+## 22. Renders, offline media, office Klippes and the delivery party
+
+### 22.1 Klippe watches renders (`resolve_child.py`, `resolve_bridge.py`, widget)
+
+* The helper's `poll` takes an optional `render: {scan: bool, watch: [jobId…]}` and then answers
+  `jobs: [{id, name, timeline, dir, file, mode, preset, status, pct, eta_ms, took_ms, error}]`
+  (read-only getters: `GetRenderJobList()` via `_as_list`, `GetRenderJobStatus(id)` per job, each in
+  its own try, ≤ 25 jobs, ≤ 5 s budget → `jobs_truncated`). Without `render` the poll answer is
+  unchanged. The bridge asks for jobs while `rendering` is true, on its rising edge (scan) and once
+  more after the falling edge (`watch` = the jobs last seen Rendering/Ready); the first scan of a
+  project only records a baseline (old Complete jobs never fire).
+* Bridge state `render` and SSE `render` (published on change, progress at most once per poll):
+  `{aktiv: bool, pct: int|null, eta_s: int|null, navn: str|null (job/output name), tidslinje:
+  str|null, projekt: str|null, af_claude: str|null (the queue's holder `navn` at the rising edge),
+  faerdig: null | {udfald: "done"|"failed"|"cancelled"|"gone", fil: str|null, sti: str|null
+  (TargetDir\OutputFilename for a single-clip job), mappe: str|null, levering: bool, fejl:
+  str|null, seq: int}}`. `levering` = the output folder has a path part named `Final`
+  (casefold) – the template's delivery folder. `GET /api/render` → the current state (the last
+  `faerdig` kept, with its `seq`, so a reloaded widget can still celebrate once). After a done job
+  the indexer refreshes its folder (`refresh_path`). `rendering` in `activity()` is unchanged.
+* Widget: while `aktiv` – the mini robots render (they feed film into a little render box), a
+  progress line under the pet ("Renderer Portræt_v3.mp4 · 47 % · ca. 3 min") and the mood line
+  says so; done → fireworks + "Renderen er færdig! 🎬" (failed → "Renderen fejlede 😟" + the
+  error). The main process plays Klippe's short ring once on a done render while Klippe is shown.
+
+### 22.2 Offline media: find and relink (`resolve_child.py`, `relink.py`, `resolve_bridge.py`, main UI)
+
+* **Contract exception (§1 rule 2):** Projektsøg calls exactly one writing Resolve function,
+  `MediaPool.RelinkClips(items, folder)`, and only: after the user clicked "Genlink" in the search
+  window, for clips the user saw in the plan, in the project the plan was made for (database +
+  name + uid), never while a Claude session holds Resolve (the queue's holder, `KoeWatch`) or
+  Resolve renders. Never `SaveProject`, never anything else that writes.
+* Helper commands: `offline {max_clips, max_seconds}` (bounded walk like `walk`; reads each clip's
+  `GetClipProperty()` dict once; keeps clips whose `Online Status` is not "Online") →
+  `{clips: [{uid, name, path, dir, type, frames, fps, resolution, status}], scanned, truncated}`;
+  `relink {groups: [{folder, uids: [], expect: {uid: old_path}}]}` → finds the items by uid in a
+  fresh walk, skips any that are online now or whose path changed, `RelinkClips` once per folder,
+  re-reads `File Path` + `Online Status` → `{results: [{uid, ok, path, status}]}`.
+* `relink.py` (pure): offline clips + `Indexer.find_files(names)` (extended with `source_id`,
+  `rel_path`, `unc_folder`, `mtime`, `is_seq`) → groups by the clip's old folder; candidate folders
+  ranked by (a) how many of the group's names they hold, (b) shared trailing path parts with the
+  old folder, (c) same project name, (d) UNC when the old path was UNC, (e) online and not
+  hot-plug. A group is `auto` only when one folder holds every name and wins alone; else up to 5
+  alternatives. A candidate equal to the old path (same unplugged disk) is reported as such.
+* API: `POST /api/resolve/offline` → `{project, database, uid, scanned, truncated, groups: [{from,
+  to, to_display, online, clips: [{uid, name, old_path}], auto, alternatives: [{to, to_display,
+  online, holds}]}], not_found: [{uid, name, old_path}], blocked: str|null}`;
+  `POST /api/resolve/relink {uid, groups: [{to, uids}]}` → `{relinked, still_offline, failed:
+  [{uid, name, why}], error: str|null}` (each target folder re-listed first; refused with a Danish
+  reason when blocked). The plan is never part of the `resolve` state/SSE.
+* Main UI (Resolve bar): "⚠ 12 klip er offline i Resolve" with [Find og genlink …] → a panel: one
+  row per group "12 klip fra ‹old folder› → ‹new folder›" (alternatives as a choice), not found
+  listed, [Genlink 11 klip] (disabled with the reason while blocked); afterwards "11 klip er
+  genlinket" and a refresh.
+
+### 22.3 Office Klippes (`kontor.py`, widget)
+
+* UDP port 47850 on all interfaces (setting `widget_kontor`, default true, and only while
+  `widget_enabled`). Datagrams ≤ 1024 bytes of UTF-8 JSON, exactly these keys: `{app:
+  "projektsog-klippe", v: 1, type: "hej"|"besoeg"|"fest", pc, id, seq, navn, stage, outfit, pynt,
+  trofae?}`; `pc` `^[A-Z0-9-]{1,15}$` (`config.hostname()`), `id` 16 hex per process, `navn` ≤ 20
+  printable, `stage` egg|baby|junior|pro|legend, `outfit` none|color|fusion|audio|deliver, `pynt`
+  {slot: item} only known slots/items (else the default), `trofae` {kind: trofae|fund, id} looked
+  up in the receiver's own tables (unknown → a generic line). Own `pc`/`id` ignored; only
+  private/link-local senders; per sender ≤ 1 `hej`/15 s, ≤ 1 visit/10 min; ≤ 6 visits/hour in all;
+  nothing from a packet is ever run, opened, fetched or put into HTML.
+* Sending: `hej` every 60 s (unicast to the IPs of `cfg["hosts"]` and the LAN's directed
+  broadcast) – it also keeps the firewall's state open; `besoeg` when this Klippe earns a trophy
+  or a find (`pet_progress`, not `foerste`); `fest` on a delivery party (§22.4).
+* Receiving → SSE `besoeg` `{type: "trofae"|"fest", pc, navn, stage, outfit, pynt, trofae: {kind,
+  id, name, rarity}|null}`; `GET /api/kontor` → `{enabled, peers: [{pc, navn, stage, sidst}]}`
+  (seen within 3 min); `POST /api/kontor/demo` → a made-up visit (for "👋 Prøv et besøg").
+* Widget: the guest Klippe (its colours, stripes, hat …) walks in from the side outside `#app` (a
+  clone of the pet SVG with its own data-* and renamed `stripes`/`glow` ids), says "Hej fra
+  STUDIO-PC! Jeg fik 🏆 Durumkongen" (fest: "Vi har leveret! 🎉"), both jump and clap, it leaves
+  after ~6 s. Never during eating, a game out of the box or a transfer (queued, ≤ 1 waiting).
+* Windows may ask once whether Projektsøg may use the network (firewall); README says so and
+  Klippe says it the first time.
+
+### 22.4 The delivery party (`levering.py`, `festkat` route, widget)
+
+* A **delivery**: (a) a done render with `levering` (§22.1), or (b) a new file in the current
+  Resolve project's `Final` folder (the primary's live path, `Final` + one level of subfolders,
+  polled every 5 s through `call_with_timeout`, counted once its size and mtime are stable over
+  two polls; `.tmp`/`.part`/hidden files ignored; only files newer than when watching began).
+  The same file never twice (by path, 10 min), and (b) ignores files a render just wrote. →
+  SSE `levering {kilde: "render"|"fil", fil, projekt, sti, demo}`; `POST /api/levering/demo`.
+  The main process plays Klippe's short ring once (Klippe shown).
+* **The party** (widget): Klippe puts on the green Deliver cap, packs a box (film into a
+  cardboard box, tape, a "LEVERET ✓" stamp), confetti and fireworks, and the spinning cat comes
+  in: it walks in, stands and hops, and every 2.5–6 s takes one spin (frames 24–69 of the GIF;
+  standing = frames 0–23), no sound, for ~12 s, then walks out. Line: "Leveret: ‹fil› 🎉".
+* **The cat**: `GET /api/festkat` serves `%LOCALAPPDATA%\Projektsog\festkat.gif`; when it is not
+  there the main process fetches it once from `FESTKAT_URL` =
+  `https://media.giphy.com/media/1OrIIOIcRTDaNidc5p/200.gif` (GIPHY; the GIF is never in the repo),
+  checks `GIF8` and ≤ 3 MB, saves it; 404 when it cannot be had. A user's own `festkat.gif` there
+  is used as it is. The widget decodes every frame (`ImageDecoder`), keys out the green screen
+  (`g − max(r, b)` > 60 → transparent, 20–60 → soft edge, green removed) and plays them; another
+  GIF (not 103 frames) spins all its frames. Without the GIF: a drawn cat that spins (CSS).
+* Settings: `widget_levering` (bool, default true) "Leveringsfest, når en fil lander i Final".

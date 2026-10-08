@@ -163,6 +163,11 @@ DEFAULTS: dict[str, Any] = {
     # of mouse or keyboard sends them back into the box.
     "widget_ring": True,
     "widget_crew": True,
+    # Office Klippes (SPEC §22.3): Klippe says hello to the other PCs' Klippes on the LAN (UDP) and
+    # visits them when it earns a trophy or a delivery is made.
+    "widget_kontor": True,
+    # The delivery party (SPEC §22.4): a render into Final, or a new file in the project's Final.
+    "widget_levering": True,
 }
 
 VALID_RESOLVE_FOLLOW = ("off", "notify", "open")

@@ -10,9 +10,10 @@ an "Opdater nu" button. Nothing is ever installed by itself, only when that butt
   compiles, the main files are there) and replaces the files that differ. The old ones are kept
   in ``%LOCALAPPDATA%\\Projektsog\\update-backup`` and put back if anything goes wrong; files an earlier update (or a check
   that found the folder identical) put there and the new version no longer has are removed.
-* A git working copy (``git clone``): ``git fetch`` + ``git merge --ff-only`` – only when no
-  tracked file in the folder is changed and it has no commits of its own, so a developer's
-  folder is never touched.
+* A git working copy (``git clone``): ``git fetch`` + ``git merge --ff-only``. Files changed in
+  the folder are put aside first (``git stash``, nothing is lost) so the update just happens; only
+  a folder with commits of its own (a developer's) is never touched. git is found on PATH, in
+  GitHub Desktop or Git for Windows; without any git the folder is updated like a download.
 
 Then ``install.ps1`` runs, as after a manual update (README): it stops this Projektsøg, renews the
 Start-menu shortcut, autostart (kept as it is) and the Resolve script and starts the new version,
@@ -21,6 +22,7 @@ which says so in a Windows notification.
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import io
 import json
@@ -64,9 +66,10 @@ _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 NO_UPDATE = "Der er ingen ny version"
 BUSY = "Opdateringen er allerede i gang"
 CHECKING = "Søger efter en ny version – vent et øjeblik"
-NO_GIT = "Mappen er hentet med git, men git findes ikke på pc'en – opdater den med git pull"
-OWN_COMMITS = "Mappen har sine egne commits i git – opdater den med git pull"
-DIRTY = "Der er ændrede filer i mappen, som ikke er gemt i git – opdater den med git pull"
+OWN_COMMITS = "Mappen har sine egne commits i git (en udviklers mappe) – den opdateres ikke automatisk"
+STASH_FAILED = "De ændrede filer i mappen kunne ikke lægges til side"
+# git needs a name for the commit "git stash" makes; a colleague's PC may have none set up.
+GIT_IDENTITY = ["-c", "user.name=Projektsøg", "-c", "user.email=projektsog@localhost"]
 NOT_RESTARTED = ("Projektsøg blev ikke genstartet – den nye version starter, næste gang Projektsøg "
                  "starter (se logs\\opdatering.log)")
 
@@ -180,6 +183,26 @@ def first_line(text: Any) -> str:
     return lines[0].strip()[:200] if lines else ""
 
 
+def _version_key(path: str) -> tuple[int, ...]:
+    """GitHub Desktop's "app-3.4.10" folder → (3, 4, 10)."""
+    name = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(path))))))
+    return tuple(int(part) for part in name.removeprefix("app-").split(".") if part.isdigit())
+
+
+def find_git() -> str | None:
+    """git on PATH, else the one GitHub Desktop brings along (newest), else Git for Windows."""
+    found = shutil.which("git")
+    if found:
+        return found
+    local = os.environ.get("LOCALAPPDATA", "")
+    desktop = glob.glob(os.path.join(local, "GitHubDesktop", "app-*", "resources", "app", "git", "cmd", "git.exe"))
+    candidates = sorted(desktop, key=_version_key, reverse=True)
+    for base in (os.environ.get("ProgramFiles", r"C:\Program Files"), os.path.join(local, "Programs")):
+        candidates.append(os.path.join(base, "Git", "cmd", "git.exe"))
+    return next((path for path in candidates if os.path.isfile(path)), None)
+
+
 def run_git(git: str, args: list[str], cwd: str, timeout: float = GIT_TIMEOUT_S) -> tuple[int, str]:
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never")
     proc = subprocess.run([git, *args], cwd=cwd, capture_output=True, timeout=timeout, env=env,
@@ -242,7 +265,7 @@ class Updater:
         self._backup = os.path.join(data_dir, "update-backup")
         self._autostart = autostart
         self._fetch = fetch
-        self._git_lookup = git if callable(git) else (lambda: git if git is not None else shutil.which("git"))
+        self._git_lookup = git if callable(git) else (lambda: git if git is not None else find_git())
         self._git_runner = git_runner
         self._spawn = spawn
         self._clock = clock
@@ -252,7 +275,8 @@ class Updater:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._want: str | None = None
-        self.mode = "git" if os.path.exists(os.path.join(repo_dir, ".git")) else "zip"
+        self._has_git_folder = os.path.exists(os.path.join(repo_dir, ".git"))
+        self.mode = self._choose_mode()
         self._data = self._load()
         self._latest: dict[str, str] | None = None
         self._available = False
@@ -335,7 +359,14 @@ class Updater:
         return state
 
     # -- the work (on the updater's thread; also called directly by the tests) -----------------
+    def _choose_mode(self) -> str:
+        """A git working copy is updated with git – or like a download when no git is found."""
+        return "git" if self._has_git_folder and self._git_lookup() else "zip"
+
     def check(self) -> None:
+        mode = self._choose_mode()
+        with self._lock:
+            self.mode = mode
         self._set(busy="checking")
         try:
             if self.mode == "git":
@@ -489,8 +520,6 @@ class Updater:
         return self._git_runner(git, list(args), self._repo)
 
     def _check_git(self) -> dict[str, Any]:
-        if not self._git_lookup():
-            return {"latest": None, "available": False, "blocked": NO_GIT}
         code, out = self._git("fetch", "--quiet", "--no-tags", GIT_URL, BRANCH)
         if code != 0:
             raise OSError(f"git fetch: {first_line(out)}")
@@ -506,26 +535,65 @@ class Updater:
             return {"latest": latest, "available": False, "blocked": None}
         if self._git("merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD")[0] != 0:
             return {"latest": latest, "available": True, "blocked": OWN_COMMITS}
-        _, changed = self._git("status", "--porcelain", "--untracked-files=no")
-        if changed:
-            return {"latest": latest, "available": True, "blocked": DIRTY}
-        return {"latest": latest, "available": True, "blocked": None}
+        return {"latest": latest, "available": True, "blocked": None}   # changed files are put aside
 
     def _update_git(self, latest: dict[str, str]) -> None:
         code, out = self._git("fetch", "--quiet", "--no-tags", GIT_URL, BRANCH)
         if code != 0:
             raise OSError(f"git fetch: {first_line(out)}")
         self._set(busy="installing")
+        note = f"Projektsøg {time.strftime('%Y-%m-%d %H:%M')}: ændrede filer før opdateringen"
+        stashes = 0
         _, changed = self._git("status", "--porcelain", "--untracked-files=no")
-        if changed:
-            raise ValueError(DIRTY)
-        code, out = self._git("merge", "--ff-only", "--quiet", "FETCH_HEAD")
-        if code != 0:
-            raise ValueError(f"git kunne ikke opdatere mappen ({first_line(out)}) – opdater den med git pull")
+        if changed:                       # (line endings, an edited file …): kept in git stash, not lost
+            code, out = self._git(*GIT_IDENTITY, "stash", "push", "--quiet", "--message", note)
+            if code != 0:
+                raise ValueError(f"{STASH_FAILED} ({first_line(out)})")
+            stashes += 1
+            log.warning("changed files in %s were put aside with git stash: %s", self._repo, first_line(changed))
+        # Files the new version adds may be here already, untracked (copied in by hand, or an update
+        # like a download): the same content is simply let go, anything else is put aside too.
+        try:
+            other = self._untracked_in_the_way()
+            if other:
+                code, out = self._git(*GIT_IDENTITY, "stash", "push", "--include-untracked", "--quiet",
+                                      "--message", note, "--", *other)
+                if code != 0:
+                    raise ValueError(f"{STASH_FAILED} ({first_line(out)})")
+                stashes += 1
+                log.warning("untracked files in the way were put aside with git stash: %s", ", ".join(other[:5]))
+            code, out = self._git("merge", "--ff-only", "--quiet", "FETCH_HEAD")
+            if code != 0:
+                raise ValueError(f"git kunne ikke opdatere mappen ({first_line(out)})")
+        except ValueError:
+            for _ in range(stashes):     # the update did not happen: everything back as it was
+                self._git(*GIT_IDENTITY, "stash", "pop", "--quiet")
+            raise
         _, head = self._git("rev-parse", "HEAD")
         _, date = self._git("log", "-1", "--format=%cI", "HEAD")
         with self._lock:
             self._git_installed = {"sha": head, "date": date.strip()}
+
+    def _untracked_in_the_way(self) -> list[str]:
+        """Untracked files at paths the new version adds (they would stop the merge). Those with
+        the new version's content are deleted (the merge brings them back); the rest is returned."""
+        _, added = self._git("diff", "--name-only", "-z", "--diff-filter=A", "HEAD", "FETCH_HEAD")
+        paths = [p for p in added.split("\0") if p.strip()]
+        if not paths:
+            return []
+        _, untracked = self._git("ls-files", "--others", "-z", "--", *paths)
+        other: list[str] = []
+        for path in (p for p in untracked.split("\0") if p.strip()):
+            code_here, here = self._git("hash-object", "--", path)
+            code_new, new = self._git("rev-parse", f"FETCH_HEAD:{path}")
+            if code_here == 0 and code_new == 0 and here.strip() == new.strip():
+                try:
+                    os.remove(os.path.join(self._repo, *path.split("/")))
+                    continue
+                except OSError:
+                    pass
+            other.append(path)
+        return other
 
     # -- after the files: the installer restarts the app ----------------------------------------
     def _run_installer(self) -> None:

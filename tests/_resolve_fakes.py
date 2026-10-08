@@ -30,16 +30,32 @@ class FakeClock:
 # -- Resolve object graph ----------------------------------------------------------------
 
 class FakeClip:
-    def __init__(self, path: str, name: str | None = None) -> None:
+    """A media pool clip; ``status`` is its "Online Status" ("Online" / "Offline")."""
+
+    def __init__(self, path: str, name: str | None = None, *, uid: str | None = None,
+                 status: str = "Online") -> None:
         self.path = path
         self.name = name or path.rsplit("\\", 1)[-1]
+        self.uid = uid if uid is not None else f"clip:{path}"
+        self.status = status
+        self.property_calls = 0
 
     def GetName(self) -> str:
         return self.name
 
+    def GetUniqueId(self) -> str:
+        return self.uid
+
     def GetClipProperty(self, key: str | None = None) -> Any:
-        props = {"File Path": self.path, "Clip Name": self.name}
+        self.property_calls += 1
+        props = {"File Path": self.path, "Clip Name": self.name, "Online Status": self.status,
+                 "File Name": self.path.rsplit("\\", 1)[-1], "Type": "Video + Audio",
+                 "Frames": "250", "FPS": 25.0, "Resolution": "1920x1080"}
         return props if key is None else props.get(key, "")
+
+
+def offline_clip(path: str, name: str | None = None, uid: str | None = None) -> FakeClip:
+    return FakeClip(path, name, uid=uid, status="Offline")
 
 
 class DictOnlyClip(FakeClip):
@@ -78,18 +94,59 @@ class FakeFolder:
 
 
 class FakeMediaPool:
+    """``RelinkClips`` moves each clip into the folder and brings it online - unless its file
+    name is in ``missing`` (casefolded) - and returns ``result``; every call is recorded.
+    ``on_relink(uids, folder)`` runs after a call has relinked (to change the world, or wait)."""
+
     def __init__(self, root: FakeFolder) -> None:
         self.root = root
+        self.relinks: list[tuple[list[str], str]] = []    # (clip uids, folder)
+        self.missing: set[str] = set()
+        self.result = True
+        self.raises: Exception | None = None
+        self.on_relink: Callable[[list[str], str], None] | None = None
 
     def GetRootFolder(self) -> FakeFolder:
         return self.root
 
+    def RelinkClips(self, clips: list[Any], folder: str) -> bool:
+        self.relinks.append(([c.GetUniqueId() for c in clips], folder))
+        if self.raises is not None:
+            raise self.raises
+        for clip in clips:
+            name = clip.path.rsplit("\\", 1)[-1]
+            if name.casefold() not in self.missing:
+                clip.path = folder.rstrip("\\") + "\\" + name
+                clip.status = "Online"
+        if self.on_relink is not None:
+            self.on_relink(self.relinks[-1][0], folder)
+        return self.result
+
+
+def render_job(job_id: str, file: str = "Portræt_v3.mp4", *,
+               folder: str = "D:\\Rikke Lindholm\\Final", timeline: str = "Portræt v3",
+               mode: str = "Single clip", name: str | None = None) -> dict[str, Any]:
+    """A GetRenderJobList() entry (RenderJobInfo)."""
+    return {"JobId": job_id, "RenderJobName": name or f"Job {job_id}", "TimelineName": timeline,
+            "TargetDir": folder, "OutputFilename": file, "RenderMode": mode,
+            "PresetName": "H.264 Master", "IsExportVideo": True, "FormatWidth": 1920}
+
 
 class FakeProject:
+    """A project; its render queue: ``render_jobs`` (RenderJobInfo dicts in queue order),
+    ``render_status`` (job id -> RenderJobStatus) and ``rendering`` (IsRenderingInProgress).
+    ``on_status`` runs before every GetRenderJobStatus (to advance a clock)."""
+
     def __init__(self, name: str, root: FakeFolder | None = None, uid: str | None = None) -> None:
         self.name = name
         self.pool = FakeMediaPool(root or FakeFolder("Master"))
         self.uid = uid if uid is not None else f"uid-{name}"
+        self.rendering = False
+        self.render_jobs: list[dict[str, Any]] = []
+        self.render_status: dict[str, dict[str, Any]] = {}
+        self.status_calls: list[str] = []
+        self.on_status: Callable[[], None] | None = None
+        self.list_error: Exception | None = None
 
     def GetName(self) -> str:
         return self.name
@@ -99,6 +156,28 @@ class FakeProject:
 
     def GetMediaPool(self) -> FakeMediaPool:
         return self.pool
+
+    def IsRenderingInProgress(self) -> bool:
+        return self.rendering
+
+    def GetRenderJobList(self) -> list[dict[str, Any]]:
+        if self.list_error is not None:
+            raise self.list_error
+        return [dict(job) for job in self.render_jobs]
+
+    def GetRenderJobStatus(self, job_id: str) -> dict[str, Any]:
+        self.status_calls.append(job_id)
+        if self.on_status is not None:
+            self.on_status()
+        return dict(self.render_status.get(job_id, {}))
+
+    # -- test helpers ------------------------------------------------------------------------
+    def add_job(self, job_id: str, status: str = "Ready", **info: Any) -> None:
+        self.render_jobs.append(render_job(job_id, **info))
+        self.set_status(job_id, status)
+
+    def set_status(self, job_id: str, status: str, pct: int = 0, **extra: Any) -> None:
+        self.render_status[job_id] = {"JobStatus": status, "CompletionPercentage": pct, **extra}
 
 
 class UnstableIdProject(FakeProject):
@@ -184,6 +263,28 @@ def suggestion(name: str, path: str, score: float, source: dict[str, Any] | None
             "score": score, "item": item(name, path, source, iid)}
 
 
+def indexed_file(path: str, *, sid: int = 1, online: bool = True, root: str | None = None,
+                 unc_root: str | None = None, project: str | None = None,
+                 mtime: float = 1_700_000_000.0) -> dict[str, Any]:
+    """An Indexer.find_files() row (SPEC §17, §22.2) for the file ``path`` of the location
+    ``root`` (``unc_root``: the same location through its share)."""
+    folder, name = path.rsplit("\\", 1)
+    root = root or folder
+    rel = path[len(root):].lstrip("\\")
+    rel_folder = folder[len(root):].lstrip("\\")
+    unc_folder = None
+    if unc_root:
+        unc_folder = unc_root + ("\\" + rel_folder if rel_folder else "")
+    ref = None
+    if project:
+        project_path = root + "\\" + project
+        ref = project_ref(project.rsplit("\\", 1)[-1], project_path, project,
+                          unc_root + "\\" + project if unc_root else None)
+    return {"name": name, "size": 1000, "path": path, "folder": folder, "online": online,
+            "volume_serial": "5E3A0B21", "project": ref, "source_id": sid, "rel_path": rel,
+            "unc_folder": unc_folder, "mtime": mtime, "is_seq": False}
+
+
 def source_row(sid: int, name: str, path: str, *, online: bool = True, kind: str = "local",
                host: str = "STUDIO-PC", disk_name: str | None = None,
                unc_path: str | None = None, included: bool = True,
@@ -215,6 +316,17 @@ class FakeIndexer:
         self.map_calls: list[list[str]] = []
         self.suggest_calls: list[str] = []
         self.missing: list[str] = []
+        self.files: list[dict[str, Any]] = []         # find_files() rows (see indexed_file())
+        self.find_calls: list[list[str]] = []
+        self.refreshed: list[str] = []
+
+    def find_files(self, names: list[str]) -> list[dict[str, Any]]:
+        self.find_calls.append(list(names))
+        wanted = {n.casefold() for n in names}
+        return [dict(f) for f in self.files if f["name"].casefold() in wanted]
+
+    def refresh_path(self, path: str) -> None:
+        self.refreshed.append(path)
 
     def map_paths(self, paths: list[str]) -> dict[str, Any]:
         self.map_calls.append(list(paths))
@@ -233,7 +345,9 @@ class FakeIndexer:
 
 
 class FakeWinui:
-    """winui functions, plus winfs.call_with_timeout for the bridge's timed stat."""
+    """winui functions, plus winfs.call_with_timeout for the bridge's timed stat (never runs
+    it) and its folder listings before a relink (keys "relink:…": runs the function - tests
+    patch ``resolve_bridge._list_names`` or list temp dirs - unless ``list_status`` is set)."""
 
     def __init__(self) -> None:
         self.running = True
@@ -244,6 +358,8 @@ class FakeWinui:
         self.exe_names: list[str] = []
         self.stat_result: tuple[str, Any] = ("ok", "dir")   # never touches the file system
         self.stat_calls: list[tuple[str, float]] = []
+        self.list_status: str | None = None              # e.g. "timeout"
+        self.list_calls: list[tuple[str, float]] = []
 
     def process_running(self, exe: str) -> bool:
         self.exe_names.append(exe)
@@ -261,6 +377,14 @@ class FakeWinui:
 
     def call_with_timeout(self, key: str, fn: Callable[[], Any],
                           timeout: float) -> tuple[str, Any]:
+        if key.startswith("relink:"):
+            self.list_calls.append((key, timeout))
+            if self.list_status is not None:
+                return self.list_status, None
+            try:
+                return "ok", fn()
+            except OSError:
+                return "error", None
         self.stat_calls.append((key, timeout))
         return self.stat_result
 
@@ -270,7 +394,8 @@ class FakeWinui:
 class InProcessChild:
     """projektsog.resolve_child.Session behind the bridge's helper interface: no process, but
     every request and answer makes a JSON round trip as on the pipe. ``factory.fail`` injects
-    failures: {"poll": "timeout" | "gone", ...} (one-shot per command, or "ready")."""
+    failures: {"poll": "timeout" | "gone" | "late", ...} (one-shot per command, or "ready");
+    "late": the helper handles the request, but its answer never comes (no answer in time)."""
 
     def __init__(self, session: Session, factory: "ChildFactory") -> None:
         self.session = session
@@ -293,8 +418,14 @@ class InProcessChild:
         message = json.loads(json.dumps({"id": self._next_id, "cmd": cmd, **params}))
         self.requests.append(message)
         self.factory.timeouts.append((cmd, timeout))
+        late = self.factory.fail.get(cmd) == "late"
+        if late:
+            del self.factory.fail[cmd]
         self._maybe_fail(cmd)
-        return json.loads(json.dumps(self.session.handle(message)))
+        answer = json.loads(json.dumps(self.session.handle(message)))
+        if late:
+            raise rb.ChildError(f"no answer to {cmd!r} in time")
+        return answer
 
     def _maybe_fail(self, what: str) -> None:
         mode = self.factory.fail.pop(what, None)

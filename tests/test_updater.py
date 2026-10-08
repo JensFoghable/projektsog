@@ -9,6 +9,7 @@ import time
 import unittest
 import urllib.error
 import zipfile
+from unittest import mock
 
 from projektsog import updater as up
 from tests.test_app_server import ServerTestBase, setUpModule, tearDownModule  # noqa: F401
@@ -265,8 +266,10 @@ class FakeGit:
     """Scripted answers for the git commands of a working copy."""
 
     def __init__(self, *, head: str = "1" * 40, remote: str = "2" * 40, behind: bool = True,
-                 ahead: bool = False, dirty: str = "") -> None:
+                 ahead: bool = False, dirty: str = "", merge_fails: bool = False, stash_fails: bool = False) -> None:
         self.head, self.remote, self.behind, self.ahead, self.dirty = head, remote, behind, ahead, dirty
+        self.merge_fails, self.stash_fails = merge_fails, stash_fails
+        self.stash: list[str] = []
         self.calls: list[list[str]] = []
 
     def __call__(self, git: str, args: list[str], cwd: str) -> tuple[int, str]:
@@ -288,7 +291,21 @@ class FakeGit:
                 return (0 if not self.ahead else 1), ""
             case ["status", "--porcelain", "--untracked-files=no"]:
                 return 0, self.dirty
+            case ["diff", "--name-only", "-z", "--diff-filter=A", "HEAD", "FETCH_HEAD"]:
+                return 0, ""                                    # the new version adds no files
+            case ["-c", "user.name=Projektsøg", "-c", "user.email=projektsog@localhost", "stash", "push", "--quiet",
+                  "--message", note]:
+                if self.stash_fails:
+                    return 1, "fatal: cannot stash"
+                self.stash.append(self.dirty)
+                self.dirty = ""
+                return 0, ""
+            case ["-c", "user.name=Projektsøg", "-c", "user.email=projektsog@localhost", "stash", "pop", "--quiet"]:
+                self.dirty = self.stash.pop()
+                return 0, ""
             case ["merge", "--ff-only", "--quiet", "FETCH_HEAD"]:
+                if self.merge_fails or self.dirty:
+                    return 1, "fatal: Not possible to fast-forward, aborting."
                 self.head = self.remote
                 return 0, ""
         raise AssertionError(f"unexpected git {args}")
@@ -325,19 +342,129 @@ class GitWorkingCopyTests(UpdaterBase):
             u.check()
             self.assertEqual((u.state()["available"], u.state()["blocked"]), (False, None))
 
-    def test_a_developers_folder_is_never_touched(self) -> None:
-        for git, why in ((FakeGit(dirty=" M projektsog/app.py"), up.DIRTY), (FakeGit(ahead=True), up.OWN_COMMITS)):
+    def test_changed_files_are_put_aside_and_the_update_just_happens(self) -> None:
+        git = FakeGit(dirty=" M projektsog/web/style.css")                      # e.g. line endings
+        u = self.make_git(git)
+        u.check()
+        self.assertEqual((u.state()["available"], u.state()["blocked"]), (True, None))   # no "git pull"
+        u.request_update()
+        u.update()
+        self.assertEqual(git.stash, [" M projektsog/web/style.css"])           # kept in git stash, not lost
+        self.assertEqual((u.state()["busy"], u.state()["installed"]["sha"]), ("restarting", "2" * 40))
+        self.assertEqual(len(self.spawned), 1)
+
+    def test_a_failed_update_gives_the_changed_files_back(self) -> None:
+        for git in (FakeGit(dirty=" M README.md", merge_fails=True), FakeGit(dirty=" M README.md", stash_fails=True)):
             u = self.make_git(git)
             u.check()
-            self.assertEqual((u.state()["available"], u.state()["blocked"]), (True, why))
-            with self.assertRaisesRegex(ValueError, why):
-                u.request_update()
-            self.assertNotIn(["merge", "--ff-only", "--quiet", "FETCH_HEAD"], git.calls)
+            u.request_update()
+            u.update()
+            self.assertEqual((git.dirty, git.stash, git.head), (" M README.md", [], "1" * 40))
+            self.assertTrue(u.state()["error"])
+            self.assertNotIn("git pull", u.state()["error"])
+            self.assertEqual(self.spawned, [])
 
-    def test_without_git_the_folder_is_left_alone(self) -> None:
-        u = self.make_git(FakeGit(), lookup=lambda: None)
+    def test_a_developers_folder_with_own_commits_is_never_touched(self) -> None:
+        git = FakeGit(ahead=True)
+        u = self.make_git(git)
         u.check()
-        self.assertEqual((u.state()["available"], u.state()["blocked"]), (False, up.NO_GIT))
+        self.assertEqual((u.state()["available"], u.state()["blocked"]), (True, up.OWN_COMMITS))
+        with self.assertRaisesRegex(ValueError, "udviklers mappe"):
+            u.request_update()
+        self.assertNotIn(["merge", "--ff-only", "--quiet", "FETCH_HEAD"], git.calls)
+
+    def test_without_any_git_the_folder_is_updated_like_a_download(self) -> None:
+        u = self.make(git=lambda: None, git_runner=lambda *a: self.fail("there is no git"))
+        self.assertEqual(u.mode, "zip")
+
+    def test_git_is_found_in_github_desktop(self) -> None:
+        local = os.path.join(os.path.dirname(self.repo), "local")
+        for version in ("3.4.9", "3.4.10"):
+            folder = os.path.join(local, "GitHubDesktop", f"app-{version}", "resources", "app", "git", "cmd")
+            os.makedirs(folder)
+            open(os.path.join(folder, "git.exe"), "wb").close()
+        with mock.patch.object(up.shutil, "which", lambda name: None),                 mock.patch.dict(os.environ, {"LOCALAPPDATA": local, "ProgramFiles": os.path.join(os.path.dirname(self.repo), "pf")}):
+            self.assertIn(os.path.join("app-3.4.10", "resources"), up.find_git())
+        with mock.patch.object(up.shutil, "which", lambda name: None),                 mock.patch.dict(os.environ, {"LOCALAPPDATA": os.path.join(os.path.dirname(self.repo), "none"),
+                                             "ProgramFiles": os.path.join(os.path.dirname(self.repo), "pf")}):
+            self.assertIsNone(up.find_git())
+
+
+@unittest.skipUnless(up.find_git(), "git is not installed")
+class RealGitTests(UpdaterBase):
+    """A real working copy against a local stand-in for GitHub: nothing of the user's is lost."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.git = up.find_git()
+        root = os.path.dirname(self.repo)
+        self.remote = os.path.join(root, "remote")
+        self.git_run("init", "--quiet", "--initial-branch=main", self.remote, cwd=root)
+        self.commit(self.remote, {"a.txt": "a1\n", "Projektsøg.pyw": "#\n", "install.ps1": "#\n"}, "første")
+        os.rmdir(self.repo)
+        self.git_run("clone", "--quiet", self.remote, self.repo, cwd=root)
+        self.old = self.head(self.repo)
+        self.commit(self.remote, {"a.txt": "a2\n", "b.txt": "b\n", "c.txt": "c\n"}, "anden")
+        self.new = self.head(self.remote)
+
+    def git_run(self, *args: str, cwd: str) -> str:
+        code, out = up.run_git(self.git, ["-c", "user.name=T", "-c", "user.email=t@t", *args], cwd)
+        self.assertEqual(code, 0, out)
+        return out
+
+    def commit(self, repo: str, files: dict[str, str], title: str) -> None:
+        for name, text in files.items():
+            with open(os.path.join(repo, name), "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+        self.git_run("add", "--all", cwd=repo)
+        self.git_run("commit", "--quiet", "-m", title, cwd=repo)
+
+    def head(self, repo: str) -> str:
+        return self.git_run("rev-parse", "HEAD", cwd=repo)
+
+    def runner(self, git: str, args: list[str], cwd: str) -> tuple[int, str]:
+        args = [self.remote if a == up.GIT_URL else a for a in args]       # GitHub → the local stand-in
+        return up.run_git(git, args, cwd)
+
+    def test_changed_and_untracked_files_are_kept_and_the_update_happens(self) -> None:
+        with open(os.path.join(self.repo, "a.txt"), "w", encoding="utf-8") as fh:
+            fh.write("my edit\n")                                       # a changed tracked file
+        with open(os.path.join(self.repo, "b.txt"), "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("b\n")                                             # the new version's file, already here
+        with open(os.path.join(self.repo, "c.txt"), "w", encoding="utf-8") as fh:
+            fh.write("my own c\n")                                      # in the way, but different
+        u = self.make(fetch=lambda *a, **k: self.fail("git, not the GitHub API"), git=self.git,
+                      git_runner=self.runner)
+        u.check()
+        self.assertEqual((u.state()["mode"], u.state()["available"], u.state()["blocked"]), ("git", True, None))
+        u.request_update()
+        u.update()
+        self.assertEqual(u.state()["busy"], "restarting", u.state()["error"])
+        self.assertEqual(self.head(self.repo), self.new)
+        with open(os.path.join(self.repo, "c.txt"), encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "c\n")
+        stashes = self.git_run("stash", "list", cwd=self.repo).splitlines()
+        self.assertEqual(len(stashes), 2)                               # my edit and my own c.txt, both kept
+        kept = self.git_run("show", "stash@{0}^3:c.txt", cwd=self.repo)
+        self.assertEqual(kept, "my own c")
+
+    def test_a_failed_merge_puts_everything_back(self) -> None:
+        with open(os.path.join(self.repo, "c.txt"), "w", encoding="utf-8") as fh:
+            fh.write("my own c\n")
+
+        def failing(git: str, args: list[str], cwd: str) -> tuple[int, str]:
+            if args[:1] == ["merge"]:
+                return 1, "fatal: no"
+            return self.runner(git, args, cwd)
+        u = self.make(fetch=lambda *a, **k: self.fail("git"), git=self.git, git_runner=failing)
+        u.check()
+        u.request_update()
+        u.update()
+        self.assertIn("git kunne ikke opdatere mappen", u.state()["error"])
+        self.assertEqual(self.head(self.repo), self.old)
+        with open(os.path.join(self.repo, "c.txt"), encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "my own c\n")
+        self.assertEqual(self.git_run("stash", "list", cwd=self.repo), "")
 
 
 class UpdateEndpointTests(ServerTestBase):

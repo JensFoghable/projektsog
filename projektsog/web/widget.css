@@ -678,8 +678,8 @@ body {
 .panel__close:hover { background: var(--surface-3); color: var(--text); }
 .panel__body { flex: 1; overflow-y: auto; padding: 6px 10px 14px; scrollbar-width: thin; }
 .panel__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--line); }
-.panel__demo { display: flex; flex-basis: 100%; gap: 6px; }
-.panel__demo-button { flex: 1; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+.panel__demo { display: flex; flex-wrap: wrap; flex-basis: 100%; gap: 6px; }
+.panel__demo-button { flex: 1 1 auto; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
   color: var(--text-2); font: 600 11.5px/1.2 var(--font); white-space: nowrap; cursor: pointer; }
 .panel__demo-button:hover { background: var(--surface-3); color: var(--text); }
 .panel__play { padding: 6px 12px; border: 0; border-radius: 8px; background: var(--accent); color: #1d1b19;
@@ -918,6 +918,152 @@ html.sprites *, html.sprites *::before, html.sprites *::after { animation: none 
   0%, 40%, 100% { rotate: 0deg; } 5%, 15%, 25% { rotate: -9deg; } 10%, 20%, 30% { rotate: 9deg; } 35% { rotate: -5deg; }
 }
 @keyframes ringer-tekst { 0% { opacity: 1; } 42% { opacity: 0; } }
+
+/* ---------------------------------------------------------------- Resolve renders (SPEC §22.1)
+   data-render on #app: the mini robots feed film into a little render box left of Klippe (instead of
+   the crew's timeline – with the crew out on the screen only the hatch shows), Klippe keeps an eye on
+   it, and a progress line sits under the pet. --render (0…1) fills the box's screen. */
+.render, .pakke { display: none; }
+#app[data-render]:not([data-ude]):not([data-fest]) .render { display: inline; }   /* a party takes its place */
+#app[data-render] .crew { display: none; }
+#app[data-render]:not([data-sigter]) .pupils { translate: -3px 1px; }
+.renderboks__krop { fill: #39424f; stroke: #9aa3b1; stroke-width: 1.2; }
+.renderboks__tragt { fill: #59636f; stroke: #9aa3b1; stroke-width: 1; stroke-linejoin: round; }
+.renderboks__skaerm { fill: #10161d; stroke: #2a323d; stroke-width: 0.6; }
+.renderboks__fyld { fill: #5fcf8f; transform-box: fill-box; transform-origin: 0 50%; transform: scaleX(var(--render, 0));
+  transition: transform 0.6s ease; }
+.renderboks__rist { fill: none; stroke: #262d36; stroke-width: 1.4; stroke-linecap: round; }
+.renderboks__lys { fill: #ff4b4b; animation: flicker 1.2s steps(2) infinite; }
+.renderboks__damp circle { fill: rgba(220, 225, 232, 0.6); transform-box: fill-box; opacity: 0; animation: damp 1.8s ease-out infinite; }
+.renderboks__damp circle:last-child { animation-delay: 0.9s; }
+@keyframes damp { 0% { opacity: 0; translate: 0 2px; scale: 0.6; } 30% { opacity: 1; } 100% { opacity: 0; translate: -3px -12px; scale: 1.6; } }
+.render__daaser rect { fill: #8f98a6; stroke: #4a5361; stroke-width: 0.8; }
+.render__daaser path { fill: none; stroke: #4a5361; stroke-width: 0.8; }
+/* the film the feeder tosses from its hands into the chute (in step with its walk) */
+.render__film rect { fill: #4f8ff7; stroke: #24539f; stroke-width: 0.6; }
+.render__film path { fill: none; stroke: #a9c8ff; stroke-width: 0.9; }
+.render__film { opacity: 0; transform-box: view-box; transform-origin: 4.5px 148.3px; animation: film-ind 4.8s linear infinite; }
+@keyframes film-ind {
+  0%, 41.9% { opacity: 0; translate: 13.5px 10.5px; rotate: 0deg; } 42% { opacity: 1; translate: 13.5px 10.5px; }
+  47% { translate: 6px -1px; rotate: -20deg; } 52% { opacity: 1; translate: -1px 6px; rotate: -8deg; }
+  55%, 100% { opacity: 0; translate: -1px 10px; rotate: 0deg; }
+}
+/* the feeder: picks film up at the cans, turns, carries it to the box, tosses it in, walks back */
+.mini--foder { --robot-op: inline; --robot-arme: none; }
+.mini--foder .mini__krop { animation: foder-tur 4.8s ease-in-out infinite, foder-last 4.8s linear infinite,
+  robot-skridt 0.32s ease-in-out infinite alternate; }
+@keyframes foder-tur {
+  0%, 6% { translate: 0 0; scale: 1 1; } 10% { translate: 0 0; scale: -1 1; } 40%, 46% { translate: -26px 0; scale: -1 1; }
+  50% { translate: -26px 0; scale: 1 1; } 86%, 100% { translate: 0 0; scale: 1 1; }
+}
+@keyframes foder-last { 0%, 3%, 43%, 100% { --robot-op: none; --robot-arme: inline; } 4%, 42% { --robot-op: inline; --robot-arme: none; } }
+.mini--tromme { --robot-hammer: inline; }
+.mini--tromme .mini__krop { animation: robot-bank 0.8s ease-in infinite; }
+
+.render-status { margin: 1px 0 0; }
+.render-status__line { display: flex; margin: 0; color: var(--text-2); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.render-status__what { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.render-status__tal { flex: none; padding-left: 0.3em; color: var(--text); font-variant-numeric: tabular-nums; }
+.bar--render { height: 4px; margin-top: 3px; }
+.bar--render .bar__fill { background: linear-gradient(90deg, #5fcf8f, #9cf0bf); }
+
+/* a render that failed: a sad face for a moment */
+.trist .mouth--smile, .trist .mouth--grin, .trist .mouth--flat, .trist .mouth--o, .trist .mouth--wavy { display: none !important; }
+.trist .mouth--sad { display: inline !important; }
+
+/* ---------------------------------------------------------------- office Klippes (SPEC §22.3)
+   A colleague's Klippe walks in from the left over the page: a copy of the pet's drawing outside #app
+   (so none of our own data-* reach it) with its own stage, outfit and wardrobe as data-* on .gaest,
+   above the content and below the speech bubble. */
+.gaest, .festkat { position: fixed; left: 0; top: 0; z-index: 1; pointer-events: none; }
+.gaest .pet { display: block; width: 110px; height: 110px; max-width: none; max-height: none; cursor: default; }
+.gaest .pet__glow { display: none; }
+.gaar .pet, .gaar .festkat__kat { animation: gaa 0.3s ease-in-out infinite alternate; }
+@keyframes gaa { from { translate: 0 0; rotate: -3deg; } to { translate: 0 -3px; rotate: 3deg; } }
+.gaest__boble {
+  position: absolute;
+  bottom: calc(100% - 26px);
+  left: 14px;
+  width: max-content;
+  max-width: 176px;
+  margin: 0;
+  padding: 6px 9px;
+  border-radius: 11px;
+  background: #fbfaf7;
+  color: #1d1b19;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  animation: bubble-in 0.25s ease-out;
+}
+.gaest__boble[hidden] { display: none; }
+.gaest__boble::after {
+  content: "";
+  position: absolute;
+  left: 34px;
+  bottom: -7px;
+  border: 7px solid transparent;
+  border-bottom: 0;
+  border-top-color: #fbfaf7;
+}
+
+/* ---------------------------------------------------------------- the delivery party (SPEC §22.4)
+   data-fest on #app: Klippe puts on the green Deliver cap and packs the delivery into a box; the
+   steps are classes on .pakke, set by widget.js. The party cat (.festkat) walks in from the right. */
+#app[data-fest] .acc--deliver { display: inline; transform-box: view-box; transform-origin: 100px 64px;
+  animation: kasket 0.55s cubic-bezier(.3, 1.6, .5, 1); }
+#app[data-fest] :is(.acc--fusion, .acc--audio, .acc--crown, .hat, .haand) { display: none !important; }
+@keyframes kasket { from { translate: 0 -46px; rotate: -24deg; opacity: 0; } to { translate: 0 0; rotate: 0deg; opacity: 1; } }
+#app[data-fest]:not([data-bygger]) .pakke:not(.is-tapet) ~ .body .arm--left { animation: pak 0.5s ease-in-out infinite alternate; }
+@keyframes pak { from { transform: rotate(0deg); } to { transform: rotate(38deg); } }
+#app[data-fest] .pakke { display: inline; }
+#app[data-fest] .render { display: none; }                /* the box stands where the render box does */
+.pakke { transform-box: view-box; transform-origin: 7px 184px; }
+#app[data-fest] .pakke { animation: pakke-ind 0.45s cubic-bezier(.3, 1.5, .5, 1); }
+.pakke.is-vaek { opacity: 0; scale: 0.6; transition: opacity 0.45s ease-in, scale 0.45s ease-in; }
+@keyframes pakke-ind { from { scale: 0.2; opacity: 0; } to { scale: 1; opacity: 1; } }
+.pakke__aabning { fill: #4a2e14; }
+.pakke__front { fill: #c98f55; stroke: #8a5a2b; stroke-width: 1.2; }
+.pakke__fold { fill: none; stroke: rgba(138, 90, 43, 0.45); stroke-width: 0.8; }
+.pakke__pile { fill: none; stroke: #6b4420; stroke-width: 1.1; stroke-linecap: round; stroke-linejoin: round; }
+.pakke__flap { fill: #d9a066; stroke: #8a5a2b; stroke-width: 1.1; stroke-linejoin: round; transform-box: view-box;
+  transition: transform 0.4s ease-in; }
+.pakke__flap--v { transform-origin: -22px 159px; transform: rotate(-24deg); }
+.pakke__flap--h { transform-origin: 36px 159px; transform: rotate(24deg); }
+.pakke.is-lukket .pakke__flap { transform: scale(1, 0.12); }
+/* the reel flies from Klippe's hand in an arc and drops into the box (behind the front) */
+.pakke__rulle circle { fill: #c9cdd1; stroke: #6c7480; stroke-width: 1; }
+.pakke__rulle .pakke__hul { fill: #4a2e14; stroke: none; }
+.pakke__rulle .pakke__nav { fill: #6c7480; stroke: none; }
+.pakke__strimmel { fill: none; stroke: #2c2c30; stroke-width: 3; stroke-dasharray: 2 1; }
+.pakke__rulle { transform-box: view-box; transform: translate(7px, 175px); }
+#app[data-fest] .pakke__rulle { animation: rulle 1.3s ease-in-out 0.25s both; }
+@keyframes rulle {
+  0% { transform: translate(44px, 138px) rotate(0deg); opacity: 0; } 12% { opacity: 1; }
+  45% { transform: translate(24px, 118px) rotate(-200deg); }
+  80% { transform: translate(7px, 150px) rotate(-360deg); }
+  100% { transform: translate(7px, 175px) rotate(-400deg); }
+}
+.pakke__tape { fill: rgba(214, 178, 120, 0.92); stroke: rgba(138, 90, 43, 0.5); stroke-width: 0.5; transform-box: fill-box;
+  transform: scaleX(0); transform-origin: 0 50%; }
+.pakke__tape--front { transform: scaleY(0); transform-origin: 50% 0; }
+.pakke.is-tapet .pakke__tape--top { transform: scaleX(1); transition: transform 0.35s ease-out; }
+.pakke.is-tapet .pakke__tape--front { transform: scaleY(1); transition: transform 0.2s ease-out 0.3s; }
+.pakke__stempel { opacity: 0; transform-box: view-box; transform-origin: 3px 173.7px; transform: rotate(-9deg) scale(2.4); }
+.pakke__stempel rect { fill: rgba(255, 255, 255, 0.18); stroke: #d63a2f; stroke-width: 1.6; }
+.pakke__stempel text { fill: #d63a2f; font: 900 7.4px var(--font-display); letter-spacing: 0.2px; text-anchor: middle; }
+.pakke.is-stemplet .pakke__stempel { opacity: 1; transform: rotate(-9deg) scale(1);
+  transition: transform 0.22s cubic-bezier(.5, 0, .9, .5), opacity 0.12s; }
+.pakke.is-stemplet .pakke__front { animation: dunk 0.3s ease-out 0.2s; }
+@keyframes dunk { 50% { translate: 0 1.2px; } }
+
+.festkat__kat { display: block; }
+.festkat__kat.hopper { animation: kat-hop 0.45s ease-in-out infinite; }
+@keyframes kat-hop { 50% { translate: 0 -8px; } }
+svg.festkat__kat { overflow: visible; }
+svg.festkat__kat.snurrer { animation: kat-snurr 0.46s linear 3; }
+@keyframes kat-snurr { 0% { scale: 1 1; } 25% { scale: 0.08 1; } 50% { scale: -1 1; } 75% { scale: -0.08 1; } 100% { scale: 1 1; } }
 
 /* ---------------------------------------------------------------- effects */
 .fx { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }

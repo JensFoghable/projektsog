@@ -93,7 +93,9 @@ kommer der en lille prik på ⚙, og knappen hedder **Opdater nu**. Et tryk hent
 kontrollerer den, udskifter filerne og genstarter Projektsøg – vinduet lukker et øjeblik, og en
 besked ved uret siger, når den nye version kører. Der installeres aldrig noget, uden at du trykker.
 Går noget galt undervejs, lægges de gamle filer tilbage. Er mappen hentet med `git clone`,
-opdateres den med git – men kun når ingen filer i den er ændret.
+opdateres den med git (også GitHub Desktops git); er der ændrede filer i mappen, lægges de til
+side med `git stash` først, så intet går tabt, og opdateringen kører alligevel. Kun en mappe med
+sine egne commits (en udviklers) opdateres ikke automatisk.
 
 Du kan også opdatere i hånden: kopiér de nye filer ind i mappen og kør installationen igen
 (`powershell -ExecutionPolicy Bypass -File .\install.ps1`). Den stopper den kørende version og
@@ -250,6 +252,23 @@ hånden, bliver en robot af og til uartig – så sigter Klippe og skyder den. S
 **Robotterne må komme ud på skærmen, mens en Claude-session bygger**, eller prøv det med
 **🤖 Vis robotterne** og **📞 Prøv telefonen** under 🏆.
 
+**Renders:** Når Resolve renderer, holder Klippe øje: små robotter fodrer en render-boks, og
+under Klippe står „Renderer Portræt_v3.mp4 · 47 % · ca. 3 min". Når renderen er færdig, er der
+fyrværkeri og Klippes korte ringelyd – også hvis du var gået fra pc'en; fejler den, siger Klippe
+hvorfor.
+
+**Leveringsfest:** Lander en færdig render – eller en anden ny fil – i projektets **Final**-mappe,
+holder Klippe leveringsfest: den grønne levérings-kasket på, filmen pakkes i en kasse med
+„LEVERET ✓"-stempel, konfetti og fyrværkeri – og den roterende meme-kat kommer forbi, hopper og
+tager en runde (uden lyd). Katten hentes fra GIPHY første gang; ligger der en `festkat.gif` i
+Projektsøgs mappe, bruges den i stedet. Prøv det med **🎉 Prøv leveringsfesten** under 🏆, eller
+slå det fra med **Leveringsfest, når en fil lander i Final**.
+
+**Kontor-Klipper:** Får en kollegas Klippe et trofæ, eller holder den leveringsfest, kigger den kort
+forbi hos dig – med sine egne farver, hat og ting i hånden – og fortæller det. Det går over
+kontorets netværk (se *Filer og data*). Prøv det med **👋 Prøv et besøg**, eller slå det fra med
+**Kontor-Klipper**.
+
 Navn og dagens mål kan ændres samme sted. Klippe kører i sit eget lille vindue og tager aldrig
 fokus fra Resolve.
 
@@ -375,6 +394,13 @@ projektmappe, projektets optagelser ligger i – f.eks.
 Klik **Åbn mappe** for at åbne den, eller fold listen ud for at se alle mapper med antal klip.
 Findes der ingen optagelser i en kendt projektmappe, foreslås mapper med et lignende navn som
 „Muligt match". Ligger klip på en frakoblet disk, står der hvilken.
+
+**Offline klip:** Er der røde, offline klip i Resolve, står der „⚠ 12 klip er offline i Resolve".
+Tryk **Find og genlink …**: Projektsøg leder efter filerne på alle diske og computere i indekset og
+viser, hvor de ligger nu („12 klip fra D:\…\Klip\FX9 → \\STUDIO-PC\…\Klip\FX9"). Er der flere
+muligheder, vælger du selv. **Genlink** retter kun stierne i Resolve-projektet – ingen filer flyttes,
+og projektet gemmes ikke for dig. Det er det eneste, Projektsøg nogensinde ændrer i Resolve, og
+det sker aldrig, mens en Claude-session bygger, eller Resolve renderer.
 
 Det kræver, at Resolve tillader scripting:
 **DaVinci Resolve ▸ Preferences ▸ System ▸ General ▸ External scripting using = Local**
@@ -509,7 +535,10 @@ Alt, hvad Projektsøg gemmer, ligger i `%LOCALAPPDATA%\Projektsog`:
 | `edge-profile\` | Den private Edge-profil til Projektsøgs vindue |
 
 Projektsøg lytter kun på `127.0.0.1` (port 47811 eller den næste ledige) – den kan ikke nås
-fra andre computere, og der skal ikke laves firewall-regler.
+fra andre computere. Den eneste undtagelse er **Kontor-Klipper**: Klippe sender og modtager små
+hilsner (UDP port 47850) med de andre pc'er på kontoret – kun navn, udseende og trofæ, aldrig
+filer eller kommandoer. Første gang spørger Windows måske, om Projektsøg må bruge netværket; sig
+ja (eller slå **Kontor-Klipper** fra, så lyttes der ikke).
 
 ## Kommandolinje (avanceret)
 

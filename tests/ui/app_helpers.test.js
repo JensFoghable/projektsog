@@ -530,3 +530,137 @@ test('updates: the Opdatering box and its button', () => {
     ['Kunne ikke søge efter en ny version', 'Ingen forbindelse til GitHub', true]);
   assert.equal(h.updateView(null, NOW).button, 'Søg efter opdatering');
 });
+
+// §22.2: find and relink offline clips (the plan of POST /api/resolve/offline).
+const RELINK_PLAN = {
+  project: 'Rikke Lindholm - Testimonial', database: 'Kunder 2026', uid: 'u-1', scanned: 167, truncated: false,
+  groups: [
+    { from: 'D:\\Rikke\\Klip\\FX9', to: 'C:\\K\\Rikke\\Klip\\FX9', to_display: 'C:\\K\\Rikke\\Klip\\FX9', online: true,
+      auto: true, alternatives: [], clips: [{ uid: 'a1', name: 'FX9_0001.MXF' }, { uid: 'a2', name: 'FX9_0002.MXF' }] },
+    { from: 'H:\\Sølv\\Grafik', to: '\\\\GRAFIK-PC\\K\\Grafik', to_display: 'GRAFIK-PC · K\\Grafik', online: true, auto: false,
+      clips: [{ uid: 'b1', name: 'Titel.psd' }, { uid: 'b2', name: 'Logo.png' }, { uid: 'b3', name: 'Bumper.mov' }],
+      alternatives: [
+        { to: '\\\\GRAFIK-PC\\K\\Grafik', to_display: 'GRAFIK-PC · K\\Grafik', online: true, holds: 2 },
+        { to: 'D:\\Pixelbro\\Grafik', to_display: 'D:\\Pixelbro\\Grafik', online: true, holds: 3 },
+        { to: 'h:\\Sølv\\Grafik\\', to_display: 'H:\\Sølv\\Grafik', online: false, holds: 3 }] },
+    { from: 'E:\\Speak', to: 'H:\\Sølv\\Speak', to_display: 'H:\\Sølv\\Speak', online: false, auto: true, alternatives: [],
+      clips: [{ uid: 'c1', name: 'Speak 1.wav' }] },
+  ],
+  not_found: [{ uid: 'n1', name: 'Musik.wav', old_path: 'C:\\Downloads\\Musik.wav' }, { uid: 'n2', name: '', old_path: 'G:\\B-cam.mov' }],
+  blocked: null,
+};
+
+test('relink: the Resolve bar entry counts the clips on offline locations', () => {
+  assert.equal(h.relinkEntryText({ connected: true, offline_clips: 1200 }), '1.200 klip er offline i Resolve');
+  assert.equal(h.relinkEntryText({ connected: true, offline_clips: 0 }), null);
+  assert.equal(h.relinkEntryText({ connected: false, offline_clips: 6 }), null);
+  assert.equal(h.relinkEntryText(null), null);
+});
+
+test('relink: each group offers its folder first, then the alternatives, each once', () => {
+  assert.deepEqual(h.relinkTargets(RELINK_PLAN.groups[0]), [
+    { to: 'C:\\K\\Rikke\\Klip\\FX9', label: 'C:\\K\\Rikke\\Klip\\FX9', online: true, same: false }]);
+  assert.deepEqual(h.relinkTargets(RELINK_PLAN.groups[1]).map((t) => [t.label, t.online, t.same]), [
+    ['GRAFIK-PC · K\\Grafik – 2 af 3 klip', true, false],
+    ['D:\\Pixelbro\\Grafik', true, false],
+    ['H:\\Sølv\\Grafik (samme mappe – ikke tilsluttet)', false, true]]);
+  assert.deepEqual(h.relinkTargets(RELINK_PLAN.groups[2]).map((t) => t.label), ['H:\\Sølv\\Speak (ikke tilsluttet)']);
+  assert.deepEqual(h.relinkTargets({ from: 'X:\\A', to: null, clips: [{ uid: 'x' }], alternatives: [] }), []);
+});
+
+test('relink: "N af M klip" compares holds with the group\'s different files, not its clips', () => {
+  // Resolve holds Titel.psd twice (two media pool items, one file): 3 files, 4 clips
+  const clip = (uid, path) => ({ uid, name: path.split('\\').pop(), old_path: path });
+  const group = { from: 'H:\\Sølv\\Grafik', to: 'D:\\Pixelbro\\Grafik', to_display: 'D:\\Pixelbro\\Grafik', online: true, auto: false,
+    clips: [clip('b1', 'H:\\Sølv\\Grafik\\Titel.psd'), clip('b2', 'H:\\Sølv\\Grafik\\titel.PSD'),
+      clip('b3', 'H:\\Sølv\\Grafik\\Logo.png'), clip('b4', 'H:\\Sølv\\Grafik\\Bumper.mov')],
+    alternatives: [
+      { to: 'D:\\Pixelbro\\Grafik', to_display: 'D:\\Pixelbro\\Grafik', online: true, holds: 3 },
+      { to: 'E:\\Grafik', to_display: 'E:\\Grafik', online: true, holds: 2 }] };
+  assert.equal(h.relinkFileCount(group), 3);
+  assert.deepEqual(h.relinkTargets(group).map((t) => t.label), ['D:\\Pixelbro\\Grafik', 'E:\\Grafik – 2 af 3 klip']);
+  // without old_path (older plans) the clip's name counts, then its uid
+  assert.equal(h.relinkFileCount(RELINK_PLAN.groups[1]), 3);
+  assert.equal(h.relinkFileCount({ clips: [{ uid: 'x' }, { uid: 'y' }, { uid: 'x' }] }), 2);
+  assert.equal(h.relinkFileCount(null), 0);
+});
+
+test('relink: only sure groups on a folder that is online start ticked', () => {
+  assert.deepEqual(h.relinkPicks(RELINK_PLAN), [
+    { on: true, to: 'C:\\K\\Rikke\\Klip\\FX9' },
+    { on: false, to: '\\\\GRAFIK-PC\\K\\Grafik' },
+    { on: false, to: 'H:\\Sølv\\Speak' }]);
+  assert.deepEqual(h.relinkPicks(null), []);
+});
+
+test('relink: the button counts the ticked clips and says why it is off', () => {
+  const picks = h.relinkPicks(RELINK_PLAN);
+  assert.deepEqual(h.relinkButton(RELINK_PLAN, picks, 'Rikke Lindholm - Testimonial'),
+    { count: 2, text: 'Genlink 2 klip', disabled: false, reason: null });
+  const both = [{ ...picks[0] }, { on: true, to: 'D:\\Pixelbro\\Grafik' }, picks[2]];
+  assert.equal(h.relinkButton(RELINK_PLAN, both, 'Rikke Lindholm - Testimonial').text, 'Genlink 5 klip');
+  assert.deepEqual(h.relinkButton(RELINK_PLAN, [{ on: false, to: 'x' }], 'Rikke Lindholm - Testimonial'),
+    { count: 0, text: 'Genlink', disabled: true, reason: 'Vælg mindst én mappe' });
+  // blocked when the plan was made: the button stays on (the block may be over by the click, the
+  // server checks again and refuses while it holds), the panel shows it as a note
+  const blocked = { ...RELINK_PLAN, blocked: 'Claude bygger i Resolve lige nu – genlink, når den er færdig' };
+  assert.deepEqual(h.relinkButton(blocked, picks, 'Rikke Lindholm - Testimonial'),
+    { count: 2, text: 'Genlink 2 klip', disabled: false, reason: null });
+  assert.equal(h.relinkButton(blocked, [{ on: false, to: 'x' }], 'Rikke Lindholm - Testimonial').reason, 'Vælg mindst én mappe');
+  assert.equal(h.relinkButton(blocked, picks, 'Et andet projekt').reason, 'Projektet i Resolve er skiftet – søg igen');
+  assert.equal(h.relinkButton(RELINK_PLAN, picks, 'Et andet projekt').reason, 'Projektet i Resolve er skiftet – søg igen');
+  assert.equal(h.relinkButton(null, [], null).disabled, true);
+});
+
+test('relink: a plan made while Resolve was busy says so as a note', () => {
+  assert.equal(h.relinkBlockedNote('Claude bygger i Resolve lige nu – genlink, når den er færdig'),
+    'Lige nu: Claude bygger i Resolve – Genlink virker, når den er færdig');
+  assert.equal(h.relinkBlockedNote('DaVinci Resolve renderer lige nu – genlink, når renderen er færdig'),
+    'Lige nu: DaVinci Resolve renderer – Genlink virker, når den er færdig');
+  assert.equal(h.relinkBlockedNote('Resolve er optaget'), 'Lige nu: Resolve er optaget – Genlink virker, når den er færdig');
+  assert.equal(h.relinkBlockedNote(null), null);
+  assert.equal(h.relinkBlockedNote(''), null);
+});
+
+test('relink: the request has one entry per target folder', () => {
+  const picks = [{ on: true, to: 'C:\\K\\Rikke\\Klip\\FX9' }, { on: true, to: 'c:\\k\\rikke\\klip\\fx9' }, { on: false, to: 'H:\\Sølv\\Speak' }];
+  assert.deepEqual(h.relinkBody(RELINK_PLAN, picks), { uid: 'u-1', groups: [
+    { to: 'C:\\K\\Rikke\\Klip\\FX9', uids: ['a1', 'a2', 'b1', 'b2', 'b3'] }] });
+  assert.deepEqual(h.relinkBody(RELINK_PLAN, []), { uid: 'u-1', groups: [] });
+});
+
+test('relink: facts, clips found nowhere and Danish name lists', () => {
+  assert.equal(h.relinkPlanFacts(RELINK_PLAN), '8 klip er offline · 6 fundet andre steder');
+  assert.equal(h.relinkPlanFacts({ ...RELINK_PLAN, not_found: [], truncated: true, scanned: 50000 }),
+    '6 klip er offline · alle fundet andre steder · kun de første 50.000 klip er gennemgået');
+  assert.equal(h.relinkPlanFacts({ ...RELINK_PLAN, groups: [], not_found: [] }), ''); // the panel says so itself
+  assert.deepEqual(h.relinkMissing(RELINK_PLAN.not_found), { title: '2 klip blev ikke fundet', names: 'Musik.wav og B-cam.mov' });
+  assert.equal(h.relinkMissing([]), null);
+  assert.equal(h.joinNames(['A']), 'A');
+  assert.equal(h.joinNames(['A', 'B', 'C', 'D']), 'A, B, C og D');
+  assert.equal(h.joinNames(['A', 'B', 'C', 'D', 'E', 'F']), 'A, B, C og 3 andre');
+});
+
+test('relink: the result says what was relinked, what is still offline and what failed', () => {
+  assert.deepEqual(h.relinkResultView({ relinked: 11, still_offline: 0, failed: [], error: null }),
+    { tone: 'ok', title: '11 klip er genlinket', lines: ['Husk at gemme projektet i Resolve (Ctrl+S).'] });
+  // the bridge counts every clip of the plan that is still offline; failures are grouped by reason
+  const part = h.relinkResultView({ relinked: 15, still_offline: 5, error: null, failed: [
+    { uid: 'c1', name: 'Speak 1.wav', why: 'Mappen kan ikke læses' },
+    { uid: 'c2', name: 'Speak 2.wav', why: 'Mappen kan ikke læses' },
+    { uid: 'b3', name: 'Bumper.mov', why: 'Filen ‘Bumper.mov’ ligger ikke i mappen' }] });
+  assert.deepEqual(part, { tone: 'part', title: '15 klip er genlinket', lines: ['5 klip er stadig offline',
+    'Mappen kan ikke læses: Speak 1.wav og Speak 2.wav', 'Filen ‘Bumper.mov’ ligger ikke i mappen',
+    'Husk at gemme projektet i Resolve (Ctrl+S).'] });
+  const many = Array.from({ length: 6 }, (_, i) => ({ uid: `f${i}`, name: `F${i}`, why: `nej ${i}` }));
+  assert.deepEqual(h.relinkResultView({ relinked: 0, still_offline: [], failed: many }).lines.slice(-2),
+    ['nej 3: F3', '… og 2 andre klip kunne ikke genlinkes']);
+  assert.equal(h.relinkResultView({ relinked: 0, failed: many }).tone, 'warn');
+  assert.deepEqual(h.relinkResultView({ error: 'Claude bygger i Resolve lige nu' }),
+    { tone: 'warn', title: 'Claude bygger i Resolve lige nu', lines: [] });
+  // the bridge's refusal on the click (still blocked): its reason is the result, nothing else
+  assert.deepEqual(h.relinkResultView({ relinked: 0, still_offline: 8, failed: [],
+    error: 'DaVinci Resolve renderer lige nu – genlink, når renderen er færdig' }),
+  { tone: 'warn', title: 'DaVinci Resolve renderer lige nu – genlink, når renderen er færdig', lines: [] });
+  assert.equal(h.relinkResultView(null), null);
+});

@@ -18,7 +18,7 @@ from projektsog import resolve_bridge as rb
 from projektsog import resolve_child as rc
 from tests._resolve_fakes import (
     DB, DictOnlyClip, FakeClip, FakeClock, FakeFolder, FakeProject, FakeResolve,
-    UnstableIdProject, clips_in, write_fake_resolve)
+    UnstableIdProject, clips_in, offline_clip, write_fake_resolve)
 
 _tmp: tempfile.TemporaryDirectory | None = None
 
@@ -199,6 +199,216 @@ class SessionTests(unittest.TestCase):
                 answer = session.handle(message)
                 self.assertEqual((answer["id"], answer["ok"], answer["error"]),
                                  (message["id"], False, "bad_request"))
+
+
+class RenderPollTests(unittest.TestCase):
+    """``poll`` with ``render`` reads the render queue (SPEC §22.1)."""
+
+    def setUp(self) -> None:
+        self.clock = FakeClock()
+        self.proj = project()
+        self.session = rc.Session(connect=lambda: FakeResolve(self.proj), clock=self.clock)
+        self.session.handle({"id": 1, "cmd": "connect"})
+
+    def poll(self, **render: Any) -> dict[str, Any]:
+        return self.session.handle({"id": 2, "cmd": "poll", "render": render})
+
+    def test_without_render_nothing_changes(self) -> None:
+        self.proj.add_job("j1", "Rendering")
+        answer = self.session.handle({"id": 2, "cmd": "poll"})
+        self.assertNotIn("jobs", answer)
+        self.assertNotIn("jobs_truncated", answer)
+        self.assertEqual(self.proj.status_calls, [])
+
+    def test_scan_reads_the_newest_jobs(self) -> None:
+        self.proj.add_job("old", "Complete", file="gammel.mov")
+        self.proj.add_job("j2", "Rendering", file="Portræt_v3.mp4", folder="D:\\P\\Final")
+        self.proj.set_status("j2", "Rendering", pct=47, EstimatedTimeRemainingInMs=180_000)
+        self.proj.rendering = True
+        answer = self.poll(scan=True, watch=[])
+        self.assertTrue(answer["rendering"])
+        self.assertFalse(answer["jobs_truncated"])
+        self.assertEqual([j["id"] for j in answer["jobs"]], ["j2", "old"])
+        self.assertEqual(answer["jobs"][0], {
+            "id": "j2", "name": "Job j2", "timeline": "Portræt v3", "dir": "D:\\P\\Final",
+            "file": "Portræt_v3.mp4", "mode": "Single clip", "preset": "H.264 Master",
+            "status": "Rendering", "pct": 47, "eta_ms": 180_000, "took_ms": None, "error": ""})
+        json.dumps(answer)
+
+    def test_watch_reads_only_the_watched_jobs(self) -> None:
+        for job_id in ("a", "b", "c"):
+            self.proj.add_job(job_id, "Complete")
+        self.proj.set_status("b", "Failed", Error="Disk full")
+        answer = self.poll(scan=False, watch=["b", "gone", 7])
+        self.assertEqual([(j["id"], j["status"], j["error"]) for j in answer["jobs"]],
+                         [("b", "Failed", "Disk full")])
+        self.assertEqual(self.proj.status_calls, ["b"])
+        self.assertFalse(answer["jobs_truncated"], "a watched job that is gone is just absent")
+
+    def test_at_most_25_jobs(self) -> None:
+        for i in range(30):
+            self.proj.add_job(f"j{i:02}", "Complete")
+        answer = self.poll(scan=True, watch=["j00"])
+        self.assertEqual(len(answer["jobs"]), rc.MAX_RENDER_JOBS)
+        self.assertTrue(answer["jobs_truncated"])
+        self.assertEqual([j["id"] for j in answer["jobs"][:3]], ["j00", "j29", "j28"],
+                         "watched jobs first, then the newest")
+
+    def test_time_budget(self) -> None:
+        for i in range(10):
+            self.proj.add_job(f"j{i}", "Complete")
+        self.proj.on_status = lambda: self.clock.advance(2.0)
+        answer = self.poll(scan=True)
+        self.assertTrue(answer["jobs_truncated"])
+        self.assertLess(len(answer["jobs"]), 10)
+        self.assertLessEqual(len(self.proj.status_calls), 4)
+
+    def test_failing_getters(self) -> None:
+        self.proj.add_job("j1", "Rendering")
+        self.proj.GetRenderJobStatus = lambda job_id: (_ for _ in ()).throw(RuntimeError("busy"))
+        answer = self.poll(scan=True)
+        self.assertEqual([(j["id"], j["status"], j["pct"]) for j in answer["jobs"]], [("j1", "", None)])
+        self.proj.list_error = RuntimeError("no queue")
+        self.assertEqual({k: self.poll(scan=True)[k] for k in ("ok", "jobs", "jobs_truncated")},
+                         {"ok": True, "jobs": [], "jobs_truncated": True})
+
+    def test_no_project(self) -> None:
+        session = rc.Session(connect=lambda: FakeResolve(None))
+        session.handle({"id": 1, "cmd": "connect"})
+        answer = session.handle({"id": 2, "cmd": "poll", "render": {"scan": True}})
+        self.assertEqual((answer["project"], answer["jobs"], answer["jobs_truncated"]),
+                         (None, [], False))
+
+    def test_numbers(self) -> None:
+        self.assertEqual([rc._int_or_none(v) for v in (5, 5.7, "12", True, "x", float("nan"), None)],
+                         [5, 5, 12, None, None, None, None])
+
+
+def offline_project() -> FakeProject:
+    klip = FakeFolder("Klip", [offline_clip("H:\\Disk\\P\\Klip\\a.mov", uid="u-a"),
+                               FakeClip("H:\\Disk\\P\\Klip\\b.mov", uid="u-b")])
+    root = FakeFolder("Master", [FakeClip("", uid="timeline"),
+                                 offline_clip("H:\\Disk\\P\\Musik\\song.wav", "Sangen", uid="u-s")],
+                      [klip])
+    return FakeProject("P", root, uid="p-uid")
+
+
+class OfflineTests(unittest.TestCase):
+    def session(self, proj: FakeProject, clock: Any = time.monotonic) -> rc.Session:
+        session = rc.Session(connect=lambda: FakeResolve(proj), clock=clock)
+        session.handle({"id": 1, "cmd": "connect"})
+        return session
+
+    def test_offline_clips(self) -> None:
+        proj = offline_project()
+        answer = self.session(proj).handle({"id": 3, "cmd": "offline", "max_clips": 100})
+        self.assertEqual((answer["ok"], answer["scanned"], answer["truncated"]), (True, 4, False))
+        self.assertEqual(answer["clips"], [
+            {"uid": "u-s", "name": "Sangen", "path": "H:\\Disk\\P\\Musik\\song.wav",
+             "dir": "H:\\Disk\\P\\Musik", "type": "Video + Audio", "frames": "250", "fps": 25.0,
+             "resolution": "1920x1080", "status": "Offline"},
+            {"uid": "u-a", "name": "a.mov", "path": "H:\\Disk\\P\\Klip\\a.mov",
+             "dir": "H:\\Disk\\P\\Klip", "type": "Video + Audio", "frames": "250", "fps": 25.0,
+             "resolution": "1920x1080", "status": "Offline"}])
+        clips = proj.pool.root.clips + proj.pool.root.subfolders[0].clips
+        self.assertEqual([c.property_calls for c in clips], [1, 1, 1, 1],
+                         "one GetClipProperty() per clip")
+
+    def test_offline_limits_and_no_project(self) -> None:
+        root = FakeFolder("Master", [offline_clip(f"H:\\x\\{i}.mov") for i in range(8)])
+        answer = self.session(FakeProject("P", root)).handle({"id": 1, "cmd": "offline",
+                                                              "max_clips": 3})
+        self.assertEqual((len(answer["clips"]), answer["scanned"], answer["truncated"]), (3, 3, True))
+        resolve = FakeResolve(None)
+        session = rc.Session(connect=lambda: resolve)
+        self.assertEqual(session.handle({"id": 1, "cmd": "offline"})["error"], "not_connected")
+        session.handle({"id": 2, "cmd": "connect"})
+        self.assertEqual(session.handle({"id": 3, "cmd": "offline"}),
+                         {"id": 3, "ok": True, "clips": [], "scanned": 0, "truncated": False})
+
+
+class RelinkCommandTests(unittest.TestCase):
+    """``relink``: the one writing call, MediaPool.RelinkClips (SPEC §1 rule 2, §22.2)."""
+
+    def setUp(self) -> None:
+        self.proj = offline_project()
+        self.session = rc.Session(connect=lambda: FakeResolve(self.proj))
+        self.session.handle({"id": 1, "cmd": "connect"})
+
+    def relink(self, groups: Any, **extra: Any) -> dict[str, Any]:
+        return self.session.handle({"id": 9, "cmd": "relink", "groups": groups, **extra})
+
+    def test_relinks_once_per_folder(self) -> None:
+        answer = self.relink([
+            {"folder": "\\\\SERVER\\Arkiv\\P\\Klip", "uids": ["u-a"],
+             "expect": {"u-a": "H:\\Disk\\P\\Klip\\a.mov"}},
+            {"folder": "\\\\server\\arkiv\\P\\klip", "uids": ["u-s"],
+             "expect": {"u-s": "h:\\disk\\p\\musik\\SONG.wav"}}],
+            project={"name": "P", "uid": "p-uid", "database": DB["DbName"]})
+        self.assertEqual(self.proj.pool.relinks, [(["u-a", "u-s"], "\\\\SERVER\\Arkiv\\P\\Klip")])
+        self.assertEqual(answer["results"], [
+            {"uid": "u-a", "ok": True, "path": "\\\\SERVER\\Arkiv\\P\\Klip\\a.mov",
+             "status": "Online", "why": None},
+            {"uid": "u-s", "ok": True, "path": "\\\\SERVER\\Arkiv\\P\\Klip\\song.wav",
+             "status": "Online", "why": None}])
+        self.assertEqual((answer["truncated"], answer["project_changed"]), (False, False))
+
+    def test_leaves_clips_alone_that_changed(self) -> None:
+        self.proj.pool.missing = {"song.wav"}
+        answer = self.relink([
+            {"folder": "E:\\Ny", "uids": ["u-b", "u-a", "nope", "u-s"],
+             "expect": {"u-b": "H:\\Disk\\P\\Klip\\b.mov", "u-a": "H:\\Andet\\a.mov",
+                        "nope": "H:\\x.mov", "u-s": "H:\\Disk\\P\\Musik\\song.wav"}}])
+        self.assertEqual([(r["uid"], r["ok"], r["why"]) for r in answer["results"]],
+                         [("u-b", False, "online"), ("u-a", False, "changed"),
+                          ("nope", False, "not_found"), ("u-s", False, "offline")])
+        self.assertEqual(self.proj.pool.relinks, [(["u-s"], "E:\\Ny")])
+
+    def test_relink_failure(self) -> None:
+        self.proj.pool.raises = RuntimeError("relink broke")
+        with self.assertLogs("projektsog.resolve_child", "WARNING"):
+            answer = self.relink([{"folder": "E:\\Ny", "uids": ["u-a"],
+                                   "expect": {"u-a": "H:\\Disk\\P\\Klip\\a.mov"}}])
+        self.assertEqual([(r["ok"], r["why"], r["status"]) for r in answer["results"]],
+                         [(False, "relink_failed", "Offline")])
+
+    def test_another_project_is_left_alone(self) -> None:
+        for project in ({"name": "Andet", "uid": "", "database": ""},
+                        {"name": "P", "uid": "other-uid", "database": ""},
+                        {"name": "P", "uid": "p-uid", "database": "Anden database"}):
+            with self.subTest(project=project):
+                answer = self.relink([{"folder": "E:\\Ny", "uids": ["u-a"],
+                                       "expect": {"u-a": "H:\\Disk\\P\\Klip\\a.mov"}}],
+                                     project=project)
+                self.assertEqual((answer["ok"], answer["results"], answer["project_changed"]),
+                                 (True, [], True))
+        self.assertEqual(self.proj.pool.relinks, [])
+
+    def test_bad_requests(self) -> None:
+        for groups in (None, [{"folder": "", "uids": ["u-a"]}], [{"folder": "E:\\x", "uids": "u-a"}],
+                       [{"folder": "E:\\x", "uids": [""]}], [], ["x"]):
+            with self.subTest(groups=groups):
+                self.assertEqual(self.relink(groups)["error"], "bad_request")
+        self.assertEqual(self.proj.pool.relinks, [])
+
+    def test_relink_clips_is_the_only_writing_call(self) -> None:
+        """Every method the helper calls on a Resolve object is a getter - except RelinkClips."""
+        with open(rc.__file__, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        modules = {alias.asname or alias.name.split(".")[0] for node in ast.walk(tree)
+                   if isinstance(node, (ast.Import, ast.ImportFrom))
+                   for alias in node.names} | {"_kernel32"}
+
+        def root(node: ast.AST) -> str | None:
+            while isinstance(node, ast.Attribute):
+                node = node.value
+            return node.id if isinstance(node, ast.Name) else None
+
+        names = {node.attr for node in ast.walk(tree)       # calls, and getters passed uncalled
+                 if isinstance(node, ast.Attribute) and node.attr[:1].isupper()
+                 and root(node) not in modules}
+        self.assertIn("GetClipProperty", names)
+        self.assertEqual({n for n in names if not n.startswith(("Get", "Is"))}, {"RelinkClips"})
 
 
 class ServeTests(unittest.TestCase):

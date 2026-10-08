@@ -1429,7 +1429,8 @@ class Indexer:
 
     def find_files(self, names: Collection[str]) -> list[dict[str, Any]]:
         """Indexed files named exactly one of ``names`` (case-insensitive), with their project:
-        where the clips of a camera card already are."""
+        where the clips of a camera card already are, and where offline Resolve clips went
+        (SPEC §22.2: also ``source_id``, ``rel_path``, ``unc_folder``, ``mtime``, ``is_seq``)."""
         wanted = {n.casefold() for n in names if isinstance(n, str) and n}
         view = self._snapshot()
         readers = self._readers
@@ -1449,7 +1450,10 @@ class Indexer:
                             "path": _join(src["path"], row["rel_path"]),
                             "folder": _join(src["path"], row["parent_rel"]),
                             "online": bool(src["online"]), "volume_serial": src["volume_serial"],
-                            "project": None if project_rel is None else _project_ref(src, project_rel)})
+                            "project": None if project_rel is None else _project_ref(src, project_rel),
+                            "source_id": row["source_id"], "rel_path": row["rel_path"],
+                            "unc_folder": _join(src.get("unc_path"), row["parent_rel"]),
+                            "mtime": row["mtime"], "is_seq": bool(row["is_seq"])})
         return out
 
     def templates(self) -> list[dict[str, Any]]:

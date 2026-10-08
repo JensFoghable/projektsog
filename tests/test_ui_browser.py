@@ -683,6 +683,127 @@ class ResolveAndCardTests(UiCase):
         self.wait(f"document.querySelector('.pill__text').textContent.startsWith({json.dumps(prefix)})")
 
 
+class RelinkTests(UiCase):
+    """§22.2: "N klip er offline i Resolve" → [Find og genlink …] → the plan → [Genlink N klip]."""
+    scenario = "asked,idle,nofocus"
+    ENTRY = "document.querySelector('.resolve__offline')"
+    PANEL = "document.querySelectorAll('.rl__group').length === 3"
+    GO = "[data-resolve=relink-go]"
+    FX9 = "C:\\Kunder 2026 (STUDIO)\\Rikke Lindholm\\Klip\\FX9"
+    PIXELBRO = "D:\\Forår 2026 RØD\\Pixelbro\\Grafik"
+    ROWS_STATE = ("[...document.querySelectorAll('.rl__group')].map(g => [g.querySelector('.rl__check').checked,"
+                  " g.querySelector('.rl__from').textContent, g.querySelector('.rl__to').textContent])")
+
+    def open_panel(self, mock: str | None = None) -> None:
+        self.open(ready=f"{ROWS} && {self.ENTRY}", **({"mock": mock} if mock else {}))
+        self.page.click("[data-resolve=relink-open]")
+        self.wait(self.PANEL)
+
+    def test_the_plan_is_shown_chosen_and_relinked(self) -> None:
+        self.open(ready=f"{ROWS} && {self.ENTRY}")
+        self.assertEqual(self.text(".resolve__offline-text"), "6 klip er offline i Resolve")
+        # the line saying where they lie stays, now underneath the entry
+        self.assertEqual(self.text(".resolve__warn"), "6 klip ligger på disken ‘2024 Disk Sølv’, som ikke er tilsluttet")
+        self.assertFalse(self.requests("/api/resolve/offline"), "the plan is only made on the user's click")
+        self.page.click("[data-resolve=relink-open]")
+        self.wait(self.PANEL)
+        self.assertEqual(len(self.requests("/api/resolve/offline", "POST")), 1)
+        self.assertEqual(self.js("document.querySelector('[data-resolve=relink-open]').getAttribute('aria-expanded')"), "true")
+        self.assertEqual(self.text(".rl__facts"), "20 klip er offline · 18 fundet andre steder")
+        self.assertEqual(self.js(self.ROWS_STATE), [
+            [True, "12 klip fra D:\\Rikke Lindholm\\Klip\\FX9", f"{self.FX9}Alle fundet"],
+            [False, "4 klip fra H:\\2024 Disk Sølv\\Pixelbro Radio\\Grafik",
+             "\\\\GRAFIK-PC\\Kunder 2026 (Grafik)\\Pixelbro Podcast\\Grafik – 3 af 4 klip"
+             f"{self.PIXELBRO} – 2 af 4 klip"
+             "H:\\2024 Disk Sølv\\Pixelbro Radio\\Grafik (samme mappe – ikke tilsluttet)"],
+            # a sure folder on a disk that is not connected is never ticked for the user
+            [False, "2 klip fra E:\\Speak", "H:\\2024 Disk Sølv\\Pixelbro Radio\\Speak (ikke tilsluttet)Alle fundet"]])
+        self.assertEqual(self.text(".rl__missing"),
+                         "2 klip blev ikke fundet i indekset: Musik udkast 3.wav og Interview B-cam.mov")
+        self.assertEqual(self.text(self.GO), "Genlink 12 klip")
+        # Another folder for the graphics ticks their row; the list keeps its scroll position.
+        self.js(f"const s = document.querySelector('[data-resolve=relink-to-1]'); s.value = {json.dumps(self.PIXELBRO)};"
+                " s.dispatchEvent(new Event('change', {bubbles: true}))")
+        self.wait(f"document.querySelector({json.dumps(self.GO)}).textContent === 'Genlink 16 klip'")
+        self.assertTrue(self.js("document.querySelectorAll('.rl__group')[1].classList.contains('is-on')"))
+        self.page.click(self.GO)
+        body = self.wait_request("/api/resolve/relink")["body"]
+        self.assertEqual(body, {"uid": "u-rikke-lindholm-testimonial", "groups": [
+            {"to": self.FX9, "uids": [f"clip-{n:03d}" for n in range(1, 13)]},
+            {"to": self.PIXELBRO, "uids": [f"clip-{n:03d}" for n in range(13, 17)]}]})
+        self.wait("document.querySelector('.rl__result')")
+        self.assertEqual(self.text(".rl__result-title"), "14 klip er genlinket")
+        self.assertEqual(self.js("[...document.querySelectorAll('.rl__result-line')].map(l => l.textContent)"),
+                         ["6 klip er stadig offline", "Filen ‘Pixelbro bumper.mov’ ligger ikke i mappen",
+                          "Filen ‘Logo animation.mov’ ligger ikke i mappen", "Husk at gemme projektet i Resolve (Ctrl+S)."])
+        self.wait_request("/api/resolve/refresh")   # the bar reads the project again
+        self.assertFalse(self.js(f"!!document.querySelector({json.dumps(self.GO)})"))
+        self.page.click("[data-resolve=relink-close]")
+        self.wait("!document.querySelector('#resolve-relink')")
+        self.assertEqual(len(self.requests("/api/resolve/relink", "POST")), 1)
+
+    BLOCKED_NOTE = "Lige nu: Claude bygger i Resolve – Genlink virker, når den er færdig"
+
+    def test_blocked_while_a_claude_session_builds(self) -> None:
+        # The plan was made while a session built: a note, but the button stays on – the server
+        # checks again on the click and its refusal is the result.
+        self.open_panel("asked,idle,nofocus,relink-blocked")
+        self.assertEqual(self.text(".rl__note"), self.BLOCKED_NOTE)
+        self.assertFalse(self.js(f"document.querySelector({json.dumps(self.GO)}).disabled"))
+        self.assertEqual(self.text(self.GO), "Genlink 12 klip")
+        self.assertEqual(self.js(f"document.querySelector({json.dumps(self.GO)}).title"),
+                         "Projektsøg tjekker igen, når du klikker")
+        self.assertFalse(self.js("!!document.querySelector('.rl__reason')"))
+        self.page.click(self.GO)
+        self.assertEqual(self.wait_request("/api/resolve/relink")["body"]["uid"], "u-rikke-lindholm-testimonial")
+        self.wait("document.querySelector('.rl__result')")
+        self.assertEqual(self.js("document.querySelector('.rl__result').dataset.tone"), "warn")
+        self.assertEqual(self.text(".rl__result-title"), "Claude bygger i Resolve lige nu – genlink, når den er færdig")
+        self.assertFalse(self.js("document.querySelectorAll('.rl__result-line').length"))
+        self.assertFalse(self.requests("/api/resolve/refresh"))   # nothing changed in Resolve
+
+    def test_a_block_that_has_ended_does_not_hold_the_button(self) -> None:
+        # The session was done before the click: the same plan relinks without a new search.
+        self.open_panel("asked,idle,nofocus,relink-was-blocked")
+        self.assertEqual(self.text(".rl__note"), self.BLOCKED_NOTE)
+        self.page.click(self.GO)
+        self.wait_request("/api/resolve/relink")
+        self.wait("document.querySelector('.rl__result')")
+        self.assertEqual(self.text(".rl__result-title"), "12 klip er genlinket")
+        self.assertEqual(len(self.requests("/api/resolve/offline", "POST")), 1)
+
+    def test_nothing_ticked_disables_the_button_and_esc_closes_the_panel(self) -> None:
+        self.open_panel()
+        self.page.click("[data-resolve=relink-pick-0]")
+        self.wait(f"document.querySelector({json.dumps(self.GO)}).disabled")
+        self.assertEqual(self.text(".rl__reason"), "Vælg mindst én mappe")
+        self.assertEqual(self.js("document.activeElement.dataset.resolve"), "relink-pick-0")
+        self.page.key("Escape")   # from inside the panel: closes it, the window stays
+        self.wait("!document.querySelector('#resolve-relink')")
+        self.assertEqual(self.js("document.activeElement.id"), "q")
+        self.assertFalse(self.requests("/api/window/hide"))
+
+    def test_details_offer_the_search_when_no_location_is_offline(self) -> None:
+        self.set_online(3, path="I:\\2024 Disk Sølv")   # Resolve may still miss clips: another drive letter
+        self.open(ready="!document.querySelector('#resolve').hidden && !document.querySelector('.resolve__warn')",
+                  mock="asked,idle,nofocus,relink-none")
+        self.assertFalse(self.js(f"!!{self.ENTRY}"))
+        self.page.click("[data-resolve=toggle]")
+        self.wait("document.querySelector('.rd__relink')")
+        self.page.click(".rd__relink")
+        self.wait("document.querySelector('.rl__empty')")
+        self.assertEqual(self.text(".rl__empty"), "Resolve melder ingen offline klip i projektet.")
+        self.assertFalse(self.js(f"!!document.querySelector({json.dumps(self.GO)})"))
+
+    def test_office_and_delivery_switches(self) -> None:
+        self.open(ready="!document.querySelector('#panel-generelt').hidden && document.querySelector('#hotkey-input').value",
+                  panel="settings", tab="generelt")
+        for n, key in enumerate(("widget_kontor", "widget_levering"), start=1):
+            self.assertEqual(self.js(f"document.querySelector('[data-setting={key}]').getAttribute('aria-checked')"), "true")
+            self.page.click(f"[data-setting={key}]")
+            self.assertEqual(self.wait_request("/api/settings", count=n)["body"], {key: False})
+
+
 class QuestionCardTests(UiCase):
     scenario = ""  # resolve_hotkey_asked is still false
 
@@ -1951,6 +2072,204 @@ class WidgetTests(UiCase):
         self.js("window.__klippe.applyStatus({state: 'no-resolve', enabled: true, today_s: 100})")
         self.assertEqual(self.js("document.querySelector('#app').dataset.mood"), "sleeping")
         self.assertEqual(self.text("#mood"), "Klippe sover, til Resolve vågner 💤")
+
+    # -- renders, office Klippes and the delivery party (SPEC §22) ---------------------------
+    SHOWN = "getComputedStyle(document.querySelector('{}')).display !== 'none'"
+    RENDER = {"aktiv": True, "pct": 47, "eta_s": 180, "navn": "Portræt_v3.mp4", "tidslinje": "Portræt v3",
+              "projekt": "Rikke Lindholm", "af_claude": None, "faerdig": None}
+    DONE = {"udfald": "done", "fil": "Portræt_v3.mp4", "sti": "D:\\Rikke\\Final\\Portræt_v3.mp4",
+            "mappe": "D:\\Rikke\\Final", "levering": True, "fejl": None, "seq": 1}
+
+    def test_klippe_watches_a_render(self) -> None:
+        # A render that ended while the widget was away is celebrated once on load – not after a reload.
+        self.control("/api/_mock/publish", {"type": "render", "data": {**self.RENDER, "aktiv": False,
+                                                                        "faerdig": {**self.DONE, "seq": 7}}})
+        self.open_widget()
+        self.wait(f"{self.SAID}.includes('Renderen er færdig! 🎬')")
+        self.open_widget()
+        time.sleep(0.8)
+        self.assertNotIn("Renderen er færdig", self.js(self.SAID))
+        # Rendering: the mini robots feed film into the render box, a progress line under the pet.
+        self.assertFalse(self.js(self.SHOWN.format("#pet .render")))
+        self.assertTrue(self.js("document.querySelector('#render-status').hidden"))
+        self.control("/api/_mock/publish", {"type": "render", "data": self.RENDER})
+        self.wait("'render' in document.querySelector('#app').dataset")
+        self.assertTrue(self.js(self.SHOWN.format("#pet .render")))
+        self.assertEqual(self.js("document.querySelectorAll('#pet .render .mini use').length"), 2)
+        self.assertFalse(self.js("document.querySelector('#render-status').hidden"))
+        self.assertEqual(self.js("document.querySelector('#render-status').title"),
+                         "Renderer Portræt_v3.mp4 · 47 % · ca. 3 min")
+        self.assertEqual([self.text("#render-what"), self.text("#render-tal")],
+                         ["Renderer Portræt_v3.mp4", "· 47 % · ca. 3 min"])
+        self.assertEqual(self.text("#mood"), "🎬 Robotterne renderer Portræt v3 – Klippe holder øje")
+        self.assertEqual(self.js("document.querySelector('#app').style.getPropertyValue('--render')"), "0.47")
+        self.assertTrue(self.js("""(() => { const s = document.querySelector('#render-status').getBoundingClientRect();
+            const p = document.querySelector('#pet').getBoundingClientRect();
+            const m = document.querySelector('#mood').getBoundingClientRect();
+            return s.top >= p.bottom - 1 && s.bottom <= m.top + 1 && s.height > 0; })()"""))
+        # A Claude session's render, while it builds: the render box replaces the crew's timeline.
+        self.control("/api/_mock/publish", {"type": "bygger", "data": {"aktiv": True, "navn": "Mette", "projekt": "X",
+                                                                        "opgave": "", "demo": False, "ude": False}})
+        self.control("/api/_mock/publish", {"type": "render", "data": {**self.RENDER, "pct": 80, "af_claude": "Mette"}})
+        self.wait("document.querySelector('#mood').textContent === '🎬 Mette renderer Portræt v3 – robotterne fodrer maskinen'")
+        self.assertFalse(self.js(self.SHOWN.format("#pet .crew")))
+        self.assertTrue(self.js(self.SHOWN.format("#pet .render")))
+        self.control("/api/_mock/publish", {"type": "bygger", "data": {"aktiv": False}})
+        # Done: fireworks and the line – once, though later events carry the same `faerdig` along.
+        self.control("/api/_mock/publish", {"type": "render", "data": {**self.RENDER, "aktiv": False, "faerdig": self.DONE}})
+        self.wait("!('render' in document.querySelector('#app').dataset) && document.querySelector('#render-status').hidden")
+        self.wait(f"{self.SAID}.includes('Renderen er færdig! 🎬')")
+        self.wait("window.__klippe.fx.count() > 0")
+        self.assertNotIn("render", self.text("#mood"))
+        said = self.js(f"{self.SAID}.split('Renderen er færdig').length")
+        self.control("/api/_mock/publish", {"type": "render", "data": {**self.RENDER, "faerdig": self.DONE}})
+        self.wait("'render' in document.querySelector('#app').dataset")
+        self.assertEqual(self.js(f"{self.SAID}.split('Renderen er færdig').length"), said)
+        # Failed: a sad face and the reason.
+        self.control("/api/_mock/publish", {"type": "render", "data": {**self.RENDER, "aktiv": False, "faerdig": {
+            **self.DONE, "udfald": "failed", "fejl": "Disken er fuld", "levering": False, "seq": 2}}})
+        self.wait(f"{self.SAID}.includes('Renderen fejlede 😟 – Disken er fuld')")
+        self.assertTrue(self.js("document.querySelector('#pet').classList.contains('trist')"))
+        self.assertTrue(self.js(self.SHOWN.format("#pet .mouth--sad")))
+        self.assertFalse(self.js(self.SHOWN.format("#pet .render")))
+
+    def test_a_colleagues_klippe_comes_by(self) -> None:
+        self.control("/api/settings", {"widget_enabled": True})
+        self.open_widget()
+        self.js("window.__klippe.state.tempo = 0.25")
+        # GET /api/kontor: whose Klippes are about (only to know them – visits are never replayed).
+        self.wait("document.querySelector('#demo-visit').title === 'Kollegernes Klipper lige nu: Bobby (KLIPPER-PC)'")
+        self.assertTrue(self.requests("/api/kontor", "GET"))
+        self.page.click("#trophies")
+        self.page.click("#demo-visit")                       # "👋 Prøv et besøg"
+        self.wait_request("/api/kontor/demo")
+        guest = "document.querySelector('body > .gaest')"
+        self.wait(f"!!{guest} && document.querySelector('#panel').hidden")
+        # A copy of the pet outside #app, wearing its own things; no id twice in the page.
+        self.assertFalse(self.js(f"document.querySelector('#app').contains({guest})"))
+        look = json.loads(self.js(f"JSON.stringify({guest}.dataset)"))
+        self.assertEqual({k: look[k] for k in ("stage", "outfit", "mood", "farve", "striber", "hat", "mund", "haand")},
+                         {"stage": "junior", "outfit": "none", "mood": "chill", "farve": "bordeaux", "striber": "zebra",
+                          "hat": "festhat", "mund": "slikkepind", "haand": "kaffe"})
+        self.assertTrue(self.js("(() => { const ids = [...document.querySelectorAll('[id]')].map(n => n.id);"
+                                " return ids.length === new Set(ids).size; })()"))
+        self.assertEqual(self.js(f"[...{guest}.querySelectorAll('[id]')].map(n => n.id).sort()"),
+                         ["glow-gaest", "stripes-gaest"])
+        self.assertEqual(self.js(f"[...new Set([...{guest}.querySelectorAll('[fill^=\"url(\"]')]"
+                                 ".map(n => n.getAttribute('fill')))].sort()"), ["url(#glow-gaest)", "url(#stripes-gaest)"])
+        stripe = "getComputedStyle(document.querySelector('{} rect:last-child')).fill"
+        self.assertEqual(self.js(stripe.format("#stripes-gaest")), "rgb(255, 245, 250)")    # its zebra stripes …
+        self.assertEqual(self.js(stripe.format("#stripes")), "rgb(243, 239, 230)")           # … ours stay ours
+        self.assertTrue(self.js(self.SHOWN.format(".gaest .hat--festhat")))
+        self.assertFalse(self.js(self.SHOWN.format("#pet .hat--festhat")))
+        self.assertTrue(self.js(f"document.getAnimations().some(a => a.effect.target === {guest}"
+                                " && a.effect.getKeyframes()[0].transform === 'translateX(-130px)')"))   # in from the left
+        # It says its line, both jump and clap, Klippe answers – and after a while it walks out.
+        self.wait("document.querySelector('.gaest__boble')?.checkVisibility()"
+                  " && document.querySelector('.gaest__boble').textContent === 'Hej fra KLIPPER-PC! Jeg fik 🏆 Durumkongen'")
+        self.wait("document.querySelector('.gaest svg').classList.contains('jump')"
+                  " && document.querySelector('#pet').classList.contains('clap')")
+        self.wait(f"{self.SAID}.includes('Hej Bobby! 👋 Flot klaret!')")
+        self.wait(f"!{guest}", timeout=4)
+        # Never while Klippe eats: it waits (one at most – the newest); nothing from a packet becomes HTML.
+        self.js("window.__klippe.state.eating = {id: 'durum', name: 'Durum', kind: 'mad'}")
+        for pc in ("A-PC", "<b>B-PC</b>"):
+            self.control("/api/_mock/publish", {"type": "besoeg", "data": {
+                "type": "trofae", "pc": pc, "navn": "<img src=x>", "stage": "legend", "outfit": "x\" onclick=\"y",
+                "pynt": {"hat": "<script>", "farve": "guld"}, "trofae": {"kind": "trofae", "id": "x", "name": "<i>T</i>"}}})
+        time.sleep(1.2)
+        self.assertFalse(self.js(f"!!{guest}"))
+        self.js("window.__klippe.state.eating = null")
+        self.wait(f"!!{guest}", timeout=3)
+        self.wait("document.querySelector('.gaest__boble').textContent === 'Hej fra <b>B-PC</b>! Jeg fik 🏆 <i>T</i>'")
+        self.assertEqual(self.js(f"{guest}.querySelectorAll('b, i, img, script').length"), 0)
+        look = json.loads(self.js(f"JSON.stringify({guest}.dataset)"))
+        self.assertEqual((look["stage"], look["outfit"], look["farve"], "hat" in look), ("legend", "none", "guld", False))
+        self.wait(f"!{guest}", timeout=4)
+        time.sleep(1.2)
+        self.assertFalse(self.js(f"!!{guest}"))                # A-PC's visit was dropped, not queued
+
+    def test_the_delivery_party(self) -> None:
+        self.open_widget()
+        self.js("window.__klippe.state.tempo = 0.3")
+        self.page.click("#trophies")
+        self.page.click("#demo-party")                       # "🎉 Prøv leveringsfesten" – Klippe is off
+        self.wait(f"{self.SAID}.includes('Øv – Slå Klippe til først')")
+        self.control("/api/settings", {"widget_enabled": True})
+        self.page.click("#trophies")
+        self.page.click("#demo-party")
+        self.wait_request("/api/levering/demo", count=2)
+        self.wait("document.querySelector('#app').dataset.fest === 'demo' && document.querySelector('#panel').hidden")
+        # The green Deliver cap goes on (over its own hat), the reel goes into a box.
+        self.control("/api/_mock/publish", {"type": "pet_look", "data": {"equipped": {"hat": "festhat"}}})
+        self.wait("document.querySelector('#app').dataset.hat === 'festhat'")
+        for part in (".acc--deliver", ".pakke", ".pakke__rulle"):
+            self.assertTrue(self.js(self.SHOWN.format(f"#pet {part}")), part)
+        self.assertFalse(self.js(self.SHOWN.format("#pet .hat--festhat")))
+        self.assertEqual(self.text("#mood"), "📦 Klippe pakker Demo_levering.mp4 …")
+        # A visit that comes meanwhile waits for the party.
+        self.control("/api/kontor/demo", {})
+        # Flaps, tape, the stamp – then confetti, fireworks and the line.
+        self.wait("document.querySelector('#pet .pakke').classList.contains('is-stemplet')", timeout=4)
+        self.assertTrue(self.js("['is-lukket', 'is-tapet'].every(c => document.querySelector('#pet .pakke').classList.contains(c))"))
+        self.assertEqual(self.text("#pet .pakke__stempel text"), "LEVERET ✓")
+        self.wait(f"{self.SAID}.includes('Leveret: Demo_levering.mp4 🎉')")
+        self.wait("window.__klippe.fx.count() > 0")
+        self.assertEqual(self.text("#mood"), "🎉 Klippe fejrer Demo_levering.mp4")
+        # The party cat (the mock's 4-frame GIF): every frame decoded, the green keyed out, standing on
+        # Klippe's floor; another GIF than GIPHY's stands on frame 0 and spins through them all.
+        self.wait("!!document.querySelector('body > .festkat canvas.festkat__kat')", timeout=5)
+        cat = self.js("""(async () => { const c = await window.__klippe.festkat();
+            return c && { n: c.frames.length, plan: c.plan, w: c.w, h: c.h, bottom: c.bottom }; })()""")
+        self.assertEqual(cat, {"n": 4, "plan": {"stand": [0, 0], "spin": [0, 3]}, "w": 48, "h": 48, "bottom": 34})
+        alpha = self.js("""(async () => { const c = await window.__klippe.festkat(), cv = document.createElement('canvas');
+            cv.width = c.w; cv.height = c.h; const x = cv.getContext('2d'); x.drawImage(c.frames[0].bitmap, 0, 0);
+            return [[1, 1], [20, 26], [32, 26]].map(([px, py]) => x.getImageData(px, py, 1, 1).data[3]); })()""")
+        self.assertEqual(alpha[:2], [0, 255])                  # green gone, the cat solid …
+        self.assertTrue(0 < alpha[2] < 255, alpha)             # … and its soft edge half see-through
+        self.assertTrue(self.js("""(() => { const box = document.querySelector('.festkat'), c = box.firstChild;
+            const feet = parseFloat(box.style.top) + c.getBoundingClientRect().height * 35 / 48;
+            return Math.abs(feet - window.__klippe.floor().y) <= 1.5; })()"""))
+        self.assertFalse(self.js("!!document.querySelector('.gaest')"))
+        self.wait("window.__klippe.state.fest?.cat?.spins >= 1", timeout=4)
+        # ~12 s (× tempo): the cat walks out, the box goes – then the waiting guest comes.
+        self.wait("!('fest' in document.querySelector('#app').dataset) && !document.querySelector('.festkat')", timeout=6)
+        self.assertFalse(self.js(self.SHOWN.format("#pet .pakke")))
+        self.assertTrue(self.js(self.SHOWN.format("#pet .hat--festhat")))
+        self.wait("!!document.querySelector('.gaest')", timeout=3)
+
+
+    def test_a_party_during_a_render_hides_the_render_box(self) -> None:
+        self.open_widget()
+        self.control("/api/settings", {"widget_enabled": True})
+        self.control("/api/_mock/publish", {"type": "render", "data": self.RENDER})
+        self.wait("'render' in document.querySelector('#app').dataset")
+        self.assertTrue(self.js(self.SHOWN.format("#pet .render")))
+        self.page.click("#trophies")
+        self.page.click("#demo-party")                       # the box stands where the render box does
+        self.wait("!!document.querySelector('#app').dataset.fest")
+        self.assertFalse(self.js(self.SHOWN.format("#pet .render")))
+        self.assertTrue(self.js(self.SHOWN.format("#pet .pakke")))
+
+
+class WidgetPartyCatTests(UiCase):
+    """Without the party cat's GIF (GET /api/festkat fails): a drawn cat comes, and it spins too."""
+
+    scenario = "asked,no-festkat"
+
+    def test_a_drawn_cat_when_the_gif_cannot_be_had(self) -> None:
+        WidgetTests.open_widget(self)
+        self.js("window.__klippe.state.tempo = 0.3")
+        self.control("/api/_mock/publish", {"type": "levering", "data": {
+            "kilde": "fil", "fil": "Rikke_final.mov", "projekt": "Rikke Lindholm", "sti": "D:\\Rikke\\Final\\Rikke_final.mov",
+            "demo": False}})
+        self.wait("document.querySelector('#app').dataset.fest === 'fil'")
+        self.wait("!!document.querySelector('body > .festkat svg.festkat__kat use[href=\"#kat-tegning\"]')", timeout=5)
+        self.assertTrue(self.requests("/api/festkat", "GET"))
+        self.assertIsNone(self.js("window.__klippe.festkat()"))
+        self.wait("!!document.querySelector('.festkat svg.snurrer')", timeout=4)
+        self.wait(f"{WidgetTests.SAID}.includes('Leveret: Rikke_final.mov 🎉')")
+        self.wait("!document.querySelector('.festkat')", timeout=6)
 
 
 class ImportNoCardTests(UiCase):

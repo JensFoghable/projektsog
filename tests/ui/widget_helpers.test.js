@@ -192,3 +192,78 @@ test('hunger: how full, what Klippe says and the drip', () => {
   assert.equal(w.dropLeft({ fra: 0, til: 100 }, 100), 0.05);                          // never quite empty
   assert.equal(w.dropLeft(null), 1);
 });
+
+test('renders: the progress line under the pet, the mood line and how a render ends', () => {
+  const r = { aktiv: true, pct: 47, eta_s: 180, navn: 'Portræt_v3.mp4', tidslinje: 'Portræt v3', projekt: 'Rikke Lindholm',
+    af_claude: null, faerdig: null };
+  assert.deepEqual(w.renderProgress(r), { what: 'Renderer Portræt_v3.mp4', tal: '47 % · ca. 3 min', pct: 47,
+    text: 'Renderer Portræt_v3.mp4 · 47 % · ca. 3 min' });
+  assert.equal(w.renderProgress({ ...r, eta_s: 30 }).tal, '47 % · under 1 min');
+  assert.equal(w.renderProgress({ ...r, eta_s: 3900 }).tal, '47 % · ca. 1 t 5 min');
+  assert.equal(w.renderProgress({ ...r, eta_s: null }).tal, '47 %');
+  assert.equal(w.renderProgress({ ...r, pct: null, eta_s: null }).text, 'Renderer Portræt_v3.mp4 · går i gang …');
+  assert.equal(w.renderProgress({ ...r, navn: null }).what, 'Renderer Portræt v3');      // the timeline, else the job
+  assert.equal(w.renderProgress({ ...r, navn: null, tidslinje: null }).what, 'Renderer tidslinjen');
+  assert.equal(w.renderProgress({ ...r, pct: 140.2 }).pct, 100);
+  assert.equal(w.renderProgress({ ...r, aktiv: false }), null);
+  assert.equal(w.renderProgress(null), null);
+  assert.equal(w.renderLine(r), '🎬 Robotterne renderer Portræt v3 – Klippe holder øje');
+  assert.equal(w.renderLine({ ...r, af_claude: 'Mette' }, 'Bobby'), '🎬 Mette renderer Portræt v3 – robotterne fodrer maskinen');
+  assert.equal(w.renderLine({ ...r, aktiv: false }), null);
+  const done = { udfald: 'done', fil: 'Portræt_v3.mp4', sti: 'D:\Rikke\Final\Portræt_v3.mp4', mappe: 'D:\Rikke\Final',
+    levering: true, fejl: null, seq: 3 };
+  assert.equal(w.renderDoneLine(done), 'Renderen er færdig! 🎬');
+  assert.equal(w.renderDoneLine({ ...done, udfald: 'failed', fejl: 'Disken er fuld' }), 'Renderen fejlede 😟 – Disken er fuld');
+  assert.equal(w.renderDoneLine({ ...done, udfald: 'failed' }), 'Renderen fejlede 😟');
+  assert.equal(w.renderDoneLine({ ...done, udfald: 'cancelled' }), 'Renderen blev stoppet ✋');
+  assert.equal(w.renderDoneLine({ ...done, udfald: 'gone' }), null);                   // just gone: nothing to say
+  assert.equal(w.renderDoneLine(null), null);
+  assert.equal(w.renderKey(done), '3|done|D:\Rikke\Final\Portræt_v3.mp4');
+  assert.equal(w.renderKey({ ...done, sti: null }), '3|done|Portræt_v3.mp4');
+  assert.notEqual(w.renderKey(done), w.renderKey({ ...done, seq: 4 }));
+  assert.equal(w.renderKey({ ...done, seq: null }), null);
+  assert.equal(w.renderKey(null), null);
+});
+
+test("office Klippes: how a colleague's Klippe looks and what they say", () => {
+  const visit = { type: 'trofae', pc: 'STUDIO-PC', navn: 'Bobby', stage: 'pro', outfit: 'color',
+    pynt: { hat: 'festhat', farve: 'guld', haand: 'awp', ukendt: 'x', briller: '<b>', aura: 'Hjerter' },
+    trofae: { kind: 'trofae', id: 'durumkongen', name: 'Durumkongen', rarity: 'sjælden' } };
+  // only known stages, outfits and slots, only plain item names – they only ever become data-*
+  assert.deepEqual(w.guestLook(visit), { stage: 'pro', outfit: 'color', pynt: { farve: 'guld', hat: 'festhat', haand: 'awp' } });
+  assert.deepEqual(w.guestLook({ stage: 'boss', outfit: 'pyjamas', pynt: 'hat:x' }), { stage: 'baby', outfit: 'none', pynt: {} });
+  assert.deepEqual(w.guestLook({ pynt: JSON.parse('{"__proto__": {"hat": "x"}, "constructor": "y"}') }).pynt, {});
+  assert.deepEqual(w.guestLook(null), { stage: 'baby', outfit: 'none', pynt: {} });
+  assert.equal(w.guestLook({ ...visit, type: 'fest' }).outfit, 'deliver');              // a party guest wears the cap
+  assert.equal(w.visitLine(visit), 'Hej fra STUDIO-PC! Jeg fik 🏆 Durumkongen');
+  assert.equal(w.visitLine({ ...visit, trofae: { kind: 'fund', id: 'awp', name: 'AWP' } }), 'Hej fra STUDIO-PC! Jeg fandt 🎁 AWP');
+  assert.equal(w.visitLine({ ...visit, trofae: null }), 'Hej fra STUDIO-PC! Jeg har fået et nyt trofæ 🏆');
+  assert.equal(w.visitLine({ ...visit, type: 'fest', trofae: null }), 'Hej fra STUDIO-PC! Vi har leveret! 🎉');
+  assert.equal(w.visitReply(visit), 'Hej Bobby! 👋 Flot klaret!');
+  assert.equal(w.visitReply({ ...visit, type: 'fest', navn: '' }), 'Hej du! 👋 Tillykke med leveringen!');
+  const ids = { stripes: 'stripes-gaest', glow: 'glow-gaest' };
+  assert.equal(w.renameRefs('url(#stripes)', ids), 'url(#stripes-gaest)');
+  assert.equal(w.renameRefs('url(#shades)', ids), 'url(#shades)');                     // ours: shared, fixed colours
+  assert.equal(w.renameRefs('url(#toString)', ids), 'url(#toString)');
+});
+
+test('the delivery party: the line, the cat and its green screen', () => {
+  assert.equal(w.deliveryLine({ kilde: 'render', fil: 'Portræt_v3.mp4', projekt: 'Rikke', sti: null, demo: false }),
+    'Leveret: Portræt_v3.mp4 🎉');
+  assert.equal(w.deliveryLine({ fil: null, projekt: 'Rikke Lindholm' }), 'Leveret: Rikke Lindholm 🎉');
+  assert.equal(w.deliveryLine(null), 'Leveret: filen 🎉');
+  // GIPHY's cat stands on frames 0–23 and spins on 24–69; any other GIF stands on its first and spins on all
+  assert.deepEqual(w.catFrames(w.FESTKAT_FRAMES), { stand: [0, 23], spin: [24, 69] });
+  assert.deepEqual(w.catFrames(4), { stand: [0, 0], spin: [0, 3] });
+  assert.deepEqual(w.catFrames(1), { stand: [0, 0], spin: [0, 0] });
+  assert.equal(w.nextSpin(() => 0), 2500);
+  assert.equal(w.nextSpin(() => 1), 6000);
+  // 2×2 pixels: green screen and a soft edge (40 greener), the cat and a darker green
+  const px = new Uint8ClampedArray([0, 255, 0, 255, 120, 160, 110, 255, 70, 64, 58, 255, 10, 200, 30, 255]);
+  assert.equal(w.keyGreen(px, 2), 1);                                                    // the cat stands on row 1
+  assert.deepEqual([...px], [0, 255, 0, 0, 120, 120, 110, 128, 70, 64, 58, 255, 10, 200, 30, 0]);
+  const kept = new Uint8ClampedArray([100, 120, 90, 255]);                               // only 20 greener: kept
+  assert.equal(w.keyGreen(kept, 1), 0);
+  assert.deepEqual([...kept], [100, 120, 90, 255]);
+  assert.equal(w.keyGreen(new Uint8ClampedArray([0, 255, 0, 255, 0, 250, 0, 255]), 1), -1);   // all green: no cat
+});

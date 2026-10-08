@@ -17,18 +17,37 @@ JSON lines (ASCII), one answer per request, in order; the request's ``id`` is ec
     <- {"id": 2, "ok": true, "db": [DbType, DbName, IpAddress], "database": DbName | null,
         "project": str | null, "uid": str,
         "page": "edit" | "color" | ... | "", "timeline": str, "timecode": str, "rendering": bool}
+    -> {"id": 2, "cmd": "poll", "render": {"scan": bool, "watch": [jobId, ...]}}   (SPEC §22.1)
+    <- ... the same, plus "jobs": [{"id", "name", "timeline", "dir", "file", "mode", "preset",
+        "status", "pct", "eta_ms", "took_ms", "error"}], "jobs_truncated": bool
     -> {"id": 3, "cmd": "uid"}        (the current project's unique id, through a fresh proxy)
     <- {"id": 3, "ok": true, "project": str | null, "uid": str}
     -> {"id": 4, "cmd": "walk", "max_clips": 50000, "max_seconds": 20.0}
     <- {"id": 4, "ok": true, "paths": [str, ...], "clip_count": int, "truncated": bool}
+    -> {"id": 5, "cmd": "offline", "max_clips": 50000, "max_seconds": 20.0}       (SPEC §22.2)
+    <- {"id": 5, "ok": true, "clips": [{"uid", "name", "path", "dir", "type", "frames", "fps",
+        "resolution", "status"}], "scanned": int, "truncated": bool}
+    -> {"id": 6, "cmd": "relink", "groups": [{"folder": str, "uids": [str], "expect": {uid: path}}],
+        "project": {"name", "uid", "database"} (optional: refuse another project)}
+    <- {"id": 6, "ok": true, "results": [{"uid", "ok", "path", "status", "why"}],
+        "truncated": bool, "project_changed": bool}
     <- {"id": n, "ok": false, "error": "not_connected" | "unavailable" | "bad_request",
         "detail": "..."}
     -> {"cmd": "quit"}
 
-``clip_count`` counts every clip visited (also clips without a file path). Only read-only
-scripting getters are called. The helper exits on ``quit``, and at once when stdin reaches EOF
-(the app stopped it, quit or died) - even in the middle of a scripting call. It logs to
-``log_dir()\\resolve_child.log``.
+``clip_count`` counts every clip visited (also clips without a file path). With ``render`` the
+poll also reads the render queue (``scan``: the newest jobs; ``watch``: these jobs, if they still
+exist): at most 25 jobs within 5 s, else ``jobs_truncated``. ``why`` of a relink result is null
+(online now) or "not_found" | "online" | "changed" | "offline" | "relink_failed".
+
+Only read-only scripting getters are called - with ONE exception (SPEC §1 rule 2, §22.2):
+``relink`` calls ``MediaPool.RelinkClips(items, folder)``, once per folder, for clips that are
+still offline at the path the user saw (``expect``). The bridge sends it only after the user
+clicked "Genlink", for the project the plan was made for, never while a Claude session holds
+Resolve or Resolve renders. Nothing here ever saves the project or writes anything else.
+
+The helper exits on ``quit``, and at once when stdin reaches EOF (the app stopped it, quit or
+died) - even in the middle of a scripting call. It logs to ``log_dir()\\resolve_child.log``.
 """
 
 from __future__ import annotations
@@ -52,6 +71,9 @@ log = logging.getLogger("projektsog.resolve_child")   # also when run as __main_
 
 DEFAULT_MAX_CLIPS = 50_000
 DEFAULT_MAX_SECONDS = 20.0
+MAX_RENDER_JOBS = 25           # render queue entries read per poll (SPEC §22.1)
+RENDER_MAX_SECONDS = 5.0
+MAX_RELINK_CLIPS = 50_000
 LOG_FILE = "resolve_child.log"
 
 _SEM_FAILCRITICALERRORS = 0x0001
@@ -162,6 +184,38 @@ def _clip_file_path(clip: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def _clip_properties(clip: Any) -> dict[str, Any]:
+    """All of a clip's properties in ONE call (``GetClipProperty()``); {} when that fails."""
+    try:
+        props = clip.GetClipProperty()
+    except Exception:
+        return {}
+    return props if isinstance(props, dict) else {}
+
+
+def _int_or_none(value: Any) -> int | None:
+    """Resolve's numbers (ints, floats, digit strings) as an int; None otherwise."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value == value and abs(value) < 1e15 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def _scalar(value: Any) -> str | int | float:
+    """A clip property as JSON-safe text or number ('' for anything else)."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value == value \
+            and abs(value) != float("inf"):
+        return value
+    return ""
+
+
 def _positive_int(value: Any, default: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         return default
@@ -172,6 +226,36 @@ def _positive_float(value: Any, default: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
         return default
     return float(value)
+
+
+class _PoolWalk:
+    """The clips of a media pool, folder by folder (depth first, folders in pool order),
+    bounded by clip count and a deadline. ``count`` = clips yielded; ``truncated`` = a bound
+    stopped the walk."""
+
+    def __init__(self, root: Any, max_clips: int, deadline: float,
+                 clock: Callable[[], float]) -> None:
+        self._root = root
+        self._max = max_clips
+        self._deadline = deadline
+        self._clock = clock
+        self.count = 0
+        self.truncated = False
+
+    def __iter__(self) -> Any:
+        stack = [self._root]
+        while stack:
+            if self._clock() > self._deadline:
+                self.truncated = True
+                return
+            folder = stack.pop()
+            for clip in _as_list(folder.GetClipList()):
+                if self.count >= self._max or self._clock() > self._deadline:
+                    self.truncated = True
+                    return
+                self.count += 1
+                yield clip
+            stack.extend(reversed(_as_list(folder.GetSubFolderList())))
 
 
 class Session:
@@ -192,7 +276,8 @@ class Session:
         """The answer to one request (never raises)."""
         command = message.get("cmd")
         handler = {"connect": self._connect_cmd, "poll": self._poll, "uid": self._uid,
-                   "walk": self._walk}.get(command) if isinstance(command, str) else None
+                   "walk": self._walk, "offline": self._offline,
+                   "relink": self._relink}.get(command) if isinstance(command, str) else None
         if handler is None:
             answer = {"ok": False, "error": "bad_request",
                       "detail": f"unknown command {command!r}"}
@@ -245,14 +330,66 @@ class Session:
         answer = {"ok": True, "db": db_id, "database": db_id[1] or None, "project": None,
                   "uid": ""}
         answer.update(self._activity(None))
+        render = message.get("render")
         project = manager.GetCurrentProject()
         if project is None:
+            if isinstance(render, Mapping):
+                answer.update(jobs=[], jobs_truncated=False)
             return answer
         name = project.GetName()
         if not isinstance(name, str):
             raise _Unavailable(f"Project.GetName() returned {name!r}")
-        return {**answer, "project": name, "uid": _call_text(project.GetUniqueId),
-                **self._activity(project)}
+        answer = {**answer, "project": name, "uid": _call_text(project.GetUniqueId),
+                  **self._activity(project)}
+        if isinstance(render, Mapping):
+            answer.update(self._render_jobs(project, render))
+        return answer
+
+    def _render_jobs(self, project: Any, render: Mapping[str, Any]) -> dict[str, Any]:
+        """The render queue for the bridge's render watch (SPEC §22.1): the watched jobs that
+        still exist, then (``scan``) the newest jobs - at most MAX_RENDER_JOBS, read within
+        RENDER_MAX_SECONDS. Read-only getters, each in its own try."""
+        deadline = self._clock() + RENDER_MAX_SECONDS
+        watch = render.get("watch")
+        watch = [w for w in watch if isinstance(w, str) and w] if isinstance(watch, list) else []
+        try:
+            listed = _as_list(project.GetRenderJobList())
+        except Exception as exc:
+            log.debug("GetRenderJobList() failed: %s", exc)
+            return {"jobs": [], "jobs_truncated": True}
+        infos: dict[str, Mapping[str, Any]] = {}
+        for info in listed:
+            if isinstance(info, Mapping) and _text(info.get("JobId")):
+                infos[info["JobId"]] = info
+        order = list(dict.fromkeys(w for w in watch if w in infos))
+        if render.get("scan") is True:
+            order += [job_id for job_id in reversed(infos) if job_id not in order]
+        truncated = len(order) > MAX_RENDER_JOBS
+        jobs = []
+        for job_id in order[:MAX_RENDER_JOBS]:
+            if self._clock() > deadline:
+                truncated = True
+                break
+            jobs.append(self._render_job(project, infos[job_id]))
+        return {"jobs": jobs, "jobs_truncated": truncated}
+
+    @staticmethod
+    def _render_job(project: Any, info: Mapping[str, Any]) -> dict[str, Any]:
+        job_id = info["JobId"]
+        try:
+            status = project.GetRenderJobStatus(job_id)
+        except Exception as exc:
+            log.debug("GetRenderJobStatus(%s) failed: %s", job_id, exc)
+            status = None
+        status = status if isinstance(status, Mapping) else {}
+        return {"id": job_id, "name": _text(info.get("RenderJobName")),
+                "timeline": _text(info.get("TimelineName")), "dir": _text(info.get("TargetDir")),
+                "file": _text(info.get("OutputFilename")), "mode": _text(info.get("RenderMode")),
+                "preset": _text(info.get("PresetName")), "status": _text(status.get("JobStatus")),
+                "pct": _int_or_none(status.get("CompletionPercentage")),
+                "eta_ms": _int_or_none(status.get("EstimatedTimeRemainingInMs")),
+                "took_ms": _int_or_none(status.get("TimeTakenToRenderInMs")),
+                "error": _text(status.get("Error"))}
 
     def _activity(self, project: Any) -> dict[str, Any]:
         """What the editor is doing, for the time tracker: the open page, the playhead and
@@ -294,32 +431,147 @@ class Session:
 
     def _walk(self, message: Mapping[str, Any]) -> dict[str, Any]:
         """The file paths of the media pool's clips, bounded by clip count and time."""
-        max_clips = _positive_int(message.get("max_clips"), DEFAULT_MAX_CLIPS)
-        max_seconds = _positive_float(message.get("max_seconds"), DEFAULT_MAX_SECONDS)
-        deadline = self._clock() + max_seconds
         project = self._project_manager().GetCurrentProject()
         if project is None:  # closed since the poll: the bridge's check after the walk sees it
             return {"ok": True, "paths": [], "clip_count": 0, "truncated": False}
+        walk = self._pool_walk(self._media_pool(project)[1], message)
+        paths = [path for clip in walk if (path := _clip_file_path(clip))]
+        return {"ok": True, "paths": paths, "clip_count": walk.count, "truncated": walk.truncated}
+
+    @staticmethod
+    def _media_pool(project: Any) -> tuple[Any, Any]:
+        """(media pool, its root folder) of ``project``."""
         pool = project.GetMediaPool()
         root = pool.GetRootFolder() if pool is not None else None
         if root is None:
             raise _Unavailable("the media pool is not available")
-        paths: list[str] = []
-        clips = 0
-        stack = [root]
-        while stack:
-            if self._clock() > deadline:
-                return {"ok": True, "paths": paths, "clip_count": clips, "truncated": True}
-            folder = stack.pop()
-            for clip in _as_list(folder.GetClipList()):
-                if clips >= max_clips or self._clock() > deadline:
-                    return {"ok": True, "paths": paths, "clip_count": clips, "truncated": True}
-                clips += 1
-                path = _clip_file_path(clip)
-                if path:
-                    paths.append(path)
-            stack.extend(reversed(_as_list(folder.GetSubFolderList())))
-        return {"ok": True, "paths": paths, "clip_count": clips, "truncated": False}
+        return pool, root
+
+    def _pool_walk(self, root: Any, message: Mapping[str, Any]) -> _PoolWalk:
+        max_clips = _positive_int(message.get("max_clips"), DEFAULT_MAX_CLIPS)
+        max_seconds = _positive_float(message.get("max_seconds"), DEFAULT_MAX_SECONDS)
+        return _PoolWalk(root, max_clips, self._clock() + max_seconds, self._clock)
+
+    def _offline(self, message: Mapping[str, Any]) -> dict[str, Any]:
+        """The media pool's clips that are not online (SPEC §22.2): one ``GetClipProperty()``
+        per clip, its unique id only for the offline ones."""
+        project = self._project_manager().GetCurrentProject()
+        if project is None:
+            return {"ok": True, "clips": [], "scanned": 0, "truncated": False}
+        walk = self._pool_walk(self._media_pool(project)[1], message)
+        clips: list[dict[str, Any]] = []
+        for clip in walk:
+            props = _clip_properties(clip)
+            path = _text(props.get("File Path")).strip()
+            status = _text(props.get("Online Status")).strip()
+            if not path or not status or status.casefold() == "online":
+                continue          # no file (timelines, generators) or online / status unknown
+            clips.append({"uid": _call_text(clip.GetUniqueId),
+                          "name": (_text(props.get("Clip Name")) or _text(props.get("File Name"))
+                                   or ntpath.basename(path)),
+                          "path": path, "dir": ntpath.dirname(path), "type": _text(props.get("Type")),
+                          "frames": _scalar(props.get("Frames")), "fps": _scalar(props.get("FPS")),
+                          "resolution": _text(props.get("Resolution")), "status": status})
+        return {"ok": True, "clips": clips, "scanned": walk.count, "truncated": walk.truncated}
+
+    def _relink(self, message: Mapping[str, Any]) -> dict[str, Any]:
+        """``MediaPool.RelinkClips`` - the one writing call (SPEC §1 rule 2, §22.2).
+
+        The clips are found by unique id in a fresh walk; a clip that is online now or whose
+        file path is no longer the one the user saw (``expect``) is left alone. One
+        RelinkClips per folder, then each clip's File Path and Online Status are read again.
+        """
+        wanted = self._relink_request(message)
+        if wanted is None:
+            return {"ok": False, "error": "bad_request", "detail": "groups"}
+        manager = self._project_manager()
+        project = manager.GetCurrentProject()
+        if project is None or not self._is_expected_project(manager, project, message.get("project")):
+            log.info("relink refused: the project in Resolve is not the one the plan was made for")
+            return {"ok": True, "results": [], "truncated": False, "project_changed": True}
+        pool, root = self._media_pool(project)
+        walk = self._pool_walk(root, message)
+        items: dict[str, Any] = {}
+        for clip in walk:
+            uid = _call_text(clip.GetUniqueId)
+            if uid in wanted and uid not in items:
+                items[uid] = clip
+                if len(items) == len(wanted):
+                    break
+        results: dict[str, dict[str, Any]] = {}
+        batches: dict[str, tuple[str, list[tuple[str, Any]]]] = {}
+        for uid, (folder, expect) in wanted.items():
+            clip = items.get(uid)
+            if clip is None:
+                results[uid] = {"uid": uid, "ok": False, "path": None, "status": None,
+                                "why": "not_found"}
+                continue
+            props = _clip_properties(clip)
+            path = _text(props.get("File Path")).strip()
+            status = _text(props.get("Online Status")).strip()
+            why = ("online" if status.casefold() == "online"
+                   else "changed" if expect is None or path.casefold() != expect.strip().casefold()
+                   else None)
+            if why is not None:
+                results[uid] = {"uid": uid, "ok": False, "path": path or None,
+                                "status": status or None, "why": why}
+                continue
+            batches.setdefault(folder.casefold(), (folder, []))[1].append((uid, clip))
+        for folder, entries in batches.values():
+            try:
+                done = bool(pool.RelinkClips([clip for _uid, clip in entries], folder))
+            except Exception as exc:
+                log.warning("RelinkClips(%d clips, %s) failed: %s", len(entries), folder, exc)
+                done = False
+            log.info("RelinkClips(%d clips, %s) -> %s", len(entries), folder, done)
+            for uid, clip in entries:
+                props = _clip_properties(clip)
+                path = _text(props.get("File Path")).strip()
+                status = _text(props.get("Online Status")).strip()
+                ok = status.casefold() == "online"
+                results[uid] = {"uid": uid, "ok": ok, "path": path or None, "status": status or None,
+                                "why": None if ok else "offline" if done else "relink_failed"}
+        return {"ok": True, "results": [results[uid] for uid in wanted],
+                "truncated": walk.truncated, "project_changed": False}
+
+    @staticmethod
+    def _relink_request(message: Mapping[str, Any]) -> dict[str, tuple[str, str | None]] | None:
+        """``{uid: (folder, expected old path)}`` of a relink request; None when malformed."""
+        groups = message.get("groups")
+        if not isinstance(groups, list):
+            return None
+        wanted: dict[str, tuple[str, str | None]] = {}
+        for group in groups:
+            if not isinstance(group, Mapping):
+                return None
+            folder, uids, expect = group.get("folder"), group.get("uids"), group.get("expect")
+            if not (isinstance(folder, str) and folder.strip() and isinstance(uids, list)):
+                return None
+            expect = expect if isinstance(expect, Mapping) else {}
+            for uid in uids:
+                if not isinstance(uid, str) or not uid:
+                    return None
+                old = expect.get(uid)
+                wanted.setdefault(uid, (folder.strip(), old if isinstance(old, str) else None))
+        return wanted if 0 < len(wanted) <= MAX_RELINK_CLIPS else None
+
+    @staticmethod
+    def _is_expected_project(manager: Any, project: Any, expected: Any) -> bool:
+        """Is ``project`` the one named in a request's ``project`` ({name, uid, database}; an
+        empty uid / database is not compared)?"""
+        if not isinstance(expected, Mapping):
+            return True
+        if _call_text(project.GetName) != _text(expected.get("name")):
+            return False
+        uid = _text(expected.get("uid"))
+        if uid and _call_text(project.GetUniqueId) != uid:
+            return False
+        database = _text(expected.get("database"))
+        if database:
+            db = manager.GetCurrentDatabase()
+            if not isinstance(db, dict) or _text(db.get("DbName")) != database:
+                return False
+        return True
 
 
 # --------------------------------------------------------------------------------------

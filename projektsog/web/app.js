@@ -332,6 +332,159 @@
     return lines;
   }
 
+  // Offline media: find and relink (SPEC §22.2). The plan comes from POST /api/resolve/offline,
+  // the user's choice per group is a pick {on, to}.
+
+  /** "6 klip er offline i Resolve" – the Resolve bar's way into "Find og genlink …" (null: none). */
+  function relinkEntryText(rs) {
+    const count = rs && rs.connected ? Math.round(Number(rs.offline_clips) || 0) : 0;
+    return count > 0 ? `${formatInt(count)} klip er offline i Resolve` : null;
+  }
+
+  function samePath(a, b) {
+    const norm = (p) => String(p).replace(/[\\/]+$/, '').toLowerCase();
+    return Boolean(a && b) && norm(a) === norm(b);
+  }
+
+  /** How many different files a group's clips are – the file name of each clip's old path,
+   *  case-insensitive – which is what an alternative's `holds` counts: Resolve may hold one file as
+   *  several clips, so the clip count can be higher. */
+  function relinkFileCount(group) {
+    const names = ((group && group.clips) || []).map((clip) =>
+      String(leafName(clip && clip.old_path) || (clip && (clip.name || clip.uid)) || '').toLowerCase());
+    return new Set(names).size;
+  }
+
+  /** The folders a group can go to – its own `to` first, then the alternatives, each once – with
+   *  the label the choice shows ("… – 3 af 4 klip (ikke tilsluttet)"). */
+  function relinkTargets(group) {
+    const files = relinkFileCount(group);
+    const alternatives = (group && group.alternatives) || [];
+    const targets = [];
+    const add = (target) => {
+      if (!target || !target.to || targets.some((t) => samePath(t.to, target.to))) return;
+      const same = samePath(target.to, group.from);
+      let label = target.to_display || target.to;
+      if (target.holds != null && target.holds < files) label += ` – ${formatInt(target.holds)} af ${formatInt(files)} klip`;
+      if (target.online === false) label += same ? ' (samme mappe – ikke tilsluttet)' : ' (ikke tilsluttet)';
+      else if (same) label += ' (samme mappe)';
+      targets.push({ to: target.to, label, online: target.online !== false, same });
+    };
+    if (group && group.to) {
+      add(alternatives.find((a) => samePath(a.to, group.to))
+        || { to: group.to, to_display: group.to_display, online: group.online });
+    }
+    alternatives.forEach(add);
+    return targets;
+  }
+
+  /** The first choice per group: a sure group (`auto`, its folder online) is ticked; any other
+   *  waits for the user, its choice set to the best folder that is online. */
+  function relinkPicks(plan) {
+    return ((plan && plan.groups) || []).map((group) => {
+      const targets = relinkTargets(group);
+      const best = targets.find((t) => t.online) || targets[0] || null;
+      return { on: Boolean(group.auto && best && best.online && samePath(best.to, group.to)), to: best ? best.to : null };
+    });
+  }
+
+  /** [Genlink N klip]: the clips of the ticked groups, and why the button is off (if it is).
+   *  The plan's `blocked` does not turn it off: it was true when the plan was made and may be over
+   *  by the click – the server checks again and refuses while it still holds (relinkBlockedNote). */
+  function relinkButton(plan, picks, project) {
+    let count = 0;
+    ((plan && plan.groups) || []).forEach((group, i) => {
+      const pick = (picks || [])[i];
+      if (pick && pick.on && pick.to) count += (group.clips || []).length;
+    });
+    let reason = null;
+    if (!plan) reason = 'Ingen plan endnu';
+    else if (project !== undefined && project !== plan.project) reason = 'Projektet i Resolve er skiftet – søg igen';
+    else if (!count) reason = 'Vælg mindst én mappe';
+    return { count, text: count ? `Genlink ${formatInt(count)} klip` : 'Genlink', disabled: Boolean(reason), reason };
+  }
+
+  /** The plan's `blocked` ("Claude bygger i Resolve lige nu – genlink, når den er færdig") as the
+   *  panel's note: "Lige nu: Claude bygger i Resolve – Genlink virker, når den er færdig" (null: none). */
+  function relinkBlockedNote(blocked) {
+    if (!blocked) return null;
+    const what = String(blocked).replace(/\s+[–-]\s+genlink\b.*$/i, '').replace(/\s+lige nu$/i, '').trim();
+    return `Lige nu: ${what || String(blocked)} – Genlink virker, når den er færdig`;
+  }
+
+  /** The body of POST /api/resolve/relink: one entry per target folder (Resolve relinks once per folder). */
+  function relinkBody(plan, picks) {
+    const targets = new Map();
+    ((plan && plan.groups) || []).forEach((group, i) => {
+      const pick = (picks || [])[i];
+      if (!pick || !pick.on || !pick.to) return;
+      const key = pick.to.toLowerCase();
+      const entry = targets.get(key) || { to: pick.to, uids: [] };
+      entry.uids.push(...(group.clips || []).map((clip) => clip.uid));
+      targets.set(key, entry);
+    });
+    return { uid: plan ? plan.uid : null, groups: [...targets.values()] };
+  }
+
+  /** "A, B og C" – at most `max` names, then "… og 3 andre". */
+  function joinNames(names, max = 4) {
+    const shown = names.slice(0, names.length > max ? max - 1 : max);
+    const rest = names.length - shown.length;
+    if (rest > 0) return `${shown.join(', ')} og ${formatInt(rest)} andre`;
+    return shown.length > 1 ? `${shown.slice(0, -1).join(', ')} og ${shown.at(-1)}` : shown.join('');
+  }
+
+  /** The panel's line next to its title: how many clips are offline, found, looked at. */
+  function relinkPlanFacts(plan) {
+    if (!plan) return '';
+    const found = ((plan.groups) || []).reduce((n, g) => n + (g.clips || []).length, 0);
+    const missing = (plan.not_found || []).length;
+    const parts = [];
+    if (found + missing) {
+      parts.push(`${formatInt(found + missing)} klip er offline`);
+      if (found) parts.push(missing ? `${formatInt(found)} fundet andre steder` : 'alle fundet andre steder');
+    }
+    if (plan.truncated) parts.push(`kun de første ${formatInt(plan.scanned || 0)} klip er gennemgået`);
+    return parts.join(' · ');
+  }
+
+  /** Clips found nowhere in the index: {title: "2 klip blev ikke fundet", names: "A og B"}. */
+  function relinkMissing(list) {
+    const names = (list || []).map((clip) => clip.name || leafName(clip.old_path) || '?');
+    if (!names.length) return null;
+    return { title: `${formatInt(names.length)} klip blev ikke fundet`, names: joinNames(names) };
+  }
+
+  /** What a relink did: "11 klip er genlinket", what is still offline and what failed. */
+  function relinkResultView(result) {
+    if (!result) return null;
+    if (result.error) return { tone: 'warn', title: result.error, lines: [] };
+    const count = (value) => (Array.isArray(value) ? value.length : Math.round(Number(value) || 0));
+    const relinked = count(result.relinked);
+    const still = count(result.still_offline);
+    const failed = Array.isArray(result.failed) ? result.failed : [];
+    const lines = [];
+    if (still) lines.push(`${formatInt(still)} klip er stadig offline`);
+    // Failures by reason: "Mappen kan ikke læses: A og B"; a reason naming its clip stands alone.
+    const reasons = new Map();
+    for (const f of failed) {
+      const why = f.why || 'Kunne ikke genlinkes';
+      reasons.set(why, [...(reasons.get(why) || []), f.name || '?']);
+    }
+    let shown = 0;
+    for (const [why, names] of [...reasons].slice(0, 4)) {
+      lines.push(names.length === 1 && why.includes(names[0]) ? why : `${why}: ${joinNames(names, 3)}`);
+      shown += names.length;
+    }
+    if (failed.length > shown) lines.push(`… og ${formatInt(failed.length - shown)} andre klip kunne ikke genlinkes`);
+    if (relinked) lines.push('Husk at gemme projektet i Resolve (Ctrl+S).');
+    return {
+      tone: relinked && !still && !failed.length ? 'ok' : relinked ? 'part' : 'warn',
+      title: relinked ? `${formatInt(relinked)} klip er genlinket` : 'Ingen klip blev genlinket',
+      lines,
+    };
+  }
+
   function hasResolvePassthrough(apps) {
     return (apps || []).some((app) => String(app).toLowerCase() === 'resolve.exe');
   }
@@ -801,7 +954,8 @@
   const helpers = {
     itemVisual, isFolder, openAction, formatInt, plural, formatBytes, formatDay, relativeTime,
     modifiedText, highlightParts, itemLocation, sourceBadge, itemOnline, offlineHint, offlineSince,
-    visibleScans, statusPill, zeroResultReasons, resolveOfflineWarnings, hasResolvePassthrough,
+    visibleScans, statusPill, zeroResultReasons, resolveOfflineWarnings, relinkEntryText, relinkFileCount, relinkTargets,
+    relinkPicks, relinkButton, relinkBlockedNote, relinkBody, joinNames, relinkPlanFacts, relinkMissing, relinkResultView, hasResolvePassthrough,
     withResolvePassthrough, shouldAskResolveHotkey, typedSince, parseLaunchParams, joinWinPath,
     leafName, footerHint, groupSources, sourceScanState, modeReason, hostShareCount,
     removeHostQuestion, removedHostText, includeOutcome,
@@ -884,6 +1038,8 @@
     settingsOpen: false, settingsTab: 'placeringer', hotkeyDirty: false, confirmForget: null, confirmTimer: 0,
     confirmHost: null, hostRefusal: null, removingHost: null, revealExcluded: false,
     resolveExpanded: false, resolveAnimate: false, resolveBusy: false,
+    // Find and relink offline clips (§22.2); phase: loading | plan | error | relinking | done
+    relink: { open: false, phase: null, plan: null, picks: [], result: null, error: null, seq: 0, animate: false },
     apiReachable: true, eventsDownSince: null, eventSource: null, sseAttempt: 0, sseTimer: 0, sseNeedsResync: false,
     opening: false, menu: null, toastTimer: 0, announceTimer: 0, locationSignature: '', emptySignature: '',
     locationKeyAt: 0, locationPointer: false, firstPaint: null, renderToken: 0,
@@ -1819,7 +1975,11 @@
     const before = state.resolve;
     if (JSON.stringify(before) === JSON.stringify(rs || null)) return; // nothing new: keep the bar still
     state.resolve = rs || null;
-    renderResolve();
+    if (state.relink.open && !resolveProject()) {
+      closeRelink(); // Resolve is gone or has no project: the panel's plan means nothing now
+    } else {
+      renderResolve();
+    }
     renderSettingControls();
     if (state.view.mode !== 'recent') return;
     const id = (value) => (value && value.primary ? `${value.primary.id}:${value.primary.match}` : '');
@@ -1884,20 +2044,198 @@
     }
     const parts = [h('div', { class: 'resolve__main' },
       h('span', { class: 'resolve__logo', 'aria-hidden': 'true' }, svgIcon('resolve')), text, actions)];
-    for (const warning of resolveOfflineWarnings(rs)) {
-      parts.push(h('div', { class: 'resolve__warn' }, svgIcon('warn'), h('span', null, warning)));
+    // §22.2: "6 klip er offline i Resolve [Find og genlink …]"; the lines saying where they lie
+    // follow underneath it.
+    const entry = relinkEntryText(rs);
+    if (entry) {
+      parts.push(h('div', { class: 'resolve__offline' }, svgIcon('warn'), h('span', { class: 'resolve__offline-text' }, entry),
+        relinkToggle('btn btn--secondary btn--sm', svgIcon('link'), 'Find og genlink …')));
     }
-    if (details && state.resolveExpanded) parts.push(renderResolveDetails(rs));
+    for (const warning of resolveOfflineWarnings(rs)) {
+      parts.push(h('div', { class: entry ? 'resolve__warn is-sub' : 'resolve__warn' }, entry ? null : svgIcon('warn'),
+        h('span', null, warning)));
+    }
+    if (rs.connected && state.relink.open) parts.push(renderRelinkPanel(rs));
+    if (details && state.resolveExpanded) parts.push(renderResolveDetails(rs, !entry));
+    const groupsScroll = node.querySelector('.rl__groups')?.scrollTop || 0;
     node.replaceChildren(...parts);
     node.hidden = false;
+    const groups = node.querySelector('.rl__groups');
+    if (groups) groups.scrollTop = groupsScroll;
     if (focused) {
-      const target = node.querySelector(`[data-resolve="${focused}"]`);
+      let target = node.querySelector(`[data-resolve="${focused}"]`);
+      // A panel control that is gone or off now (a relink started or ended): stay in the panel.
+      if ((!target || target.disabled) && focused.startsWith('relink-')) target = node.querySelector('[data-resolve="relink-close"]');
       if (target && !target.disabled) target.focus();
       else focusSearch(true);
     }
   }
 
-  function renderResolveDetails(rs) {
+  /** The button that opens (and closes) the relink panel. */
+  function relinkToggle(className, ...label) {
+    return h('button', {
+      type: 'button', class: className, dataset: { resolve: 'relink-open' },
+      'aria-expanded': String(state.relink.open), 'aria-controls': 'resolve-relink',
+      title: 'Find de offline klip i indekset og genlink dem i Resolve',
+    }, ...label);
+  }
+
+  /** The relink panel (§22.2): one row per old folder, the clips not found, [Genlink N klip]. */
+  function renderRelinkPanel(rs) {
+    const r = state.relink;
+    const box = h('div', {
+      class: r.animate ? 'resolve__relink is-entering' : 'resolve__relink', id: 'resolve-relink',
+      role: 'region', 'aria-label': 'Find og genlink offline klip',
+    });
+    r.animate = false;
+    const working = r.phase === 'loading' || r.phase === 'relinking';
+    box.append(h('div', { class: 'rl__head' },
+      h('span', { class: 'rl__title' }, 'Find og genlink offline klip'),
+      h('span', { class: 'rl__facts' }, r.plan && r.phase !== 'done' ? relinkPlanFacts(r.plan) : ''),
+      h('button', {
+        type: 'button', class: 'btn btn--ghost btn--sm', dataset: { resolve: 'relink-scan' }, disabled: working,
+        title: 'Spørg Resolve igen, hvilke klip der er offline',
+      }, svgIcon('refresh'), 'Søg igen'),
+      h('button', {
+        type: 'button', class: 'btn btn--ghost btn--icon btn--sm', dataset: { resolve: 'relink-close' },
+        title: 'Luk', 'aria-label': 'Luk',
+      }, svgIcon('close'))));
+    if (r.phase === 'loading') {
+      box.append(h('div', { class: 'rl__busy', role: 'status' }, svgIcon('refresh'),
+        'Spørger Resolve om offline klip og leder efter dem i indekset …'));
+      return box;
+    }
+    if (r.phase === 'error') {
+      box.append(h('div', { class: 'rl__note' }, svgIcon('warn'), h('span', null, r.error)));
+      return box;
+    }
+    if (r.phase === 'done') {
+      const view = relinkResultView(r.result);
+      box.append(h('div', { class: 'rl__result', dataset: { tone: view.tone }, role: 'status' },
+        svgIcon(view.tone === 'warn' ? 'warn' : 'check'),
+        h('div', { class: 'rl__result-text' }, h('div', { class: 'rl__result-title' }, view.title),
+          view.lines.map((line) => h('div', { class: 'rl__result-line' }, line)))));
+      return box;
+    }
+    const plan = r.plan || {};
+    const blockedNote = relinkBlockedNote(plan.blocked);
+    if (blockedNote) box.append(h('div', { class: 'rl__note' }, svgIcon('warn'), h('span', null, blockedNote)));
+    const groups = plan.groups || [];
+    if (groups.length) {
+      box.append(h('div', { class: 'rl__groups' },
+        groups.map((group, i) => relinkGroupRow(group, i, r.picks[i] || { on: false, to: null }, working))));
+    }
+    const missing = relinkMissing(plan.not_found);
+    if (missing) {
+      const paths = (plan.not_found || []).slice(0, 20).map((clip) => clip.old_path || clip.name).join('\n');
+      box.append(h('div', { class: 'rl__missing', title: paths },
+        h('strong', null, missing.title), ' i indekset: ', missing.names));
+    }
+    if (!groups.length) {
+      if (!missing) box.append(h('div', { class: 'rl__empty' }, svgIcon('check'), 'Resolve melder ingen offline klip i projektet.'));
+      return box;
+    }
+    const button = relinkButton(plan, r.picks, resolveProjectOf(rs));
+    box.append(h('div', { class: 'rl__foot' },
+      h('button', {
+        type: 'button', class: working ? 'btn btn--primary btn--sm is-busy' : 'btn btn--primary btn--sm',
+        dataset: { resolve: 'relink-go' }, disabled: working || button.disabled,
+        // blocked when the plan was made: Projektsøg asks again on the click (and says so if it still is)
+        title: button.reason || (blockedNote ? 'Projektsøg tjekker igen, når du klikker' : null),
+      }, svgIcon(working ? 'refresh' : 'link'), working ? 'Genlinker …' : button.text),
+      button.reason ? h('span', { class: 'rl__reason' }, button.reason) : null,
+      h('span', { class: 'rl__hint' }, 'Kun stierne i Resolve-projektet ændres – ingen filer flyttes.')));
+    return box;
+  }
+
+  /** "☑ 12 klip fra H:\…\Klip\A7S  →  D:\…\Klip\A7S" – a choice when there is more than one folder. */
+  function relinkGroupRow(group, index, pick, working) {
+    const targets = relinkTargets(group);
+    const clips = (group.clips || []).length;
+    const id = `rl-pick-${index}`;
+    let target;
+    if (targets.length > 1) {
+      target = h('label', { class: 'select select--sm rl__select' },
+        h('select', { dataset: { resolve: `relink-to-${index}` }, disabled: working, 'aria-label': `Ny mappe til ${clips} klip fra ${group.from}` },
+          targets.map((t) => h('option', { value: t.to, selected: samePath(t.to, pick.to) }, t.label))),
+        svgIcon('chevron-down', 'select__chevron'));
+    } else if (targets.length) {
+      target = h('span', { class: targets[0].online ? 'rl__path' : 'rl__path is-offline', title: targets[0].to }, targets[0].label);
+    } else {
+      target = h('span', { class: 'rl__path is-offline' }, 'Ingen mappe fundet');
+    }
+    return h('div', { class: pick.on ? 'rl__group is-on' : 'rl__group' },
+      h('input', {
+        type: 'checkbox', class: 'rl__check', id, checked: Boolean(pick.on), disabled: working || !targets.length,
+        dataset: { resolve: `relink-pick-${index}` },
+      }),
+      h('label', { class: 'rl__from', for: id, title: group.from },
+        h('strong', null, `${formatInt(clips)} klip`), ' fra ', h('span', { class: 'rl__path' }, group.from)),
+      h('div', { class: 'rl__to' }, svgIcon('arrow-right'), target,
+        group.auto ? h('span', { class: 'tag tag--accent', title: 'Én mappe har dem alle' }, 'Alle fundet') : null));
+  }
+
+  async function openRelink() {
+    state.relink.open = true;
+    state.relink.animate = true;
+    await scanRelink();
+  }
+
+  function closeRelink() {
+    state.relink = { open: false, phase: null, plan: null, picks: [], result: null, error: null,
+      seq: state.relink.seq + 1, animate: false };
+    renderResolve();
+  }
+
+  /** POST /api/resolve/offline: ask Resolve which clips are offline and where the index has them. */
+  async function scanRelink() {
+    const r = state.relink;
+    const seq = ++r.seq;
+    Object.assign(r, { phase: 'loading', plan: null, picks: [], result: null, error: null });
+    renderResolve();
+    try {
+      const plan = await api.post('/api/resolve/offline');
+      if (seq !== state.relink.seq) return;
+      Object.assign(r, { phase: 'plan', plan, picks: relinkPicks(plan) });
+    } catch (err) {
+      if (seq !== state.relink.seq) return;
+      Object.assign(r, { phase: 'error', error: err.message });
+    }
+    renderResolve();
+  }
+
+  function setRelinkPick(index, change) {
+    const r = state.relink;
+    if (r.phase !== 'plan' || !r.picks[index]) return;
+    Object.assign(r.picks[index], change);
+    renderResolve();
+  }
+
+  /** [Genlink N klip]: POST /api/resolve/relink, say what happened, read the project again. */
+  async function runRelink() {
+    const r = state.relink;
+    if (r.phase !== 'plan' || relinkButton(r.plan, r.picks, resolveProject()).disabled) return;
+    const seq = ++r.seq;
+    r.phase = 'relinking';
+    renderResolve();
+    let result;
+    try {
+      result = await api.post('/api/resolve/relink', relinkBody(r.plan, r.picks));
+    } catch (err) {
+      result = { error: err.message };
+    }
+    const view = relinkResultView(result || {});
+    if (seq === state.relink.seq) {
+      Object.assign(r, { phase: 'done', result: result || {} });
+      renderResolve();
+      announce(view.title);
+    } else {
+      toast(view.title, view.tone === 'ok' ? 'ok' : 'warn'); // the panel was closed meanwhile
+    }
+    if (!(result && result.error)) refreshResolve();
+  }
+
+  function renderResolveDetails(rs, withRelink) {
     const box = h('div', { class: state.resolveAnimate ? 'resolve__details is-entering' : 'resolve__details', id: 'resolve-details' });
     state.resolveAnimate = false;
     const folders = rs.folders || [];
@@ -1920,7 +2258,10 @@
     const foot = [];
     if (rs.database) foot.push(`Database: ${rs.database}`);
     if (rs.updated) foot.push(`læst ${relativeTime(rs.updated)}`);
-    if (foot.length) box.append(h('div', { class: 'rd__foot' }, foot.join(' · ')));
+    // Resolve can miss clips the index has online (a disk at another letter, a moved folder):
+    // the relink panel is always one click away, not only after the offline warning.
+    const relink = withRelink && rs.clip_count > 0 ? relinkToggle('link rd__relink', 'Find offline klip …') : null;
+    if (foot.length || relink) box.append(h('div', { class: 'rd__foot' }, h('span', null, foot.join(' · ')), relink));
     return box;
   }
 
@@ -3731,6 +4072,7 @@
     state.refreshPending = false;
     closeSettings({ focus: false });
     closeMenu();
+    if (state.relink.open && state.relink.phase !== 'relinking') closeRelink(); // no stale relink plan
     renderFilters();
     renderFooter();
     runView('query');
@@ -3844,6 +4186,11 @@
   function onEscape(repeat) {
     if (state.settingsOpen) {
       closeSettings();
+      return;
+    }
+    if (state.relink.open && el.resolve.contains(document.activeElement)) {
+      closeRelink();
+      focusSearch(true);
       return;
     }
     if (el.input.value) {
@@ -3985,7 +4332,7 @@
 
     el.resolve.addEventListener('click', (event) => {
       const button = event.target.closest('[data-resolve]');
-      if (!button) return;
+      if (!button || button.matches('input, select')) return; // the relink panel's ticks and choices: 'change'
       byPointer(event);
       const op = button.dataset.resolve;
       if (op === 'open') openResolvePrimary();
@@ -3995,6 +4342,19 @@
         state.resolveAnimate = state.resolveExpanded;
         renderResolve();
       } else if (op === 'folder') openResolveEntry(button.dataset.list, Number(button.dataset.index));
+      else if (op === 'relink-open') {
+        if (state.relink.open) closeRelink();
+        else openRelink();
+      } else if (op === 'relink-scan') scanRelink();
+      else if (op === 'relink-close') closeRelink();
+      else if (op === 'relink-go') runRelink();
+    });
+    el.resolve.addEventListener('change', (event) => {
+      const match = /^relink-(pick|to)-(\d+)$/.exec(event.target.dataset.resolve || '');
+      if (!match) return;
+      const index = Number(match[2]);
+      // Choosing another folder also ticks the row: that is what the user means to relink.
+      setRelinkPick(index, match[1] === 'pick' ? { on: event.target.checked } : { to: event.target.value, on: true });
     });
 
     for (const tab of el.tabs) tab.addEventListener('click', () => showTab(tab.dataset.tab, { focus: true }));

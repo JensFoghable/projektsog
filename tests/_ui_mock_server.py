@@ -23,12 +23,17 @@ from ``--scenario`` / the ``PROJEKTSOG_UI_MOCK`` environment variable:
     resolve-off         Resolve is not running
     resolve-disabled    Resolve integration switched off
     resolve-empty       "Untitled Project" without clips
+    relink-blocked      the relink plan (§22.2) is blocked: a Claude session builds in Resolve
+                        (and still does when Genlink is clicked: the relink is refused)
+    relink-was-blocked  the plan is blocked as above, but the session is done by the click
+    relink-none         Resolve reports no offline clips (an empty relink plan)
     time-idle           time tracking pauses: no input for longer than the idle limit
     time-paused         time tracking pauses: Resolve is not in front
     time-away           in another program for 3 min: still counting (if back within 10 min)
     card                an FX9 camera card is in E: (import helper, MockImporter)
     card2               … and an A7S card in G: whose clips are imported already
     import-fail         an import stops half-way ("Kortet blev taget ud …")
+    no-festkat          the party cat's GIF cannot be had (``GET /api/festkat`` → 400)
 
 Time tracking (/api/time…) is a real ``TimeTracker`` over an in-memory store with the fixed
 segments of ``TIME_SEGMENTS`` (today, yesterday and 40 days ago); it records "Color" on Rikke
@@ -60,6 +65,13 @@ Messages and the robot crew (§19, §21): a published ``messages`` event is what
 ``POST /api/bygger/demo {opkald}`` (400 while Klippe is off): ``opkald`` true rings the demo call
 (it stops ringing after ``RING_S``; its "Byg nu" starts the demo build), false starts a fake
 ``DEMO_S`` demo build that ends with ``faerdig``. ``robot`` events only come from tests.
+
+Renders, office Klippes and the delivery party (§22): a published ``render`` event is the bridge's
+render state (``GET /api/render``); ``GET /api/kontor`` lists one colleague's Klippe while Klippe
+and ``widget_kontor`` are on; ``POST /api/kontor/demo`` publishes a made-up ``besoeg`` and
+``POST /api/levering/demo`` a demo ``levering`` (both 400 while Klippe is off). ``GET /api/festkat``
+serves ``backend.festkat`` – a tiny generated stand-in (:func:`festkat_test_gif`) unless a test
+or a manual session sets other bytes.
 """
 
 from __future__ import annotations
@@ -121,6 +133,72 @@ DEMO_CALL: dict[str, Any] = {"tag": "demo:opkald", "titel": "🎬 Demo vil bruge
                              "tekst": "Robotterne vil vise, hvad de kan (ca. 1 min).",
                              "knapper": [{"tekst": "Byg nu", "uri": "projektsog:demo"}], "session": "Demo",
                              "lyd": True, "visning": "kort", "prioritet": "normal"}
+# Renders, office Klippes and the delivery party (SPEC §22.1, §22.3, §22.4), like resolve_bridge.py,
+# kontor.py and levering.py.
+RENDER_IDLE: dict[str, Any] = {"aktiv": False, "pct": None, "eta_s": None, "navn": None, "tidslinje": None,
+                               "projekt": None, "af_claude": None, "faerdig": None}
+KONTOR_PEERS: tuple[dict[str, Any], ...] = ({"pc": "KLIPPER-PC", "navn": "Bobby", "stage": "junior"},)
+DEMO_VISIT: dict[str, Any] = {
+    "type": "trofae", "pc": "KLIPPER-PC", "navn": "Bobby", "stage": "junior", "outfit": "none",
+    "pynt": {"farve": "bordeaux", "striber": "zebra", "hat": "festhat", "briller": "ingen-briller",
+             "mund": "slikkepind", "haand": "kaffe", "aura": "ingen-aura"},
+    "trofae": {"kind": "trofae", "id": "durumkongen", "name": "Durumkongen", "rarity": "sjælden"}}
+DEMO_DELIVERY: dict[str, Any] = {"kilde": "render", "fil": "Demo_levering.mp4", "projekt": "Demo", "sti": None,
+                                 "demo": True}
+
+
+def festkat_test_gif() -> bytes:
+    """A stand-in for the party cat (``GET /api/festkat``; the real GIF is never in the repo): four
+    48×48 frames, a grey cat-ish blob with a light belly on a green screen and a soft green edge,
+    0.1 s each – so the widget's keying and its "any other GIF" frame plan get exercised."""
+    size = 48
+    palette = [(0, 255, 0), (70, 64, 58), (215, 205, 190), (120, 160, 110)]
+    frames = []
+    for n in range(4):
+        cx, cy = 20 + 2 * n, 26
+        pixels = []
+        for y in range(size):
+            for x in range(size):
+                d = ((x - cx) / 13) ** 2 + ((y - cy) / 9) ** 2
+                pixels.append(2 if d < 0.25 else 1 if d < 0.8 else 3 if d < 1.0 else 0)
+        frames.append(pixels)
+    return _gif(size, size, palette, frames, delay_cs=10)
+
+
+def _gif(width: int, height: int, palette: list[tuple[int, int, int]], frames: list[list[int]],
+         delay_cs: int) -> bytes:
+    """A minimal GIF89a: a 256-colour global table, looping, each frame a full-size image whose
+    LZW stream is only literals (a clear code every 200 pixels keeps the codes 9 bits wide)."""
+    out = bytearray(b"GIF89a")
+    out += width.to_bytes(2, "little") + height.to_bytes(2, "little") + bytes((0xF7, 0, 0))
+    for r, g, b in [*palette, *[(0, 0, 0)] * (256 - len(palette))]:
+        out += bytes((r, g, b))
+    out += b"\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00"
+    for pixels in frames:
+        out += b"\x21\xf9\x04\x04" + delay_cs.to_bytes(2, "little") + b"\x00\x00"
+        out += b"\x2c" + bytes(4) + width.to_bytes(2, "little") + height.to_bytes(2, "little") + b"\x00"
+        codes: list[int] = []
+        for i in range(0, len(pixels), 200):
+            codes += [256, *pixels[i:i + 200]]
+        codes.append(257)
+        data = bytearray()
+        acc = bits = 0
+        for code in codes:
+            acc |= code << bits
+            bits += 9
+            while bits >= 8:
+                data.append(acc & 0xFF)
+                acc >>= 8
+                bits -= 8
+        if bits:
+            data.append(acc & 0xFF)
+        out.append(8)
+        for i in range(0, len(data), 255):
+            chunk = data[i:i + 255]
+            out += bytes((len(chunk),)) + chunk
+        out.append(0)
+    out.append(0x3B)
+    return bytes(out)
 
 
 # --------------------------------------------------------------------------------------
@@ -460,6 +538,9 @@ class MockBackend:
         self.messages: list[dict[str, Any]] = []
         self.bygger: dict[str, Any] = dict(BYGGER_IDLE)
         self._build_generation = 0
+        # Renders (§22.1) and the party cat (§22.4): see the module docstring.
+        self.render: dict[str, Any] = dict(RENDER_IDLE)
+        self.festkat: bytes | None = festkat_test_gif()
 
     def next_id(self) -> int:
         self._next_id += 1
@@ -759,6 +840,87 @@ class MockBackend:
         return {"project": folder["project"], "source": folder["source"],
                 "online": folder["online"], "score": score, "item": folder["item"]}
 
+    # -- offline media: find and relink (SPEC §22.2) -----------------------------------
+    def relink_plan(self, flags: frozenset[str]) -> dict[str, Any]:
+        """``POST /api/resolve/offline``: a sure group (FX9 clips found where the project lives
+        now), one with a choice (graphics found in three places, one on the unplugged disk), a
+        sure one whose folder is on the unplugged disk, and two clips found nowhere. Each target
+        holds the first ``holds`` clips of its group (``relink`` relinks those)."""
+        state = self.resolve_state(flags)
+        if not state["connected"] or not state["project"]:
+            raise ValueError("Der er ikke åbnet et projekt i DaVinci Resolve")
+        plan: dict[str, Any] = {"project": state["project"], "database": state["database"],
+                                "uid": "u-" + re.sub(r"[^a-z0-9]+", "-", textutil.fold(state["project"])).strip("-"),
+                                "scanned": state["clip_count"], "truncated": False, "groups": [],
+                                "not_found": [], "blocked": None}
+        if "relink-blocked" in flags or "relink-was-blocked" in flags:
+            plan["blocked"] = "Claude bygger i Resolve lige nu – genlink, når den er færdig"
+        if "relink-none" in flags:
+            return plan
+        uids = iter(f"clip-{n:03d}" for n in range(1, 100))
+
+        def clips(folder: str, names: list[str]) -> list[dict[str, Any]]:
+            return [{"uid": next(uids), "name": name, "old_path": f"{folder}\\{name}"} for name in names]
+
+        def target(path: str, online: bool, holds: int) -> dict[str, Any]:
+            return {"to": path, "to_display": path, "online": online, "holds": holds}
+
+        def group(old: str, names: list[str], targets: list[dict[str, Any]], auto: bool) -> dict[str, Any]:
+            best = targets[0]
+            return {"from": old, "to": best["to"], "to_display": best["to_display"], "online": best["online"],
+                    "clips": clips(old, names), "auto": auto, "alternatives": [] if auto else targets}
+
+        fx9 = [f"FX9_{n:04d}.MXF" for n in range(7905, 7917)]
+        grafik = ["Titel.psd", "Lower third.png", "Pixelbro bumper.mov", "Logo animation.mov"]
+        plan["groups"] = [
+            group("D:\\Rikke Lindholm\\Klip\\FX9", fx9,
+                  [target("C:\\Kunder 2026 (STUDIO)\\Rikke Lindholm\\Klip\\FX9", True, 12)], True),
+            group("H:\\2024 Disk Sølv\\Pixelbro Radio\\Grafik", grafik,
+                  [target("\\\\GRAFIK-PC\\Kunder 2026 (Grafik)\\Pixelbro Podcast\\Grafik", True, 3),
+                   target("D:\\Forår 2026 RØD\\Pixelbro\\Grafik", True, 2),
+                   target("H:\\2024 Disk Sølv\\Pixelbro Radio\\Grafik", False, 4)], False),
+            group("E:\\Speak", ["Speak take 1.wav", "Speak take 2.wav"],
+                  [target("H:\\2024 Disk Sølv\\Pixelbro Radio\\Speak", False, 2)], True),
+        ]
+        plan["not_found"] = [*clips("C:\\Users\\Klipper\\Downloads", ["Musik udkast 3.wav"]),
+                             *clips("G:\\Optagelser", ["Interview B-cam.mov"])]
+        return plan
+
+    def relink(self, body: Any, flags: frozenset[str]) -> dict[str, Any]:
+        """``POST /api/resolve/relink {uid, groups: [{to, uids}]}`` against ``relink_plan``, with
+        the bridge's answers: ``still_offline`` counts every clip of the plan not relinked."""
+        if not isinstance(body, dict) or not isinstance(body.get("groups"), list):
+            raise ValueError("Ugyldig forespørgsel")
+        plan = self.relink_plan(flags)
+        total = sum(len(g["clips"]) for g in plan["groups"]) + len(plan["not_found"])
+        result: dict[str, Any] = {"relinked": 0, "still_offline": total, "failed": [], "error": None}
+        if body.get("uid") != plan["uid"]:
+            return {**result, "error": "Projektet i DaVinci Resolve er skiftet – find de offline klip igen"}
+        if plan["blocked"] and "relink-was-blocked" not in flags:   # the bridge checks again
+            return {**result, "error": plan["blocked"]}
+        known = {clip["uid"]: (index, clip, g) for g in plan["groups"] for index, clip in enumerate(g["clips"])}
+        for entry in body["groups"]:
+            to = str((entry or {}).get("to") or "").casefold()
+            for uid in (entry or {}).get("uids") or []:
+                index, clip, g = known.get(uid, (0, {"name": uid}, None))
+                targets = (g["alternatives"] or [{"to": g["to"], "online": g["online"], "holds": len(g["clips"])}]) if g else []
+                chosen = next((t for t in targets if t["to"].casefold() == to), None)
+                why = None
+                if g is None:
+                    why = "Klippet var ikke med i listen – find de offline klip igen"
+                elif chosen is None:
+                    why = "Mappen var ikke foreslået til klippet"
+                elif not chosen["online"]:
+                    why = "Mappen kan ikke læses"
+                elif index >= chosen["holds"]:
+                    why = f"Filen ‘{clip['name']}’ ligger ikke i mappen"
+                if why:
+                    result["failed"].append({"uid": uid, "name": clip["name"], "why": why})
+                else:
+                    result["relinked"] += 1
+        result["still_offline"] = total - result["relinked"]
+        return result
+
     def open_path(self, path: str, action: str, flags: frozenset[str]) -> dict[str, Any]:
         if action not in ("folder", "reveal", "file"):
             raise ValueError("Ukendt handling")
@@ -1010,6 +1172,41 @@ class MockBackend:
             done = {**self.bygger, "aktiv": False, "faerdig": True, "varighed_s": int(DEMO_S)}
             self.bygger = dict(BYGGER_IDLE)
         self.bus.publish("bygger", done)
+
+    # -- renders, office Klippes and the delivery party (SPEC §22) -----------------------------
+    def render_state(self) -> dict[str, Any]:
+        with self.lock:
+            return dict(self.render)
+
+    def set_render(self, data: Any) -> None:
+        """Test control: a published ``render`` event is the bridge's render state now."""
+        if isinstance(data, dict):
+            with self.lock:
+                self.render = {**RENDER_IDLE, **data}
+
+    def kontor_state(self) -> dict[str, Any]:
+        """``GET /api/kontor``: the colleagues' Klippes seen lately (while Klippe and the office are on)."""
+        with self.lock:
+            enabled = bool(self.settings["widget_enabled"] and self.settings["widget_kontor"])
+        now = time.time()
+        return {"enabled": enabled, "peers": [{**p, "sidst": now - 40} for p in KONTOR_PEERS] if enabled else []}
+
+    def kontor_demo(self) -> dict[str, Any]:
+        """``POST /api/kontor/demo``: a made-up visit (SSE ``besoeg``; 400 while Klippe is off)."""
+        with self.lock:
+            if not self.settings["widget_enabled"]:
+                raise ValueError("Slå Klippe til først")
+        event = json.loads(json.dumps(DEMO_VISIT))
+        self.bus.publish("besoeg", event)
+        return {"ok": True, "besoeg": event}
+
+    def levering_demo(self) -> dict[str, Any]:
+        """``POST /api/levering/demo``: the delivery party for show (400 while Klippe is off)."""
+        with self.lock:
+            if not self.settings["widget_enabled"]:
+                raise ValueError("Slå Klippe til først")
+        self.bus.publish("levering", dict(DEMO_DELIVERY))
+        return {"ok": True}
 
     def set_mode(self, source_id: int, mode: str, flags: frozenset[str]) -> dict[str, Any]:
         if mode not in ("auto", "include", "exclude"):
@@ -1551,6 +1748,16 @@ class MockHandler(BaseHTTPRequestHandler):
             self._json(backend.messages_payload())
         elif route == "/api/bygger":
             self._json(backend.build_state())
+        elif route == "/api/render":
+            self._json(backend.render_state())
+        elif route == "/api/kontor":
+            self._json(backend.kontor_state())
+        elif route == "/api/festkat":
+            with backend.lock:
+                gif = None if "no-festkat" in flags else backend.festkat
+            if gif is None:
+                raise ValueError("Festkatten kunne ikke hentes")
+            self._send(200, gif, "image/gif")
         elif route == "/api/pet":
             self._json(backend.pet_trophies())
         elif route == "/api/pet/mad":
@@ -1617,6 +1824,12 @@ class MockHandler(BaseHTTPRequestHandler):
             else:
                 result = backend.open_path(primary["path"], "folder", flags)
                 self._json({"ok": result["ok"], "path": primary["path"], "error": result.get("error")})
+        elif (method, route) == ("POST", "/api/resolve/offline"):  # §22.2: asks Resolve, then the index
+            self._delay(flags, 0.3)
+            self._json(backend.relink_plan(flags))
+        elif (method, route) == ("POST", "/api/resolve/relink"):
+            self._delay(flags, 0.3)
+            self._json(backend.relink(body, flags))
         elif (method, route) == ("POST", "/api/settings"):
             backend.update_settings(body)
             self._json({"settings": backend.settings_payload(flags)})
@@ -1644,6 +1857,10 @@ class MockHandler(BaseHTTPRequestHandler):
             self._json(backend.answer_call(body.get("tag")))
         elif (method, route) == ("POST", "/api/bygger/demo"):
             self._json(backend.build_demo(bool(body.get("opkald"))))
+        elif (method, route) == ("POST", "/api/kontor/demo"):
+            self._json(backend.kontor_demo())
+        elif (method, route) == ("POST", "/api/levering/demo"):
+            self._json(backend.levering_demo())
         elif (method, route) == ("POST", "/api/update/check"):
             self._json(backend.update_check())
         elif (method, route) == ("POST", "/api/update/install"):
@@ -1661,6 +1878,8 @@ class MockHandler(BaseHTTPRequestHandler):
                 backend.set_messages(body.get("data"))
             elif body.get("type") == "bygger":
                 backend.set_build(body.get("data"))
+            elif body.get("type") == "render":
+                backend.set_render(body.get("data"))
             elif body.get("type") == "pet_look":      # what Klippe wears now, as /api/pet says too
                 equipped = (body.get("data") or {}).get("equipped")
                 if isinstance(equipped, dict):

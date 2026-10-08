@@ -41,6 +41,8 @@ if TYPE_CHECKING:
     from .importer import Importer
     from .achievements import PetProgress
     from .crew import Crew
+    from .kontor import Kontor
+    from .levering import Levering
     from .updater import Updater
     from .messages import MessageBoard
     from .petplay import PetPlay
@@ -138,6 +140,8 @@ class Server:
         self.progress: "PetProgress | None" = None
         self.updater: "Updater | None" = None
         self.crew: "Crew | None" = None           # the robot crew (SPEC §21), with the widget
+        self.kontor: "Kontor | None" = None       # office Klippes (SPEC §22.3)
+        self.levering: "Levering | None" = None   # the delivery party (SPEC §22.4)
         self.web_dir = web_dir or os.path.join(package_dir, "web")
         self.assets_dir = assets_dir or os.path.join(package_dir, "assets")
         self.sse_heartbeat_s = sse_heartbeat_s
@@ -267,6 +271,13 @@ class Server:
             ("GET", r"/api/resolve", self._resolve_state),
             ("POST", r"/api/resolve/refresh", self._resolve_refresh),
             ("POST", r"/api/resolve/open", self._resolve_open),
+            ("POST", r"/api/resolve/offline", self._resolve_offline),
+            ("POST", r"/api/resolve/relink", self._resolve_relink),
+            ("GET", r"/api/render", self._render_state),
+            ("GET", r"/api/kontor", self._kontor_state),
+            ("POST", r"/api/kontor/demo", self._kontor_demo),
+            ("POST", r"/api/levering/demo", self._levering_demo),
+            ("GET", r"/api/festkat", self._festkat),
             ("GET", r"/api/settings", self._get_settings),
             ("POST", r"/api/settings", self._post_settings),
             ("POST", r"/api/window/hide", self._window_hide),
@@ -518,6 +529,41 @@ class Server:
         if not isinstance(call, bool):
             raise ValueError("Ugyldig værdi: opkald")
         return self._crew().demo(call)
+
+    # -- renders, offline media, office Klippes, the delivery party (SPEC §22) -----------------
+    def _resolve_offline(self, req: _Request) -> Any:
+        return self.bridge.offline_plan()
+
+    def _resolve_relink(self, req: _Request) -> Any:
+        return self.bridge.relink(req.body)
+
+    def _render_state(self, req: _Request) -> Any:
+        return self.bridge.render_state()
+
+    def _kontor(self) -> "Kontor":
+        if self.kontor is None:
+            raise ValueError("Kontor-Klipperne er ikke startet")
+        return self.kontor
+
+    def _kontor_state(self, req: _Request) -> Any:
+        return self._kontor().state()
+
+    def _kontor_demo(self, req: _Request) -> Any:
+        return self._kontor().demo()
+
+    def _levering_helper(self) -> "Levering":
+        if self.levering is None:
+            raise ValueError("Leveringsfesten er ikke startet")
+        return self.levering
+
+    def _levering_demo(self, req: _Request) -> Any:
+        return self._levering_helper().demo()
+
+    def _festkat(self, req: _Request) -> Any:
+        data = self._levering_helper().festkat()
+        if data is None:
+            raise ValueError("Festkatten kunne ikke hentes")
+        return _FileResponse(data, "image/gif", "festkat.gif")
 
     def _get_settings(self, req: _Request) -> Any:
         return self._settings_payload()

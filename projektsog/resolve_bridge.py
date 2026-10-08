@@ -23,6 +23,20 @@
   timed stat. (The script itself first checks that the state maps its current media pool.)
 * Follow mode (``resolve_follow``) notifies and optionally opens the folder once the user has
   settled on a project.
+* Renders (SPEC §22.1): while Resolve renders, the polls also read the render queue (the jobs
+  seen Rendering/Ready; a full scan on the rising edge) and the progress is published as
+  ``render`` (``render_state()``). A watched job that ends - Complete, Failed, Cancelled or gone
+  from the queue - sets ``faerdig`` (with a new ``seq``); a done job's folder is rescanned.
+* Offline media (SPEC §22.2): ``offline_plan()`` lists the media pool's offline clips (in the
+  helper) and ranks the indexed folders that hold their files (``projektsog.relink``);
+  ``relink()`` - on the user's click only - re-lists each chosen folder and lets the helper call
+  ``MediaPool.RelinkClips``, the one writing Resolve call Projektsøg makes: only for clips of
+  that plan, in the project it was made for, never while a Claude session holds Resolve (the
+  queue's holder, ``queue_holder``) or Resolve renders. Those requests run on the Resolve
+  thread like everything else that talks to the helper (``_submit``): one helper request per
+  target folder, its timeout growing with the folder's clips, the gates checked again on a
+  fresh poll before each. A relink that has started is waited for, never answered "busy"; when
+  the helper fails or does not answer during one, the answer says those clips may be relinked.
 
 Published state dicts are never mutated after publication (a new dict is built for every change).
 """
@@ -40,11 +54,12 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable
 
 from .config import DEFAULTS, VALID_RESOLVE_FOLLOW, Config, app_dir
 from .events import EventBus
+from .relink import file_name, make_plan
 
 if TYPE_CHECKING:
     from .indexer import Indexer
@@ -81,6 +96,23 @@ CHILD_WALK_MARGIN_S = 10.0    # walk: WALK_MAX_SECONDS + this
 CHILD_STOP_TIMEOUT_S = 0.5    # then it is killed
 CHILD_BACKOFF_S = (1.0, 2.0, 5.0, 15.0, 30.0, 60.0)   # restart delays after failures in a row
 CHILD_STABLE_S = 60.0         # a helper that ran this long before failing resets the back-off
+# Renders (SPEC §22.1).
+RENDER_RESCAN_S = 10.0        # rendering without a queue job to watch (Quick Export): scan again
+# Offline media (SPEC §22.2).
+OFFLINE_MAX_CLIPS = WALK_MAX_CLIPS
+OFFLINE_MAX_SECONDS = WALK_MAX_SECONDS
+# relink: one helper request per target folder - a fresh walk (≤ WALK_MAX_SECONDS), one
+# RelinkClips (Resolve looks for every file: slow with many clips on a slow share) and a re-read
+# per clip. A helper killed mid-RelinkClips is the worst outcome (Resolve may refuse scripting
+# for a while, and what was relinked is unknown), so: patience - but bounded (_relink_timeout).
+CHILD_RELINK_BASE_S = WALK_MAX_SECONDS + CHILD_WALK_MARGIN_S + 30.0
+CHILD_RELINK_PER_CLIP_S = 0.5
+CHILD_RELINK_MAX_S = 20 * 60.0
+RELINK_JOB_EXTRA_S = 2 * CHILD_CALL_TIMEOUT_S + 10.0   # the job's fresh poll (+ uid re-read)
+SUBMIT_WAIT_S = 2 * CHILD_CALL_TIMEOUT_S           # an HTTP request waits this long for Resolve
+LIST_TIMEOUT_S = 5.0          # re-listing a target folder before relinking
+PLAN_MAX_AGE_S = 30 * 60.0
+MAX_RELINK_UIDS = 50_000
 _CREATE_NO_WINDOW = 0x08000000
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ERROR_FILE_NOT_FOUND = 2
@@ -105,14 +137,67 @@ ERR_OPEN_FAILED = "Mappen kunne ikke åbnes"
 ERR_NOT_RESPONDING = "Placeringen svarer ikke"
 ERR_MISSING = "Findes ikke længere – indekset opdateres"
 ERR_GONE = "Mappen findes ikke længere"   # offline, although its disk/computer is there (§15.12)
+ERR_BUSY = "DaVinci Resolve svarer ikke lige nu – prøv igen om lidt"
+ERR_HOLDER = "{navn} bygger i Resolve lige nu – genlink, når den er færdig"
+ERR_RENDERING = "DaVinci Resolve renderer lige nu – genlink, når renderen er færdig"
+ERR_PROJECT_CHANGED = "Projektet i DaVinci Resolve er skiftet – find de offline klip igen"
+ERR_NO_PLAN = "Find de offline klip først"
+ERR_BAD_RELINK = "Ugyldig forespørgsel"
+# Why a clip was not relinked (``failed[].why``).
+WHY_NOT_IN_PLAN = "Klippet var ikke med i listen – find de offline klip igen"
+WHY_NOT_OFFERED = "Mappen var ikke foreslået til klippet"
+WHY_NO_ANSWER = "Mappen svarer ikke"
+WHY_UNREADABLE = "Mappen kan ikke læses"
+WHY_NO_FILE = "Filen ‘{name}’ ligger ikke i mappen"
+WHY_CHILD = {"not_found": "Klippet er ikke længere i Media Pool",
+             "online": "Klippet er allerede online",
+             "changed": "Klippet peger et andet sted hen nu – find de offline klip igen",
+             "offline": "Klippet er stadig offline efter genlink",
+             "relink_failed": "DaVinci Resolve kunne ikke genlinke klippet"}
+WHY_UNKNOWN = "DaVinci Resolve svarede ikke under genlinkningen – klippet kan være genlinket"
+WHY_RUNNING = "DaVinci Resolve genlinker stadig – klippet kan blive genlinket"
+WHY_WAITING = "Ikke genlinket – DaVinci Resolve var stadig i gang med andre klip"
+# The answer when the outcome of a relink request is not known (``{n}``: clips).
+ERR_RELINK_UNKNOWN = ("DaVinci Resolve svarede ikke under genlinkningen – {n} klip kan være "
+                      "genlinket. Find de offline klip igen for at se, hvordan det gik")
+ERR_RELINK_RUNNING = ("DaVinci Resolve genlinker stadig {n} klip – find de offline klip igen "
+                      "om lidt for at se, hvordan det gik")
+ERR_RELINK_DONE = "{n} klip er genlinket. "      # before the two above, when some are known
 
 
 class ChildError(Exception):
     """The helper process died, hung, was stopped or could not be started."""
 
 
+class _NotSent(ChildError):
+    """A request never reached the helper (it is not running or was stopped)."""
+
+
 class _ResolveUnavailable(Exception):
-    """Resolve stopped answering scripting calls (quit, restarting or busy)."""
+    """Resolve stopped answering scripting calls (quit, restarting or busy). ``code``: the
+    helper's error code, if it answered."""
+
+    def __init__(self, message: str, code: Any = None) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+# Helper error codes of requests that did nothing at all.
+_NOTHING_DONE = frozenset({"not_connected", "bad_request"})
+
+
+class _Interrupted(Exception):
+    """A writing request (relink) reached the helper, which then failed or did not answer in
+    time: it may have done (some of) its work. ``cause``: the ChildError / _ResolveUnavailable
+    the Resolve thread deals with."""
+
+    def __init__(self, cause: Exception) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+
+
+class _StillRunning(ValueError):
+    """``_submit``: the job started on the Resolve thread but has not ended in time."""
 
 
 @dataclass(frozen=True)
@@ -135,6 +220,47 @@ class _Walk:
     rows: dict[Any, tuple] | None         # registry rows the current mapping was made from
     mapped_at: float                      # clock of the last walk or re-map
     depends_on: frozenset[Any] | None = None   # sources whose scans matter (None: all)
+
+
+@dataclass
+class _RenderWatch:
+    """The render queue as the Resolve thread last saw it (SPEC §22.1). A job ends (``faerdig``)
+    only on a change seen while it was watched: Rendering/Ready → Complete/Failed/Cancelled, or
+    Rendering → gone from the queue. Old Complete jobs (the first scan's baseline) never do."""
+
+    key: tuple[str, ...] | None = None    # the project these jobs belong to
+    rendering: bool = False               # IsRenderingInProgress() of the last poll
+    known: dict[str, str] = field(default_factory=dict)          # job id -> last status
+    info: dict[str, dict[str, Any]] = field(default_factory=dict)   # job id -> last report
+    watch: list[str] = field(default_factory=list)   # jobs last seen Rendering/Ready
+    after_fall: bool = False              # one more look at the watched jobs after the render
+    scan_at: float = 0.0                  # rendering, nothing to watch: next scan not before
+    current: dict[str, Any] | None = None   # the job rendering now
+    af_claude: str | None = None          # the queue's holder at the rising edge
+
+
+@dataclass
+class _Job:
+    """A request from another thread, run on the Resolve thread after a poll (``_submit``)."""
+
+    fn: Callable[["_Snapshot"], Any]
+    done: threading.Event = field(default_factory=threading.Event)
+    result: Any = None
+    error: Exception | None = None
+    abandoned: bool = False               # the caller stopped waiting (guarded by _lock)
+    started: bool = False                 # the Resolve thread runs it (guarded by _lock)
+
+
+@dataclass
+class _Plan:
+    """The last offline plan (SPEC §22.2): what ``relink()`` may do."""
+
+    key: tuple[str, ...]                  # project identity: database + name + unique id
+    uid: str
+    clips: dict[str, dict[str, Any]]      # uid -> {"uid", "name", "old_path"}
+    targets: dict[str, set[str]]          # uid -> casefolded folders offered for its group
+    made: float
+    relinked: set[str] = field(default_factory=set)
 
 
 # --------------------------------------------------------------------------------------
@@ -207,7 +333,7 @@ class _ChildProcess:
         data = (json.dumps({"id": request_id, "cmd": cmd, **params}) + "\n").encode("ascii")
         with self._write_lock:
             if self._closed:
-                raise ChildError("the helper was stopped")
+                raise _NotSent("the helper was stopped")
             try:
                 self._proc.stdin.write(data)
                 self._proc.stdin.flush()
@@ -273,7 +399,7 @@ class _InProcessHelper:
 
     def request(self, cmd: str, timeout: float, **params: Any) -> dict[str, Any]:
         if self._closed:
-            raise ChildError("the helper was stopped")
+            raise _NotSent("the helper was stopped")
         self._next_id += 1
         message = json.loads(json.dumps({"id": self._next_id, "cmd": cmd, **params}))
         return json.loads(json.dumps(self._session.handle(message)))
@@ -586,6 +712,106 @@ def _probe_folder(path: str) -> str:
     return "dir" if stat.S_ISDIR(st.st_mode) else "file"
 
 
+# -- renders (SPEC §22.1) ------------------------------------------------------------------
+
+def _idle_render() -> dict[str, Any]:
+    return {"aktiv": False, "pct": None, "eta_s": None, "navn": None, "tidslinje": None,
+            "projekt": None, "af_claude": None, "faerdig": None}
+
+
+def _render_active(status: str | None) -> bool:
+    """Rendering, or waiting in the queue (Ready, Ready for background render …)."""
+    return bool(status) and (status == "Rendering" or status.startswith("Ready"))
+
+
+def _render_outcome(status: str) -> str | None:
+    if status == "Complete":
+        return "done"
+    if status == "Failed":
+        return "failed"
+    if "Cancelled" in status:
+        return "cancelled"
+    return None
+
+
+def _is_delivery(folder: str | None) -> bool:
+    """The output folder has a path part named Final - the project template's delivery folder."""
+    return bool(folder) and any(part.strip().casefold() == "final"
+                                for part in re.split(r"[\\/]+", folder))
+
+
+def _job_number(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _finished(job: dict[str, Any], outcome: str, seq: int) -> dict[str, Any]:
+    """The render state's ``faerdig`` for a job that ended."""
+    folder = _text(job.get("dir")) or None
+    name = _text(job.get("file")) or None
+    single = _text(job.get("mode")).casefold() == "single clip"
+    return {"udfald": outcome, "fil": name,
+            "sti": ntpath.join(folder, name) if single and folder and name else None,
+            "mappe": folder, "levering": _is_delivery(folder),
+            "fejl": (_text(job.get("error")) or None) if outcome == "failed" else None, "seq": seq}
+
+
+# -- offline media (SPEC §22.2) ------------------------------------------------------------
+
+def _relink_request(body: Any) -> tuple[str, list[tuple[str, list[str]]]]:
+    """``(project uid, [(target folder, [clip uid, …]), …])`` of a relink request body."""
+    if not isinstance(body, dict):
+        raise ValueError(ERR_BAD_RELINK)
+    uid = body.get("uid")
+    if uid is None:
+        uid = ""
+    groups = body.get("groups")
+    if not isinstance(uid, str) or not isinstance(groups, list) or not groups:
+        raise ValueError(ERR_BAD_RELINK)
+    out: list[tuple[str, list[str]]] = []
+    total = 0
+    for group in groups:
+        to = group.get("to") if isinstance(group, dict) else None
+        uids = group.get("uids") if isinstance(group, dict) else None
+        if not (isinstance(to, str) and to.strip() and ntpath.isabs(to.strip())
+                and isinstance(uids, list)
+                and all(isinstance(u, str) and u for u in uids)):
+            raise ValueError(ERR_BAD_RELINK)
+        total += len(uids)
+        out.append((to.strip(), list(dict.fromkeys(uids))))
+    if total > MAX_RELINK_UIDS:
+        raise ValueError(ERR_BAD_RELINK)
+    return uid, out
+
+
+def _relink_timeout(clips: int) -> float:
+    """How long the helper may take to relink ``clips`` clips into one folder: a fresh walk,
+    RelinkClips and a re-read per clip - growing with the clips, capped."""
+    return min(CHILD_RELINK_MAX_S, CHILD_RELINK_BASE_S + CHILD_RELINK_PER_CLIP_S * max(0, clips))
+
+
+def _relink_run_s(clips: int) -> float:
+    """How long a started relink job may run on the Resolve thread (its fresh poll included)."""
+    return _relink_timeout(clips) + RELINK_JOB_EXTRA_S
+
+
+_SEQ_NAME_RE = re.compile(r"(.*)\[([0-9]+)-([0-9]+)\]\.([A-Za-z0-9]+)")
+
+
+def _file_there(name: str, listing: set[str]) -> bool:
+    """Is the clip file ``name`` in a folder listing (casefolded names)? An image sequence
+    ``frame_[0001-0100].exr`` is there when its first frame is."""
+    if name.casefold() in listing:
+        return True
+    m = _SEQ_NAME_RE.fullmatch(name)
+    return m is not None and f"{m.group(1)}{m.group(2)}.{m.group(4)}".casefold() in listing
+
+
+def _list_names(folder: str) -> set[str]:
+    """Runs on a call_with_timeout thread: the casefolded names in ``folder``."""
+    with os.scandir(_extended_path(folder)) as entries:
+        return {entry.name.casefold() for entry in entries}
+
+
 # --------------------------------------------------------------------------------------
 # The bridge
 # --------------------------------------------------------------------------------------
@@ -600,7 +826,13 @@ class ResolveBridge:
     ``projektsog.resolve_child`` process), ``connect`` (instead of ``spawn_child``: run the
     helper's request handling in this process with this factory of a stand-in scripting
     object), ``clock`` (monotonic seconds) and ``wall_clock`` (epoch seconds for ``updated``).
+
+    ``queue_holder`` (set by the app to ``KoeWatch.current``): who holds Resolve for a Claude
+    session now (``{"navn", …}``) or None - no relinking then, and a render it starts is
+    ``af_claude``.
     """
+
+    queue_holder: Callable[[], dict[str, Any] | None] | None = None
 
     def __init__(self, cfg: Config, bus: EventBus, indexer: "Indexer", *,
                  process_running: Callable[[str], bool] | None = None,
@@ -644,6 +876,11 @@ class ResolveBridge:
         self._window_shown = False
         self._failed_funcs: set[str] = set()
         self._child: Any = None               # guarded by _lock: stop() may close it
+        self._render: dict[str, Any] = _idle_render()   # guarded by _lock (SPEC §22.1)
+        self._render_seq = 0
+        self._jobs: list[_Job] = []           # guarded by _lock: requests for the Resolve thread
+        self._plan: _Plan | None = None       # guarded by _lock: the last offline plan
+        self.queue_holder = None
 
         # Resolve-thread-only state.
         self._connected = False
@@ -661,6 +898,8 @@ class ResolveBridge:
         self._followed: dict[tuple[str, ...], float] = {}
         self._uid_unreliable = False
         self._registry_failed = False
+        self._poll_answer: dict[str, Any] = {}
+        self._rw = _RenderWatch()
 
         self._cfg_seen = tuple(cfg.get(k) for k in _CFG_KEYS)
         cfg.on_change(self._on_config_change)
@@ -680,6 +919,7 @@ class ResolveBridge:
         with self._cond:
             self._refresh_completed = self._refresh_requested
             self._cond.notify_all()
+        self._fail_jobs(ERR_NOT_CONNECTED)
         child = self._detach_child()   # also ends a request the Resolve thread is waiting on
         if child is not None:
             child.close(CHILD_STOP_TIMEOUT_S)
@@ -791,7 +1031,349 @@ class ResolveBridge:
             opened = False
         return {"ok": opened, "path": path, "error": None if opened else ERR_OPEN_FAILED}
 
+    def render_state(self) -> dict[str, Any]:
+        """The render state (SPEC §22.1; ``GET /api/render``): ``{aktiv, pct, eta_s, navn,
+        tidslinje, projekt, af_claude, faerdig}`` - ``faerdig`` (with its ``seq``) is kept after
+        the render, so a reloaded widget can still celebrate once; ``navn``/``tidslinje``/
+        ``projekt``/``af_claude`` then describe the last render."""
+        with self._lock:
+            return dict(self._render)
+
+    def offline_plan(self) -> dict[str, Any]:
+        """Which clips of the open project are offline and where the index has their files
+        (SPEC §22.2; ``POST /api/resolve/offline``). Raises ValueError (Danish) when Resolve
+        cannot be asked. The plan is kept for ``relink()``; it is never part of the state."""
+        with self._lock:
+            state = dict(self._state)
+        if not (state["connected"] and state["project"]):
+            raise ValueError(_no_primary_reason(state))
+        snap, answer = self._submit(self._offline_job)
+        clips = [c for c in answer.get("clips") or ()
+                 if isinstance(c, dict) and isinstance(c.get("uid"), str) and c["uid"]
+                 and isinstance(c.get("path"), str) and c["path"].strip()]
+        names = sorted({file_name(c["path"]) for c in clips})
+        files: list[dict[str, Any]] = []
+        sources: list[dict[str, Any]] = []
+        try:
+            if names:
+                files = list(self._indexer.find_files(names) or [])
+                sources = list(self._indexer.list_sources() or [])
+        except Exception:
+            log.exception("Looking up the offline clips' files failed")
+        groups, not_found = make_plan(clips, files, sources=sources, project=snap.name)
+        targets: dict[str, set[str]] = {}
+        for group in groups:
+            offered = {group["to"].casefold()} | {a["to"].casefold() for a in group["alternatives"]}
+            for clip in group["clips"]:
+                targets[clip["uid"]] = offered
+        plan = _Plan(snap.key, snap.uid,
+                     {c["uid"]: c for g in groups for c in g["clips"]} | {c["uid"]: c for c in not_found},
+                     targets, self._clock())
+        with self._lock:
+            self._plan = plan
+        log.info("Offline clips in %r: %d (%d clips looked at%s), %d group(s), %d not found",
+                 snap.name, len(clips), _job_number(answer.get("scanned")) or 0,
+                 ", truncated" if answer.get("truncated") else "", len(groups), len(not_found))
+        return {"project": snap.name, "database": snap.database, "uid": snap.uid,
+                "scanned": _job_number(answer.get("scanned")) or 0,
+                "truncated": answer.get("truncated") is True, "groups": groups,
+                "not_found": not_found, "blocked": self._relink_blocked()}
+
+    def relink(self, body: Any) -> dict[str, Any]:
+        """Relink clips of the last offline plan to the folders the user chose (SPEC §22.2;
+        ``POST /api/resolve/relink {uid, groups: [{to, uids}]}``) →
+        ``{relinked, still_offline, failed: [{uid, name, why}], error}``.
+
+        Refused (``error``) while a Claude session holds Resolve or Resolve renders, or when the
+        open project is not the plan's. Each target folder is listed first (with a timeout);
+        clips whose file is not there are not sent to Resolve. Then one helper request per
+        folder, each right after a fresh poll and the gates once more (``_relink_job``); a gate
+        that closes or a Resolve thread that does not get to it stops the folders after it
+        (``failed`` says why). A request that reached the helper is waited for; when its outcome
+        cannot be known (the helper failed or did not answer, or it still runs) ``error`` says
+        those clips may be relinked, they are in ``failed`` with that reason, not counted in
+        ``still_offline``, and no later folder is sent. Afterwards the media pool is walked
+        again (``refresh(wait=False)``). A malformed body raises ValueError; ValueError(ERR_BUSY)
+        too when the Resolve thread did not get to the first folder (nothing was sent then).
+        """
+        uid, request = _relink_request(body)
+        with self._lock:
+            plan = self._plan
+        if plan is None or self._clock() - plan.made > PLAN_MAX_AGE_S:
+            raise ValueError(ERR_NO_PLAN)
+        if uid != plan.uid:
+            return self._relink_answer(plan, [], ERR_PROJECT_CHANGED)
+        blocked = self._relink_blocked()
+        if blocked:
+            return self._relink_answer(plan, [], blocked)
+        failed: list[dict[str, Any]] = []
+        folders: dict[str, tuple[str, list[str]]] = {}
+        for to, uids in request:
+            for clip_uid in uids:
+                clip = plan.clips.get(clip_uid)
+                why = (WHY_NOT_IN_PLAN if clip is None
+                       else WHY_NOT_OFFERED if to.casefold() not in plan.targets.get(clip_uid, ())
+                       else None)
+                if why is not None:
+                    failed.append(self._failure(plan, clip_uid, why))
+                else:
+                    folders.setdefault(to.casefold(), (to, []))[1].append(clip_uid)
+        groups = []
+        for to, uids in folders.values():
+            listing, why = self._list_folder(to)
+            send = []
+            for clip_uid in uids:
+                name = file_name(plan.clips[clip_uid]["old_path"])
+                if listing is None:
+                    failed.append(self._failure(plan, clip_uid, why))
+                elif not _file_there(name, listing):
+                    failed.append(self._failure(plan, clip_uid, WHY_NO_FILE.format(name=name)))
+                else:
+                    send.append(clip_uid)
+            if send:
+                groups.append({"folder": to, "uids": send,
+                               "expect": {u: plan.clips[u]["old_path"] for u in send}})
+        if not groups:
+            return self._relink_answer(plan, failed, None)
+        relinked = 0
+        unknown: list[str] = []           # clips of a request whose outcome is not known
+        still_running = False
+        rest: tuple[int, str] | None = None   # (first folder not sent, why)
+        for index, group in enumerate(groups):
+            try:
+                answer = self._submit(lambda snap, g=group: self._relink_job(snap, plan, g),
+                                      run_s=_relink_run_s(len(group["uids"])))
+            except (_StillRunning, _Interrupted) as exc:
+                still_running = isinstance(exc, _StillRunning)
+                log.warning("Relinking %d clip(s) into %s: %s - their outcome is not known",
+                            len(group["uids"]), group["folder"],
+                            "still running" if still_running else exc)
+                unknown = list(group["uids"])
+                rest = (index + 1, WHY_WAITING if still_running else ERR_BUSY)
+                break
+            except ValueError as exc:     # the Resolve thread never ran it: nothing was sent
+                if index == 0:
+                    raise
+                rest = (index, str(exc))
+                break
+            refused = answer.get("refused")
+            if refused:
+                if index == 0:
+                    return self._relink_answer(plan, [], refused)
+                rest = (index, refused)
+                break
+            relinked += self._relink_results(plan, answer, failed)
+        why_unknown = WHY_RUNNING if still_running else WHY_UNKNOWN
+        failed.extend(self._failure(plan, clip_uid, why_unknown) for clip_uid in unknown)
+        if rest is not None:
+            first, why = rest
+            failed.extend(self._failure(plan, clip_uid, why)
+                          for group in groups[first:] for clip_uid in group["uids"])
+        error = None
+        if unknown:
+            text = ERR_RELINK_RUNNING if still_running else ERR_RELINK_UNKNOWN
+            error = ((ERR_RELINK_DONE.format(n=relinked) if relinked else "")
+                     + text.format(n=len(unknown)))
+        self.refresh(wait=False)
+        return self._relink_answer(plan, failed, error, relinked=relinked, unknown=set(unknown))
+
+    # -- offline media helpers ---------------------------------------------------------------
+    def _holder(self) -> dict[str, Any] | None:
+        """The queue's holder (a Claude session building in Resolve), or None."""
+        fn = self.queue_holder
+        if fn is None:
+            return None
+        try:
+            holder = fn()
+        except Exception:
+            log.exception("Reading the Resolve queue's holder failed")
+            return None
+        return holder if isinstance(holder, dict) else None
+
+    def _relink_blocked(self, rendering: bool | None = None) -> str | None:
+        """Why relinking is not allowed now (Danish), or None."""
+        holder = self._holder()
+        if holder is not None:
+            name = holder.get("navn")
+            return ERR_HOLDER.format(navn=name if isinstance(name, str) and name else "En Claude-session")
+        if rendering is None:
+            with self._lock:
+                rendering = bool(self._render["aktiv"])
+        return ERR_RENDERING if rendering else None
+
+    @staticmethod
+    def _failure(plan: _Plan, uid: str, why: str) -> dict[str, Any]:
+        clip = plan.clips.get(uid) or {}
+        return {"uid": uid, "name": clip.get("name") or file_name(clip.get("old_path") or "") or uid,
+                "why": why}
+
+    def _relink_answer(self, plan: _Plan, failed: list[dict[str, Any]], error: str | None, *,
+                       relinked: int = 0, unknown: set[str] | frozenset[str] = frozenset()
+                       ) -> dict[str, Any]:
+        """The relink answer; ``still_offline`` counts the plan's clips not relinked - without
+        those whose outcome is not known (``unknown``)."""
+        with self._lock:
+            done = set(plan.relinked)
+        still = sum(1 for uid in plan.clips if uid not in done and uid not in unknown)
+        return {"relinked": relinked, "still_offline": still, "failed": failed, "error": error}
+
+    def _relink_results(self, plan: _Plan, answer: dict[str, Any],
+                        failed: list[dict[str, Any]]) -> int:
+        """How many clips one relink request relinked; the others are added to ``failed``."""
+        relinked = 0
+        results = answer.get("results")
+        for result in results if isinstance(results, list) else ():
+            clip_uid = result.get("uid") if isinstance(result, dict) else None
+            if clip_uid not in plan.clips:
+                continue
+            if result.get("ok") is True:
+                relinked += 1
+            else:
+                failed.append(self._failure(plan, clip_uid, WHY_CHILD.get(
+                    result.get("why"), WHY_CHILD["relink_failed"])))
+        return relinked
+
+    def _note_relinked(self, plan: _Plan, answer: dict[str, Any]) -> None:
+        """Resolve thread: the clips a relink request relinked join ``plan.relinked`` - also
+        when the caller has stopped waiting for it."""
+        results = answer.get("results")
+        done = {r["uid"] for r in (results if isinstance(results, list) else ())
+                if isinstance(r, dict) and r.get("ok") is True and r.get("uid") in plan.clips}
+        with self._lock:
+            plan.relinked.update(done)
+
+    def _list_folder(self, folder: str) -> tuple[set[str] | None, str]:
+        """(casefolded names in ``folder`` or None, why not) - listed with a timeout, at most one
+        listing in flight per drive or share."""
+        anchor = ntpath.splitdrive(folder)[0] or folder
+        try:
+            status, names = self._timed_call("relink:" + anchor.casefold(),
+                                             lambda: _list_names(folder), LIST_TIMEOUT_S)
+        except Exception:
+            log.exception("Listing %s failed", folder)
+            return None, WHY_UNREADABLE
+        if status == "ok" and isinstance(names, set):
+            return names, ""
+        log.info("Listing %s before relinking: %s", folder, status)
+        return None, WHY_NO_ANSWER if status in ("timeout", "busy") else WHY_UNREADABLE
+
+    def _offline_job(self, snap: _Snapshot) -> tuple[_Snapshot, dict[str, Any]]:
+        """Resolve thread: the offline clips of ``snap``'s project."""
+        if snap.name is None:
+            raise ValueError(ERR_NO_PROJECT)
+        answer = self._child_call("offline", WALK_MAX_SECONDS + CHILD_WALK_MARGIN_S,
+                                  max_clips=OFFLINE_MAX_CLIPS, max_seconds=OFFLINE_MAX_SECONDS)
+        if self._poll().key != snap.key:
+            raise ValueError(ERR_PROJECT_CHANGED)
+        return snap, answer
+
+    def _relink_job(self, snap: _Snapshot, plan: _Plan, group: dict[str, Any]) -> dict[str, Any]:
+        """Resolve thread: one target folder - a fresh poll (the job may run right after the
+        previous folder's, without a tick in between) and the gates once more, then
+        ``RelinkClips`` with a timeout for this folder's clips. Raises _Interrupted when the
+        request reached the helper but its outcome is not known."""
+        if self._stop.is_set():
+            return {"refused": ERR_NOT_CONNECTED}
+        fresh = self._poll()
+        if snap.key != plan.key or fresh.key != plan.key:
+            return {"refused": ERR_PROJECT_CHANGED}
+        rendering = self._rw.rendering or self._poll_answer.get("rendering") is True
+        blocked = self._relink_blocked(rendering=rendering)
+        if blocked:
+            return {"refused": blocked}
+        timeout = _relink_timeout(len(group["uids"]))
+        log.info("Relinking %d clip(s) of %r into %s (the user's click; timeout %.0f s)",
+                 len(group["uids"]), fresh.name, group["folder"], timeout)
+        try:
+            answer = self._child_call("relink", timeout, groups=[group],
+                                      project={"name": fresh.name, "uid": fresh.uid,
+                                               "database": fresh.database or ""},
+                                      max_clips=WALK_MAX_CLIPS, max_seconds=WALK_MAX_SECONDS)
+        except _NotSent:
+            raise
+        except _ResolveUnavailable as exc:
+            if exc.code in _NOTHING_DONE:
+                raise
+            raise _Interrupted(exc) from exc
+        except ChildError as exc:
+            raise _Interrupted(exc) from exc
+        if answer.get("project_changed"):
+            return {"refused": ERR_PROJECT_CHANGED}
+        self._note_relinked(plan, answer)
+        return answer
+
     # -- cross-thread plumbing ---------------------------------------------------------------
+    def _submit(self, fn: Callable[[_Snapshot], Any], timeout: float | None = None, *,
+                run_s: float | None = None) -> Any:
+        """Run ``fn(snapshot)`` on the Resolve thread after its next poll and return its result
+        (its exception is raised here).
+
+        ValueError(ERR_BUSY) when the Resolve thread has not started it within ``timeout``
+        (default SUBMIT_WAIT_S): it is dropped then and never runs. A job that has started is
+        never given up like that - it may be writing (relink) - the caller waits for it up to
+        ``run_s`` seconds more (default ``timeout``), then gets _StillRunning (ERR_BUSY)."""
+        wait = SUBMIT_WAIT_S if timeout is None else timeout
+        if not self._thread_alive():
+            raise ValueError(ERR_NOT_CONNECTED)
+        job = _Job(fn)
+        with self._lock:
+            self._jobs.append(job)
+        self._wake.set()
+        if not job.done.wait(wait):
+            with self._lock:
+                started = job.started
+                job.abandoned = not started
+            if not started:
+                log.warning("DaVinci Resolve did not get to a request within %.0f s", wait)
+                raise ValueError(ERR_BUSY)
+            more = wait if run_s is None else run_s
+            log.info("DaVinci Resolve is still working on a request; waiting up to %.0f s more",
+                     more)
+            if not job.done.wait(more):
+                log.warning("DaVinci Resolve is still working on a request after %.0f s",
+                            wait + more)
+                raise _StillRunning(ERR_BUSY)
+        if job.error is not None:
+            raise job.error
+        return job.result
+
+    def _fail_jobs(self, reason: str) -> None:
+        with self._lock:
+            jobs, self._jobs = self._jobs, []
+        for job in jobs:
+            job.error = ValueError(reason)
+            job.done.set()
+
+    def _run_jobs(self, snap: _Snapshot) -> None:
+        """Resolve thread: the requests waiting for it (``_submit``), with ``snap`` just polled."""
+        while True:
+            with self._lock:
+                if not self._jobs:
+                    return
+                job = self._jobs.pop(0)
+                if job.abandoned:
+                    job.done.set()
+                    continue
+                job.started = True
+            try:
+                job.result = job.fn(snap)
+            except ValueError as exc:
+                job.error = exc
+            except _Interrupted as exc:     # the caller learns that its request may have worked
+                job.error = exc
+                job.done.set()
+                self._fail_jobs(ERR_BUSY)
+                raise exc.cause from None   # the tick deals with the helper
+            except (ChildError, _ResolveUnavailable):
+                job.error = ValueError(ERR_BUSY)
+                job.done.set()
+                self._fail_jobs(ERR_BUSY)
+                raise                       # the tick deals with the helper
+            except Exception:
+                log.exception("A request on the Resolve thread failed")
+                job.error = ValueError(ERR_INTERNAL)
+            job.done.set()
+
     def _thread_alive(self) -> bool:
         return self._thread is not None and self._thread.is_alive() and not self._stop.is_set()
 
@@ -972,12 +1554,12 @@ class ResolveBridge:
         with self._lock:
             child = self._child
         if child is None:
-            raise ChildError("the helper is not running")
+            raise _NotSent("the helper is not running")
         answer = child.request(cmd, timeout, **params)
         if not isinstance(answer, dict) or answer.get("ok") is not True:
             error = answer.get("error") if isinstance(answer, dict) else None
             detail = answer.get("detail") if isinstance(answer, dict) else answer
-            raise _ResolveUnavailable(f"{cmd}: {error or 'no answer'} ({detail})")
+            raise _ResolveUnavailable(f"{cmd}: {error or 'no answer'} ({detail})", error)
         return answer
 
     # -- the Resolve thread ----------------------------------------------------------------
@@ -1013,16 +1595,19 @@ class ResolveBridge:
             running = bool(self._call_quietly("process_running", RESOLVE_EXE))
             self._set_state(_idle_state(False, running))
             self._complete_refresh(refresh_target)
+            self._fail_jobs(ERR_DISABLED)
             return poll_s
         wait = self._ensure_connected(now)
         if wait is not None:
             self._complete_refresh(refresh_target)
+            self._fail_jobs(_no_primary_reason(self._state))
             return min(poll_s, wait)
         try:
             return self._connected_tick(now, poll_s, follow, refresh_target, refresh_wanted, shown)
         except ChildError as exc:
             self._disconnect()
             self._complete_refresh(refresh_target)
+            self._fail_jobs(ERR_BUSY)
             if self._stop.is_set():
                 return 0.0
             log.warning("The DaVinci Resolve helper failed: %s", exc)
@@ -1035,6 +1620,7 @@ class ResolveBridge:
             self._disconnect()
             self._set_state(_idle_state(True, True, ERR_NO_RESPONSE))
             self._complete_refresh(refresh_target)
+            self._fail_jobs(ERR_BUSY)
             return poll_s
 
     def _ensure_connected(self, now: float) -> float | None:
@@ -1104,6 +1690,11 @@ class ResolveBridge:
         self._last_walk = None
         self._walk = None
         self._follow_pending = False
+        self._rw = _RenderWatch()              # no render seen any more (faerdig is kept)
+        with self._lock:
+            render = self._render
+        if render["aktiv"]:
+            self._publish_render({**render, "aktiv": False, "pct": None, "eta_s": None})
 
     def _reset_gate(self) -> None:
         """Forget start-up observation and back-offs (Resolve gone or integration off)."""
@@ -1115,7 +1706,9 @@ class ResolveBridge:
 
     def _connected_tick(self, now: float, poll_s: float, follow: str, refresh_target: int,
                         refresh_wanted: bool, shown: bool) -> float:
-        snap = self._poll()
+        ask = self._render_request(now)
+        snap = self._poll(ask)
+        self._track_render(snap, self._poll_answer, ask, now)
         remap_due: float | None = None
         if snap.key != self._project_key:
             log.info("Resolve project: %r (database %r)", snap.name, snap.database)
@@ -1135,11 +1728,16 @@ class ResolveBridge:
         else:
             remap_due = self._maybe_remap(snap, now)
         self._complete_refresh(refresh_target)
+        self._run_jobs(snap)
         due = self._maybe_follow(self._clock(), follow)
         return min(d for d in (poll_s, due, remap_due) if d is not None)
 
-    def _poll(self) -> _Snapshot:
-        answer = self._child_call("poll", CHILD_CALL_TIMEOUT_S)
+    def _poll(self, render: dict[str, Any] | None = None) -> _Snapshot:
+        """Poll the current project (and, with ``render``, the render queue - SPEC §22.1); the
+        whole answer stays in ``_poll_answer``."""
+        params = {} if render is None else {"render": render}
+        answer = self._child_call("poll", CHILD_CALL_TIMEOUT_S, **params)
+        self._poll_answer = answer
         db = answer.get("db")
         if not isinstance(db, list) or len(db) != 3:
             db = ["", "", ""]
@@ -1283,6 +1881,154 @@ class ResolveBridge:
                    "suggestions": suggestions, "primary": _choose_primary(folders, suggestions),
                    "offline_clips": offline_clips, "offline_disks": offline_disks}
         return mapping, None if by_name else _mapping_sources(folders, other_dirs, rows or {})
+
+    # -- renders (SPEC §22.1; Resolve thread) ------------------------------------------------
+    def _render_request(self, now: float) -> dict[str, Any] | None:
+        """The ``render`` part of the next poll: the watched jobs while Resolve renders (a scan
+        when none is known) and once more after it stopped; nothing otherwise."""
+        rw = self._rw
+        if rw.rendering:
+            scan = not rw.watch and now >= rw.scan_at
+            return {"scan": scan, "watch": list(rw.watch)} if scan or rw.watch else None
+        if rw.after_fall and rw.watch:
+            return {"scan": False, "watch": list(rw.watch)}
+        return None
+
+    def _track_render(self, snap: _Snapshot, answer: dict[str, Any],
+                      ask: dict[str, Any] | None, now: float) -> None:
+        """Follow the render queue through one poll and publish what changed."""
+        rw = self._rw
+        if snap.key != rw.key:                                # another project: start afresh
+            rw = self._rw = _RenderWatch(key=snap.key)
+        rendering = answer.get("rendering") is True and snap.name is not None
+        reported = self._reported_jobs(answer) if ask is not None else None
+        finished: list[tuple[dict[str, Any], str]] = []
+        if rendering and not rw.rendering:                    # rising edge
+            holder = self._holder()
+            name = holder.get("navn") if holder is not None else None
+            rw.af_claude = name if isinstance(name, str) and name else None
+            rw.current = None
+            rw.after_fall = False
+            if ask is None or not ask.get("scan"):
+                scan = self._child_call("poll", CHILD_CALL_TIMEOUT_S,
+                                        render={"scan": True, "watch": list(rw.watch)})
+                reported = self._reported_jobs(scan) if scan.get("project") == snap.name else None
+            rw.scan_at = now + RENDER_RESCAN_S
+            if reported is not None:
+                finished = self._render_jobs(*reported)
+        elif rendering:
+            if ask is not None and ask.get("scan"):
+                rw.scan_at = now + RENDER_RESCAN_S
+            if reported is not None:
+                finished = self._render_jobs(*reported)
+        elif rw.rendering:                                    # falling edge
+            if reported is not None:
+                finished = self._render_jobs(*reported)
+            rw.current = None
+            rw.after_fall = True
+            if not rw.watch:
+                self._end_watch()
+        elif rw.after_fall:                                   # the look after the render
+            if reported is not None:
+                finished = self._render_jobs(*reported)
+            self._end_watch()
+        rw.rendering = rendering
+        self._publish_render_changes(snap, rendering, finished)
+
+    @staticmethod
+    def _reported_jobs(answer: dict[str, Any]) -> tuple[list[dict[str, Any]], bool] | None:
+        """(the jobs a poll reported, whether they are complete) - None without a job list."""
+        raw = answer.get("jobs")
+        if not isinstance(raw, list):
+            return None
+        jobs = [j for j in raw if isinstance(j, dict) and isinstance(j.get("id"), str) and j["id"]]
+        return jobs, answer.get("jobs_truncated") is not True
+
+    def _render_jobs(self, jobs: list[dict[str, Any]],
+                     complete: bool) -> list[tuple[dict[str, Any], str]]:
+        """Take in the reported jobs; returns the watched jobs that ended, with their outcome."""
+        rw = self._rw
+        finished: list[tuple[dict[str, Any], str]] = []
+        seen: set[str] = set()
+        for job in jobs:
+            job_id = job["id"]
+            seen.add(job_id)
+            rw.info[job_id] = job
+            status = _text(job.get("status"))
+            if not status:                       # its status could not be read this time
+                continue
+            before = rw.known.get(job_id)
+            rw.known[job_id] = status
+            outcome = _render_outcome(status)
+            if outcome is not None and _render_active(before):
+                finished.append((job, outcome))
+        if complete:      # every watched job that still exists was reported: the rest are gone
+            for job_id in rw.watch:
+                if job_id not in seen and rw.known.get(job_id) == "Rendering":
+                    finished.append((rw.info.get(job_id) or {"id": job_id}, "gone"))
+                    rw.known.pop(job_id, None)
+        watch = [j["id"] for j in jobs if _render_active(rw.known.get(j["id"]))]
+        if not complete:
+            watch += [job_id for job_id in rw.watch
+                      if job_id not in seen and _render_active(rw.known.get(job_id))]
+        rw.watch = list(dict.fromkeys(watch))
+        rw.current = next((j for j in jobs if _text(j.get("status")) == "Rendering"), None)
+        return finished
+
+    def _end_watch(self) -> None:
+        """The render is over: forget the watched jobs. A job still Rendering/Ready is marked
+        unknown, so it can only end (fire) after it is seen active again in a later render."""
+        rw = self._rw
+        for job_id in rw.watch:
+            if _render_active(rw.known.get(job_id)):
+                rw.known[job_id] = ""
+        rw.watch = []
+        rw.after_fall = False
+
+    def _publish_render_changes(self, snap: _Snapshot, rendering: bool,
+                                finished: list[tuple[dict[str, Any], str]]) -> None:
+        rw = self._rw
+        with self._lock:
+            state = dict(self._render)
+        state["aktiv"] = rendering
+        if rendering:
+            job = rw.current or {}
+            pct = _job_number(job.get("pct"))
+            eta = _job_number(job.get("eta_ms"))
+            state.update(pct=None if pct is None else max(0, min(100, pct)),
+                         eta_s=round(eta / 1000) if eta is not None and eta > 0 else None,
+                         navn=_text(job.get("file")) or _text(job.get("name")) or None,
+                         tidslinje=_text(job.get("timeline")) or None, projekt=snap.name,
+                         af_claude=rw.af_claude)
+        else:
+            state.update(pct=None, eta_s=None)
+        for job, outcome in finished:
+            self._render_seq += 1
+            state = {**state, "faerdig": _finished(job, outcome, self._render_seq)}
+            log.info("Render %s: %s (%s)", outcome, _text(job.get("file")) or job.get("id"),
+                     _text(job.get("dir")) or "?")
+            self._publish_render(state)
+            folder = state["faerdig"]["mappe"]
+            if outcome == "done" and folder:
+                self._refresh_folder(folder)
+        self._publish_render(state)
+
+    def _publish_render(self, state: dict[str, Any]) -> None:
+        with self._lock:
+            if state == self._render:
+                return
+            self._render = state
+        self._bus.publish("render", state)
+
+    def _refresh_folder(self, folder: str) -> None:
+        """A render wrote into ``folder``: let the index rescan its location."""
+        refresh_path = getattr(self._indexer, "refresh_path", None)
+        if refresh_path is None:
+            return
+        try:
+            refresh_path(folder)
+        except Exception:
+            log.exception("Indexer.refresh_path(%s) failed", folder)
 
     # -- follow mode -------------------------------------------------------------------------
     def _maybe_follow(self, now: float, mode: str) -> float | None:

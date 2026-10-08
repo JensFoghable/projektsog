@@ -409,8 +409,8 @@ class AppHarness:
             config=self._config, indexer=self._indexer, bridge=self._bridge,
             tracker=self._tracker, importer=self._importer,
             controller=self._controller, server=self._server, window=self._window, widget=self._widget,
-            petplay=self._petplay, crew=self._crew, messages=self._messages, tray=self._tray,
-            hotkeys=self._hotkeys, updater=self._updater)
+            petplay=self._petplay, crew=self._crew, kontor=self._kontor, levering=self._levering,
+            messages=self._messages, tray=self._tray, hotkeys=self._hotkeys, updater=self._updater)
         self.app = app.App(app.parse_args(list(flags)), self.instance, components=components,
                            exit_deadline_s=exit_deadline_s, hotkey_recheck_s=hotkey_recheck_s)
         test.addCleanup(self.app.exit_sequence)     # stops the app's threads
@@ -496,6 +496,19 @@ class AppHarness:
         self.crew = fakes.FakeCrew(self.journal, "crew")
         return self.crew
 
+    def _kontor(self, cfg, bus, *, equipped, stats, look, shown) -> fakes.FakeKontor:
+        self.journal.append("kontor.create")
+        self.kontor_kwargs = {"equipped": equipped, "stats": stats, "look": look, "shown": shown}
+        self.kontor = fakes.FakeKontor(self.journal, "kontor")          # never opens a socket
+        return self.kontor
+
+    def _levering(self, cfg, bus, *, bridge, shown) -> fakes.FakeLevering:
+        self.journal.append("levering.create")
+        assert bridge is self.bridge
+        self.levering_shown = shown
+        self.levering = fakes.FakeLevering(self.journal, "levering")    # never watches or fetches
+        return self.levering
+
     def _messages(self, cfg, bus, *, shown, on_internal, path: str) -> fakes.FakeMessages:
         self.messages_kwargs = {"shown": shown, "on_internal": on_internal, "path": path}
         self.messages = fakes.FakeMessages()
@@ -552,9 +565,9 @@ class AppStartupTests(unittest.TestCase):
     STARTUP = ["config", "indexer.create", "indexer.start", "bridge.create", "bridge.start",
                "tracker.create", "tracker.start",
                "controller.create", "importer.create", "server.create", "server.start",
-               "window.create", "widget.create", "petplay.create", "crew.create", "widget.start",
-               "petplay.start", "crew.start", "tray.create", "tray.start", "hotkeys.create", "hotkeys.start",
-               "importer.start"]
+               "window.create", "widget.create", "petplay.create", "crew.create", "kontor.create",
+               "levering.create", "widget.start", "petplay.start", "crew.start", "kontor.start", "levering.start",
+               "tray.create", "tray.start", "hotkeys.create", "hotkeys.start", "importer.start"]
 
     def test_startup_order_and_wiring(self) -> None:
         h = AppHarness(self)
@@ -594,6 +607,24 @@ class AppStartupTests(unittest.TestCase):
         h.messages_kwargs["on_internal"]("projektsog:demo")
         self.assertEqual(h.crew.called("handle_uri"), [(("projektsog:demo",), {})])
 
+    def test_one_queue_watch_for_the_robots_and_the_bridge(self) -> None:
+        # SPEC §22.2: no relink while a Claude session holds Resolve – the same KoeWatch the crew uses.
+        h = AppHarness(self, "--background")
+        h.app.start()
+        self.assertIsInstance(h.app.koe, app.KoeWatch)
+        self.assertIs(h.crew_watch, h.app.koe)
+        self.assertEqual(h.bridge.queue_holder, h.app.koe.current)
+        self.assertLess(h.journal.index("bridge.create"), h.journal.index("bridge.start"))
+
+    def test_the_office_and_the_delivery_party_are_wired_up(self) -> None:
+        h = AppHarness(self, "--background")
+        h.app.start()
+        self.assertIs(h.server.kontor, h.kontor)
+        self.assertIs(h.server.levering, h.levering)
+        self.assertEqual(h.kontor_kwargs, {"equipped": h.app.progress.equipped, "stats": h.app.progress.stats,
+                                           "look": h.petplay.look, "shown": h.app._klippe_shown})
+        self.assertEqual(h.levering_shown, h.app._klippe_shown)
+
     def test_background_preloads_instead_of_showing(self) -> None:
         h = AppHarness(self, "--background")
         h.app.start()
@@ -603,9 +634,13 @@ class AppStartupTests(unittest.TestCase):
     def test_no_window_mode_is_headless(self) -> None:
         h = AppHarness(self, "--no-window", "--rescan", "--port", "48000")
         h.app.start()
-        for absent in ("window.create", "tray.create", "hotkeys.create", "crew.create"):
+        for absent in ("window.create", "tray.create", "hotkeys.create", "crew.create", "kontor.create",
+                       "levering.create"):
             self.assertNotIn(absent, h.journal)
         self.assertIsNone(h.app.crew)                   # no Klippe, no robots
+        self.assertIsNone(h.app.kontor)                 # no office Klippes, no delivery party
+        self.assertIsNone(h.app.levering)
+        self.assertEqual(h.bridge.queue_holder, h.app.koe.current)     # still no relink while a session builds
         with self.assertRaisesRegex(ValueError, "Robotterne er ikke startet"):
             h.messages_kwargs["on_internal"]("projektsog:demo")
         self.assertEqual(h.indexer.called("scan_now"), [((None,), {"full": True})])
@@ -768,7 +803,8 @@ class AppRuntimeTests(unittest.TestCase):
 
 class ExitSequenceTests(unittest.TestCase):
     EXIT = ["hotkeys.stop", "tray.stop", "importer.stop", "tracker.stop", "bridge.stop", "indexer.stop",
-            "server.stop", "crew.close", "petplay.close", "widget.close", "window.close", "instance.release"]
+            "server.stop", "crew.close", "kontor.close", "levering.close", "petplay.close", "widget.close",
+            "window.close", "instance.release"]
 
     def test_exit_order_and_cleanup(self) -> None:
         h = AppHarness(self)

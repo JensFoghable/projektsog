@@ -87,7 +87,7 @@ class StaticUiTests(unittest.TestCase):
         keys = set(re.findall(r'data-setting="([\w]+)"', self.html))
         self.assertEqual(keys, {"hotkey_enabled", "hide_after_open", "show_offline", "run_at_login", "time_tracking_enabled", "import_auto_open",
                                 "widget_enabled", "widget_on_top", "widget_play", "widget_ring", "widget_crew",
-                                "resolve_enabled"})
+                                "widget_kontor", "widget_levering", "resolve_enabled"})
         self.assertLessEqual(keys - {"run_at_login"}, set(config.DEFAULTS))
         self.assertEqual(set(re.findall(r'data-follow="(\w+)"', self.html)), set(config.VALID_RESOLVE_FOLLOW))
 
@@ -109,6 +109,9 @@ class StaticUiTests(unittest.TestCase):
             "disken scannes, når den er tilsluttet igen.",
             # v2.2 (SPEC §15.12): a folder gone from a disk/computer that is there
             "Mappen findes ikke længere", "som ikke findes længere", "er fjernet, og dens",
+            # §22: offline media found and relinked; office Klippes and the delivery party
+            "klip er offline i Resolve", "Find og genlink …", "klip er genlinket", "(ikke tilsluttet)",
+            "Kontor-Klipper: Klippe hilser på kollegernes Klipper", "Leveringsfest, når en fil lander i Final",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)

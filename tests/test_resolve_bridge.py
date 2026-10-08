@@ -24,8 +24,8 @@ from projektsog.config import Config
 from projektsog.events import EventBus
 from tests._resolve_fakes import (
     DB, STUDIO_UNC, ChildFactory, DictOnlyClip, FakeClip, FakeClock, FakeFolder, FakeIndexer,
-    FakeProject, FakeResolve, FakeWinui, UnstableIdProject, clips_in, folder_entry, source_ref,
-    source_row, suggestion, update_fake_resolve, write_fake_resolve)
+    FakeProject, FakeResolve, FakeWinui, UnstableIdProject, clips_in, folder_entry, indexed_file,
+    offline_clip, source_ref, source_row, suggestion, update_fake_resolve, write_fake_resolve)
 
 _tmp: tempfile.TemporaryDirectory | None = None
 
@@ -1426,7 +1426,7 @@ class DefaultsTests(unittest.TestCase):
     def test_no_module_level_imports_of_other_agents(self) -> None:
         with open(rb.__file__, encoding="utf-8") as fh:
             tree = ast.parse(fh.read())
-        allowed = {"config", "events", "textutil", None}
+        allowed = {"config", "events", "textutil", "relink", None}   # relink.py: own (SPEC §22.2)
         for node in tree.body:
             if isinstance(node, ast.ImportFrom) and node.level:
                 self.assertIn(node.module, allowed, ast.dump(node))
@@ -1463,6 +1463,568 @@ class DefaultsTests(unittest.TestCase):
         self.assertEqual(rb.default_child_argv()[1:], ["-m", "projektsog.resolve_child"])
         self.assertTrue(rb.default_child_argv()[0].lower().endswith(("pythonw.exe",
                                                                      "python.exe")))
+
+
+def render_project() -> FakeProject:
+    proj = rikke_project()
+    proj.add_job("old", "Complete", file="Gammel.mp4")      # rendered before Projektsøg looked
+    proj.add_job("j1", "Ready")
+    return proj
+
+
+def render_polls(h: Harness) -> list[Any]:
+    """The ``render`` parameter of every poll the bridge sent (None: a plain poll)."""
+    return [m.get("render") for c in h.children.children for m in c.requests if m["cmd"] == "poll"]
+
+
+class RenderTests(unittest.TestCase):
+    """Klippe watches renders (SPEC §22.1)."""
+
+    def setUp(self) -> None:
+        self.h = Harness(self, project=render_project(), follow="off")
+        self.proj = self.h.resolve.pm.project
+        self.h.tick()                                   # connect, poll, walk
+        self.h.drain("render")
+
+    def start_render(self, pct: int = 10) -> None:
+        self.proj.rendering = True
+        self.proj.set_status("j1", "Rendering", pct, EstimatedTimeRemainingInMs=180_000)
+
+    def test_idle_polls_never_read_the_queue(self) -> None:
+        self.h.tick(3.0)
+        self.h.tick(3.0)
+        self.assertEqual(set(map(repr, render_polls(self.h))), {"None"})
+        self.assertEqual(self.proj.status_calls, [])
+        self.assertEqual(self.h.bridge.render_state(), rb._idle_render())
+        self.assertEqual(self.h.drain("render"), [])
+
+    def test_a_render_from_start_to_done(self) -> None:
+        self.start_render()
+        self.h.tick(3.0)                                # rising edge: one more poll with a scan
+        self.assertEqual(render_polls(self.h)[-2:], [None, {"scan": True, "watch": []}])
+        started = {"aktiv": True, "pct": 10, "eta_s": 180, "navn": "Portræt_v3.mp4",
+                   "tidslinje": "Portræt v3", "projekt": "Rikke Lindholm - Testimonial",
+                   "af_claude": None, "faerdig": None}
+        self.assertEqual(self.h.drain("render"), [started])
+        self.assertEqual(self.h.bridge.render_state(), started)
+        self.h.tick(3.0)
+        self.assertEqual(render_polls(self.h)[-1], {"scan": False, "watch": ["j1"]})
+        self.assertEqual(self.h.drain("render"), [], "nothing changed: nothing published")
+        self.proj.set_status("j1", "Rendering", 47, EstimatedTimeRemainingInMs=61_400)
+        self.h.tick(3.0)
+        self.assertEqual(self.h.drain("render"), [{**started, "pct": 47, "eta_s": 61}])
+        self.proj.rendering = False
+        self.proj.set_status("j1", "Complete", 100, TimeTakenToRenderInMs=120_000)
+        self.h.tick(3.0)
+        done = {"udfald": "done", "fil": "Portræt_v3.mp4",
+                "sti": "D:\\Rikke Lindholm\\Final\\Portræt_v3.mp4",
+                "mappe": "D:\\Rikke Lindholm\\Final", "levering": True, "fejl": None, "seq": 1}
+        self.assertEqual(self.h.drain("render"), [
+            {**started, "aktiv": False, "pct": None, "eta_s": None, "faerdig": done}])
+        self.assertEqual(self.h.indexer.refreshed, ["D:\\Rikke Lindholm\\Final"])
+        self.h.tick(3.0)
+        self.h.tick(3.0)
+        self.assertEqual(render_polls(self.h)[-2:], [None, None], "the watch is over")
+        self.assertEqual(self.h.drain("render"), [])
+        self.assertEqual(self.h.bridge.render_state()["faerdig"], done, "kept for a reloaded widget")
+        self.assertEqual(self.proj.status_calls, ["j1", "old", "j1", "j1", "j1"],
+                         "the scan, then only the watched job")
+
+    def test_failed_gone_and_cancelled_jobs_in_a_queue(self) -> None:
+        self.proj.add_job("j2", "Ready", file="b.mov", folder="D:\\Eksport", mode="Individual clips")
+        self.proj.add_job("j3", "Ready", file="c.mov", folder="D:\\Eksport")
+        self.start_render()
+        self.h.tick(3.0)
+        self.h.drain("render")
+        self.proj.set_status("j1", "Failed", Error="Disken er fuld")
+        self.proj.set_status("j2", "Rendering", 5)
+        self.h.tick(3.0)
+        (failed,) = self.h.drain("render")
+        self.assertEqual(failed["faerdig"], {
+            "udfald": "failed", "fil": "Portræt_v3.mp4",
+            "sti": "D:\\Rikke Lindholm\\Final\\Portræt_v3.mp4", "mappe": "D:\\Rikke Lindholm\\Final",
+            "levering": True, "fejl": "Disken er fuld", "seq": 1})
+        self.assertEqual((failed["aktiv"], failed["navn"]), (True, "b.mov"))
+        self.proj.render_jobs = [j for j in self.proj.render_jobs if j["JobId"] != "j2"]
+        self.proj.set_status("j3", "Rendering", 1)
+        self.h.tick(3.0)
+        (gone,) = self.h.drain("render")
+        self.assertEqual((gone["faerdig"]["udfald"], gone["faerdig"]["sti"], gone["faerdig"]["seq"],
+                          gone["faerdig"]["levering"]), ("gone", None, 2, False))
+        self.proj.rendering = False
+        self.proj.set_status("j3", "Cancelled")
+        self.h.tick(3.0)
+        (cancelled,) = self.h.drain("render")
+        self.assertEqual((cancelled["aktiv"], cancelled["faerdig"]["udfald"], cancelled["faerdig"]["seq"]),
+                         (False, "cancelled", 3))
+        self.assertEqual(self.h.indexer.refreshed, [], "only a done render rescans its folder")
+
+    def test_the_queue_holder_at_the_rising_edge(self) -> None:
+        holders = [{"navn": "Mette", "projekt": "Rikke", "opgave": "byg", "siden": 1.0}]
+        self.h.bridge.queue_holder = lambda: holders[0]
+        self.start_render()
+        self.h.tick(3.0)
+        self.assertEqual(self.h.bridge.render_state()["af_claude"], "Mette")
+        holders[0] = None
+        self.h.tick(3.0)
+        self.assertEqual(self.h.bridge.render_state()["af_claude"], "Mette", "set at the rising edge")
+
+    def test_a_status_that_lags_behind_the_end_of_the_render(self) -> None:
+        self.start_render()
+        self.h.tick(3.0)
+        self.proj.rendering = False                     # the job still says Rendering
+        self.h.tick(3.0)
+        self.assertIsNone(self.h.bridge.render_state()["faerdig"])
+        self.proj.set_status("j1", "Complete", 100)
+        self.h.tick(3.0)                                # the one look after the render
+        self.assertEqual(render_polls(self.h)[-1], {"scan": False, "watch": ["j1"]})
+        self.assertEqual(self.h.bridge.render_state()["faerdig"]["udfald"], "done")
+
+    def test_a_job_still_rendering_after_the_look_never_fires_later(self) -> None:
+        self.start_render()
+        self.h.tick(3.0)
+        self.proj.rendering = False
+        self.h.tick(3.0)
+        self.h.tick(3.0)                                # still "Rendering": forgotten
+        self.assertEqual(render_polls(self.h)[-1], {"scan": False, "watch": ["j1"]})
+        self.h.tick(3.0)
+        self.assertIsNone(render_polls(self.h)[-1])
+        self.proj.set_status("j1", "Complete", 100)
+        self.proj.add_job("j9", "Rendering")
+        self.proj.rendering = True                      # the next render
+        self.h.tick(3.0)
+        self.assertIsNone(self.h.bridge.render_state()["faerdig"])
+
+    def test_connecting_during_a_render_takes_a_baseline(self) -> None:
+        proj = render_project()
+        proj.rendering = True
+        proj.set_status("j1", "Rendering", 30)
+        h = Harness(self, project=proj, follow="off")
+        h.tick()
+        self.assertEqual((h.bridge.render_state()["aktiv"], h.bridge.render_state()["pct"]), (True, 30))
+        proj.rendering = False
+        proj.set_status("j1", "Complete", 100)
+        h.tick(3.0)
+        self.assertEqual(h.bridge.render_state()["faerdig"]["fil"], "Portræt_v3.mp4",
+                         "the old Complete job never fires; the running one does")
+
+    def test_a_render_without_a_queue_job(self) -> None:
+        self.proj.render_jobs = []
+        self.proj.rendering = True                      # Quick Export: nothing in the queue
+        self.h.tick(3.0)
+        self.assertEqual({k: self.h.bridge.render_state()[k] for k in ("aktiv", "pct", "navn")},
+                         {"aktiv": True, "pct": None, "navn": None})
+        self.h.tick(3.0)
+        self.assertIsNone(render_polls(self.h)[-1], "no scan in every poll")
+        self.h.tick(rb.RENDER_RESCAN_S)
+        self.assertEqual(render_polls(self.h)[-1], {"scan": True, "watch": []})
+
+    def test_resolve_quits_during_a_render(self) -> None:
+        self.start_render()
+        self.h.tick(3.0)
+        self.h.drain("render")
+        self.h.winui.running = False
+        self.h.tick(3.0)
+        (event,) = self.h.drain("render")
+        self.assertEqual((event["aktiv"], event["pct"], event["faerdig"]), (False, None, None))
+
+    def test_a_truncated_answer_never_makes_a_job_gone(self) -> None:
+        self.proj.add_job("j2", "Ready")
+        self.start_render()
+        self.h.tick(3.0)
+        with mock.patch("projektsog.resolve_child.MAX_RENDER_JOBS", 1):
+            self.proj.render_jobs.reverse()
+            self.h.tick(3.0)
+        self.assertIsNone(self.h.bridge.render_state()["faerdig"])
+        self.assertEqual(sorted(self.h.bridge._rw.watch), ["j1", "j2"])
+
+    def test_delivery_folders_and_outcomes(self) -> None:
+        self.assertTrue(rb._is_delivery("\\\\server\\Kunder\\Rikke\\FINAL\\Web"))
+        self.assertFalse(rb._is_delivery("D:\\Finale\\x"))
+        self.assertFalse(rb._is_delivery(None))
+        self.assertEqual([rb._render_outcome(s) for s in ("Complete", "Failed", "Cancelled",
+                                                          "Background Render Cancelled", "Ready")],
+                         ["done", "failed", "cancelled", "cancelled", None])
+        self.assertTrue(rb._render_active("Ready for background render"))
+        finished = rb._finished({"id": "x", "dir": "D:\\Final", "file": "clip_%d.mov",
+                                 "mode": "Individual clips", "error": "nope"}, "done", 4)
+        self.assertEqual((finished["sti"], finished["fejl"], finished["levering"]), (None, None, True))
+
+
+REAL_LIST_NAMES = rb._list_names
+PIXEL_OLD = PIXELBRO + "\\Klip"
+ARKIV = "\\\\MEDIESERVER\\2026Arkiv"
+PIXEL_NEW = ARKIV + "\\Pixelbro Radio\\Klip"
+MUSIK_NEW = ARKIV + "\\Pixelbro Radio\\Musik"
+METTE_HOLDS = {"navn": "Mette", "projekt": "P", "opgave": "", "siden": None}
+
+
+def offline_pixelbro() -> FakeProject:
+    clips = [offline_clip(PIXEL_OLD + "\\a.mov", uid="u-a"),
+             offline_clip(PIXEL_OLD + "\\b.mov", uid="u-b"),
+             offline_clip(PIXELBRO + "\\Musik\\ukendt.wav", uid="u-x"),
+             FakeClip(PIXELBRO + "\\Grafik\\logo.png", uid="u-online")]
+    proj = FakeProject("Pixelbro Radio", FakeFolder("Master", clips[:2], [FakeFolder("Rest", clips[2:])]))
+    proj.indexed = [indexed_file(PIXEL_NEW + "\\a.mov", sid=7, root=ARKIV, project="Pixelbro Radio"),
+                    indexed_file(PIXEL_NEW + "\\b.mov", sid=7, root=ARKIV, project="Pixelbro Radio")]
+    return proj
+
+
+class OfflinePlanTests(unittest.TestCase):
+    """Find and relink offline media (SPEC §22.2)."""
+
+    def setUp(self) -> None:
+        proj = offline_pixelbro()
+        self.h = Harness(self, project=proj, follow="off")
+        self.h.indexer.files = proj.indexed
+        self.pool = proj.pool
+        self.listings = {PIXEL_NEW.casefold(): {"a.mov", "b.mov", "c.mov"}}
+        patcher = mock.patch.object(rb, "_list_names", self.list_names)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.h.tick()
+        self.h.drain("resolve")
+
+    def list_names(self, folder: str) -> set[str]:
+        names = self.listings.get(folder.casefold())
+        if names is None:
+            raise FileNotFoundError(folder)
+        return names
+
+    def call(self, fn: Callable[[], Any]) -> Any:
+        """Run ``fn`` on another thread (like an HTTP request) while the test thread plays the
+        Resolve thread."""
+        outcome: dict[str, Any] = {}
+
+        def target() -> None:
+            try:
+                outcome["value"] = fn()
+            except Exception as exc:     # noqa: BLE001 - handed to the test thread
+                outcome["error"] = exc
+
+        with mock.patch.object(self.h.bridge, "_thread_alive", return_value=True):
+            thread = threading.Thread(target=target)
+            thread.start()
+            deadline = time.monotonic() + 10.0
+            while thread.is_alive() and time.monotonic() < deadline:
+                if self.h.bridge._jobs:
+                    self.h.tick(0.5)
+                else:
+                    time.sleep(0.002)
+            thread.join(5.0)
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["value"]
+
+    def plan(self) -> dict[str, Any]:
+        return self.call(self.h.bridge.offline_plan)
+
+    def relink(self, body: Any) -> dict[str, Any]:
+        return self.call(lambda: self.h.bridge.relink(body))
+
+    def test_the_plan(self) -> None:
+        plan = self.plan()
+        self.assertEqual(plan, {
+            "project": "Pixelbro Radio", "database": DB["DbName"], "uid": "uid-Pixelbro Radio",
+            "scanned": 4, "truncated": False, "blocked": None,
+            "groups": [{"from": PIXEL_OLD, "to": PIXEL_NEW, "to_display": PIXEL_NEW, "online": True,
+                        "clips": [{"uid": "u-a", "name": "a.mov", "old_path": PIXEL_OLD + "\\a.mov"},
+                                  {"uid": "u-b", "name": "b.mov", "old_path": PIXEL_OLD + "\\b.mov"}],
+                        "auto": True, "alternatives": []}],
+            "not_found": [{"uid": "u-x", "name": "ukendt.wav",
+                           "old_path": PIXELBRO + "\\Musik\\ukendt.wav"}]})
+        self.assertEqual(self.h.indexer.find_calls, [["a.mov", "b.mov", "ukendt.wav"]])
+        self.assertEqual(self.h.drain("resolve"), [], "the plan is never part of the state")
+        self.assertEqual(self.pool.relinks, [], "making a plan writes nothing")
+
+    def test_relink(self) -> None:
+        plan = self.plan()
+        result = self.relink({"uid": plan["uid"], "groups": [{"to": PIXEL_NEW, "uids": ["u-a", "u-b"]}]})
+        self.assertEqual(result, {"relinked": 2, "still_offline": 1, "failed": [], "error": None})
+        self.assertEqual(self.pool.relinks, [(["u-a", "u-b"], PIXEL_NEW)])
+        self.assertEqual(self.h.winui.list_calls,
+                         [("relink:\\\\medieserver\\2026arkiv", rb.LIST_TIMEOUT_S)])
+        self.assertTrue(self.h.bridge._take_requests()[1], "a re-walk is queued")
+        again = self.relink({"uid": plan["uid"], "groups": [{"to": PIXEL_NEW, "uids": ["u-a"]}]})
+        self.assertEqual((again["relinked"], again["failed"]),
+                         (0, [{"uid": "u-a", "name": "a.mov", "why": "Klippet er allerede online"}]))
+
+    def test_what_is_checked_before_resolve_is_asked(self) -> None:
+        plan = self.plan()
+        self.listings[PIXEL_NEW.casefold()] = {"a.mov"}
+        result = self.relink({"uid": plan["uid"], "groups": [
+            {"to": PIXEL_NEW, "uids": ["u-a", "u-b", "u-nope"]},
+            {"to": "E:\\Andet", "uids": ["u-a"]}]})
+        self.assertEqual(result["failed"], [
+            {"uid": "u-nope", "name": "u-nope", "why": rb.WHY_NOT_IN_PLAN},
+            {"uid": "u-a", "name": "a.mov", "why": rb.WHY_NOT_OFFERED},
+            {"uid": "u-b", "name": "b.mov", "why": "Filen ‘b.mov’ ligger ikke i mappen"}])
+        self.assertEqual((result["relinked"], self.pool.relinks), (1, [(["u-a"], PIXEL_NEW)]))
+        self.h.winui.list_status = "timeout"
+        result = self.relink({"uid": plan["uid"], "groups": [{"to": PIXEL_NEW, "uids": ["u-b"]}]})
+        self.assertEqual(result["failed"], [{"uid": "u-b", "name": "b.mov", "why": rb.WHY_NO_ANSWER}])
+        self.assertEqual(len(self.pool.relinks), 1, "nothing to send: Resolve is not asked")
+
+    def test_resolve_cannot_find_the_file(self) -> None:
+        plan = self.plan()
+        self.pool.missing = {"b.mov"}
+        result = self.relink({"uid": plan["uid"], "groups": [{"to": PIXEL_NEW, "uids": ["u-a", "u-b"]}]})
+        self.assertEqual((result["relinked"], result["still_offline"], result["failed"]),
+                         (1, 2, [{"uid": "u-b", "name": "b.mov",
+                                  "why": "Klippet er stadig offline efter genlink"}]))
+
+    def test_never_while_a_claude_session_holds_resolve(self) -> None:
+        self.h.bridge.queue_holder = lambda: {"navn": "Mette", "projekt": "P", "opgave": "", "siden": None}
+        plan = self.plan()
+        self.assertEqual(plan["blocked"], "Mette bygger i Resolve lige nu – genlink, når den er færdig")
+        result = self.relink({"uid": plan["uid"], "groups": [{"to": PIXEL_NEW, "uids": ["u-a"]}]})
+        self.assertEqual(result, {"relinked": 0, "still_offline": 3, "failed": [],
+                                  "error": plan["blocked"]})
+        self.assertEqual((self.pool.relinks, self.h.winui.list_calls), ([], []))
+
+    def test_never_while_resolve_renders(self) -> None:
+        plan = self.plan()
+        project = self.h.resolve.pm.project
+        project.rendering = True
+        self.h.tick(3.0)
+        self.assertEqual(self.plan()["blocked"], rb.ERR_RENDERING)
+        result = self.relink({"uid": plan["uid"], "groups": [{"to": PIXEL_NEW, "uids": ["u-a"]}]})
+        self.assertEqual(result["error"], rb.ERR_RENDERING)
+        self.assertEqual(self.pool.relinks, [])
+
+    def test_a_render_that_starts_after_the_click_is_seen_on_the_resolve_thread(self) -> None:
+        plan = self.plan()
+        self.h.resolve.pm.project.rendering = True       # the poll before the job sees it
+        result = self.relink({"uid": plan["uid"], "groups": [{"to": PIXEL_NEW, "uids": ["u-a"]}]})
+        self.assertEqual(result["error"], rb.ERR_RENDERING)
+        self.assertEqual(self.pool.relinks, [])
+
+    def test_only_in_the_project_the_plan_was_made_for(self) -> None:
+        plan = self.plan()
+        body = {"uid": plan["uid"], "groups": [{"to": PIXEL_NEW, "uids": ["u-a"]}]}
+        self.assertEqual(self.relink({**body, "uid": "another"})["error"], rb.ERR_PROJECT_CHANGED)
+        self.h.resolve.pm.project = pixelbro_project()   # another project with the same name
+        self.h.resolve.pm.project.uid = "uid-other"
+        self.assertEqual(self.relink(body)["error"], rb.ERR_PROJECT_CHANGED)
+        self.assertEqual(self.pool.relinks, [])
+
+    def test_requests_that_cannot_be_served(self) -> None:
+        with self.assertRaisesRegex(ValueError, rb.ERR_NO_PLAN):
+            self.relink({"uid": "", "groups": [{"to": PIXEL_NEW, "uids": ["u-a"]}]})
+        plan = self.plan()
+        for body in (None, [], {"uid": 5, "groups": []}, {"uid": plan["uid"], "groups": []},
+                     {"groups": [{"to": "relativ\\mappe", "uids": ["u-a"]}]},
+                     {"groups": [{"to": PIXEL_NEW, "uids": [""]}]},
+                     {"groups": [{"to": PIXEL_NEW}]}):
+            with self.subTest(body=body):
+                with self.assertRaisesRegex(ValueError, rb.ERR_BAD_RELINK):
+                    self.relink(body)
+        self.h.clock.advance(rb.PLAN_MAX_AGE_S + 1)
+        with self.assertRaisesRegex(ValueError, rb.ERR_NO_PLAN):
+            self.relink({"uid": plan["uid"], "groups": [{"to": PIXEL_NEW, "uids": ["u-a"]}]})
+        self.h.winui.running = False
+        self.h.tick(3.0)
+        with self.assertRaisesRegex(ValueError, rb.ERR_NOT_RUNNING):
+            self.plan()
+
+    def test_a_real_folder_listing(self) -> None:
+        target = tempfile.mkdtemp(dir=_tmp.name)
+        for name in ("a.mov", "B.MOV"):
+            with open(os.path.join(target, name), "wb"):
+                pass
+        self.h.indexer.files = [indexed_file(os.path.join(target, n), sid=3, project=None)
+                                for n in ("a.mov", "b.mov")]
+        plan = self.plan()
+        self.assertEqual((plan["groups"][0]["to"], plan["groups"][0]["auto"]), (target, True))
+        with mock.patch.object(rb, "_list_names", REAL_LIST_NAMES):
+            result = self.relink({"uid": plan["uid"], "groups": [{"to": target, "uids": ["u-a", "u-b"]}]})
+        self.assertEqual((result["relinked"], result["failed"]), (2, []))
+
+    def test_image_sequences_are_found_by_their_first_frame(self) -> None:
+        self.assertTrue(rb._file_there("shot_[0001-0100].exr", {"shot_0001.exr"}))
+        self.assertFalse(rb._file_there("shot_[0001-0100].exr", {"shot_0002.exr"}))
+        self.assertTrue(rb._file_there("A.MOV", {"a.mov"}))
+
+    # -- one helper request per folder; a relink that started is never "busy" ---------------
+    def two_folders(self) -> dict[str, Any]:
+        """A plan with two target folders (a.mov + b.mov → Klip, ukendt.wav → Musik); returns
+        the body that relinks both, Klip first."""
+        self.h.indexer.files = [*self.h.indexer.files,
+                                indexed_file(MUSIK_NEW + "\\ukendt.wav", sid=7, root=ARKIV,
+                                             project="Pixelbro Radio")]
+        self.listings[MUSIK_NEW.casefold()] = {"ukendt.wav"}
+        plan = self.plan()
+        self.assertEqual(sorted(g["to"] for g in plan["groups"]), [PIXEL_NEW, MUSIK_NEW])
+        return {"uid": plan["uid"], "groups": [{"to": PIXEL_NEW, "uids": ["u-a", "u-b"]},
+                                               {"to": MUSIK_NEW, "uids": ["u-x"]}]}
+
+    def sent(self) -> list[dict[str, Any]]:
+        return [m for c in self.h.children.children for m in c.requests]
+
+    def test_the_relink_timeout_grows_with_the_clips(self) -> None:
+        base = rb._relink_timeout(0)
+        self.assertGreaterEqual(base, rb.WALK_MAX_SECONDS + rb.CHILD_WALK_MARGIN_S)
+        self.assertLess(rb._relink_timeout(10), rb._relink_timeout(1000))
+        self.assertGreater(rb._relink_timeout(1000), 5 * 60.0,
+                           "1000 clips on a slow share get far more than the old fixed 60 s")
+        self.assertEqual(rb._relink_timeout(rb.MAX_RELINK_UIDS), rb.CHILD_RELINK_MAX_S)
+        self.assertGreater(rb._relink_run_s(1), rb._relink_timeout(1) + rb.CHILD_CALL_TIMEOUT_S,
+                           "a started job may take its fresh poll and the relink")
+
+    def test_one_request_per_folder_after_a_fresh_poll(self) -> None:
+        body = self.two_folders()
+        result = self.relink(body)
+        self.assertEqual(result, {"relinked": 3, "still_offline": 0, "failed": [], "error": None})
+        self.assertEqual(self.pool.relinks, [(["u-a", "u-b"], PIXEL_NEW), (["u-x"], MUSIK_NEW)])
+        self.assertEqual([t for t in self.h.children.timeouts if t[0] == "relink"],
+                         [("relink", rb._relink_timeout(2)), ("relink", rb._relink_timeout(1))])
+        sent = self.sent()
+        relinks = [i for i, m in enumerate(sent) if m["cmd"] == "relink"]
+        self.assertEqual([[g["folder"] for g in sent[i]["groups"]] for i in relinks],
+                         [[PIXEL_NEW], [MUSIK_NEW]])
+        self.assertEqual([sent[i - 1]["cmd"] for i in relinks], ["poll", "poll"])
+
+    def test_a_claude_session_that_starts_between_folders_stops_the_rest(self) -> None:
+        body = self.two_folders()
+
+        def first_done(uids: list[str], folder: str) -> None:
+            self.pool.on_relink = None
+            self.h.bridge.queue_holder = lambda: METTE_HOLDS
+
+        self.pool.on_relink = first_done
+        result = self.relink(body)
+        self.assertEqual(result, {
+            "relinked": 2, "still_offline": 1, "error": None,
+            "failed": [{"uid": "u-x", "name": "ukendt.wav",
+                        "why": "Mette bygger i Resolve lige nu – genlink, når den er færdig"}]})
+        self.assertEqual(self.pool.relinks, [(["u-a", "u-b"], PIXEL_NEW)])
+
+    def test_a_render_that_starts_between_folders_stops_the_rest(self) -> None:
+        body = self.two_folders()
+
+        def first_done(uids: list[str], folder: str) -> None:
+            self.pool.on_relink = None
+            self.h.resolve.pm.project.rendering = True
+
+        self.pool.on_relink = first_done
+        result = self.relink(body)
+        self.assertEqual((result["relinked"], result["error"], result["failed"]),
+                         (2, None, [{"uid": "u-x", "name": "ukendt.wav", "why": rb.ERR_RENDERING}]))
+        self.assertEqual(self.pool.relinks, [(["u-a", "u-b"], PIXEL_NEW)])
+
+    def test_a_helper_that_dies_during_relink_may_have_relinked(self) -> None:
+        plan = self.plan()
+        self.h.children.fail["relink"] = "late"   # RelinkClips ran, the answer never came
+        with self.assertLogs("projektsog.resolve_bridge", "WARNING") as logs:
+            result = self.relink({"uid": plan["uid"],
+                                  "groups": [{"to": PIXEL_NEW, "uids": ["u-a", "u-b"]}]})
+        self.assertTrue(any("outcome is not known" in line for line in logs.output))
+        self.assertEqual(result, {
+            "relinked": 0, "still_offline": 1, "error": rb.ERR_RELINK_UNKNOWN.format(n=2),
+            "failed": [{"uid": "u-a", "name": "a.mov", "why": rb.WHY_UNKNOWN},
+                       {"uid": "u-b", "name": "b.mov", "why": rb.WHY_UNKNOWN}]})
+        self.assertIn("2 klip kan være genlinket", result["error"])
+        self.assertNotEqual(result["error"], rb.ERR_BUSY, "never 'svarer ikke' as if nothing happened")
+        self.assertEqual(self.pool.relinks, [(["u-a", "u-b"], PIXEL_NEW)])
+        self.assertEqual(self.h.children.running, [], "the helper is stopped (and restarted later)")
+        self.assertEqual(self.h.state["error"], rb.ERR_NO_RESPONSE)
+
+    def test_no_folder_is_sent_after_one_whose_outcome_is_unknown(self) -> None:
+        body = self.two_folders()
+        self.h.children.fail["relink"] = "late"
+        with self.assertLogs("projektsog.resolve_bridge", "WARNING"):
+            result = self.relink(body)
+        self.assertEqual(result, {
+            "relinked": 0, "still_offline": 1, "error": rb.ERR_RELINK_UNKNOWN.format(n=2),
+            "failed": [{"uid": "u-a", "name": "a.mov", "why": rb.WHY_UNKNOWN},
+                       {"uid": "u-b", "name": "b.mov", "why": rb.WHY_UNKNOWN},
+                       {"uid": "u-x", "name": "ukendt.wav", "why": rb.ERR_BUSY}]})
+        self.assertEqual(self.pool.relinks, [(["u-a", "u-b"], PIXEL_NEW)])
+
+    def test_the_folders_relinked_before_a_failure_are_reported(self) -> None:
+        body = self.two_folders()
+
+        def first_done(uids: list[str], folder: str) -> None:
+            self.pool.on_relink = None
+            self.h.children.fail["relink"] = "late"     # the next request's answer never comes
+
+        self.pool.on_relink = first_done
+        with self.assertLogs("projektsog.resolve_bridge", "WARNING"):
+            result = self.relink(body)
+        self.assertEqual(result, {
+            "relinked": 2, "still_offline": 0,
+            "error": "2 klip er genlinket. " + rb.ERR_RELINK_UNKNOWN.format(n=1),
+            "failed": [{"uid": "u-x", "name": "ukendt.wav", "why": rb.WHY_UNKNOWN}]})
+        self.assertEqual(self.pool.relinks, [(["u-a", "u-b"], PIXEL_NEW), (["u-x"], MUSIK_NEW)])
+
+    def test_a_started_relink_is_waited_for_beyond_the_submit_wait(self) -> None:
+        plan = self.plan()
+        self.pool.on_relink = lambda uids, folder: time.sleep(0.8)    # a slow share
+        with mock.patch.object(rb, "SUBMIT_WAIT_S", 0.3):
+            result = self.relink({"uid": plan["uid"],
+                                  "groups": [{"to": PIXEL_NEW, "uids": ["u-a", "u-b"]}]})
+        self.assertEqual(result, {"relinked": 2, "still_offline": 1, "failed": [], "error": None})
+
+    def test_a_relink_still_running_is_not_reported_as_nothing_done(self) -> None:
+        body = self.two_folders()
+        self.pool.on_relink = lambda uids, folder: time.sleep(1.0)
+        with mock.patch.object(rb, "SUBMIT_WAIT_S", 0.3), \
+                mock.patch.object(rb, "_relink_run_s", return_value=0.2), \
+                self.assertLogs("projektsog.resolve_bridge", "WARNING") as logs:
+            result = self.relink(body)
+        self.assertTrue(any("still working on a request" in line for line in logs.output))
+        self.assertEqual(result, {
+            "relinked": 0, "still_offline": 1, "error": rb.ERR_RELINK_RUNNING.format(n=2),
+            "failed": [{"uid": "u-a", "name": "a.mov", "why": rb.WHY_RUNNING},
+                       {"uid": "u-b", "name": "b.mov", "why": rb.WHY_RUNNING},
+                       {"uid": "u-x", "name": "ukendt.wav", "why": rb.WHY_WAITING}]})
+        self.assertIn("genlinker stadig", result["error"])
+        self.assertEqual(self.pool.relinks, [(["u-a", "u-b"], PIXEL_NEW)], "the rest waits")
+        self.assertEqual(self.h.bridge._plan.relinked, {"u-a", "u-b"},
+                         "what the job relinked after the answer still counts")
+
+    def test_a_relink_the_resolve_thread_never_started_is_dropped(self) -> None:
+        plan = self.plan()
+        body = {"uid": plan["uid"], "groups": [{"to": PIXEL_NEW, "uids": ["u-a", "u-b"]}]}
+        with mock.patch.object(rb, "SUBMIT_WAIT_S", 0.05), \
+                mock.patch.object(self.h.bridge, "_thread_alive", return_value=True), \
+                self.assertLogs("projektsog.resolve_bridge", "WARNING"):
+            with self.assertRaisesRegex(ValueError, rb.ERR_BUSY):
+                self.h.bridge.relink(body)          # nothing was sent: "busy" is the truth
+        self.h.tick(3.0)
+        self.assertEqual(self.pool.relinks, [], "a dropped job never runs late")
+        self.assertNotIn("relink", [m["cmd"] for m in self.sent()])
+
+    def test_a_later_folder_the_resolve_thread_never_gets_to(self) -> None:
+        body = self.two_folders()
+        ticked = threading.Event()
+        submits: list[Any] = []
+        real_submit = self.h.bridge._submit
+
+        def submit(fn: Any, *args: Any, **kwargs: Any) -> Any:
+            submits.append(fn)
+            if len(submits) == 2:
+                ticked.wait(5.0)           # the second folder is queued after that one tick
+            return real_submit(fn, *args, **kwargs)
+
+        outcome: dict[str, Any] = {}
+        with mock.patch.object(rb, "SUBMIT_WAIT_S", 0.3), \
+                mock.patch.object(self.h.bridge, "_thread_alive", return_value=True), \
+                mock.patch.object(self.h.bridge, "_submit", submit), \
+                self.assertLogs("projektsog.resolve_bridge", "WARNING"):
+            thread = threading.Thread(target=lambda: outcome.update(value=self.h.bridge.relink(body)))
+            thread.start()
+            deadline = time.monotonic() + 5.0
+            while not self.h.bridge._jobs and time.monotonic() < deadline:
+                time.sleep(0.002)
+            self.h.tick(0.5)                   # the first folder only
+            ticked.set()
+            thread.join(5.0)
+        self.assertEqual(outcome["value"], {
+            "relinked": 2, "still_offline": 1, "error": None,
+            "failed": [{"uid": "u-x", "name": "ukendt.wav", "why": rb.ERR_BUSY}]})
+        self.h.tick(3.0)
+        self.assertEqual(self.pool.relinks, [(["u-a", "u-b"], PIXEL_NEW)])
 
 
 class ConnectSeamTests(unittest.TestCase):

@@ -326,6 +326,118 @@
     return b && b.demo ? 'Robotterne er færdige med at øve! 🎉' : `✅ ${(b && b.navn) || 'Claude'} er færdig – klar til at klippe!`;
   }
 
+  // ---------------------------------------------------------------- renders, office Klippes and the delivery party (SPEC §22)
+  /** The progress line under the pet while Resolve renders (`render` state): `what` "Renderer
+   *  Portræt_v3.mp4", `tal` "47 % · ca. 3 min" and `text`, the whole line – or null. */
+  function renderProgress(r) {
+    if (!r || !r.aktiv) return null;
+    const pct = Number.isFinite(r.pct) ? Math.max(0, Math.min(100, Math.round(r.pct))) : null;
+    const eta = !Number.isFinite(r.eta_s) || r.eta_s < 0 ? null : r.eta_s < 60 ? 'under 1 min' : `ca. ${words(r.eta_s)}`;
+    const what = `Renderer ${shorten(r.navn || r.tidslinje, 40) || 'tidslinjen'}`;
+    const tal = [pct == null ? null : `${pct} %`, eta].filter(Boolean).join(' · ') || 'går i gang …';
+    return { what, tal, pct, text: `${what} · ${tal}` };
+  }
+
+  /** The line under the pet while Resolve renders, or null. */
+  function renderLine(r, name = 'Klippe') {
+    if (!r || !r.aktiv) return null;
+    const what = shorten(r.tidslinje || r.navn || r.projekt, 40) || 'tidslinjen';
+    return r.af_claude ? `🎬 ${shorten(r.af_claude, 20)} renderer ${what} – robotterne fodrer maskinen`
+      : `🎬 Robotterne renderer ${what} – ${name} holder øje`;
+  }
+
+  /** What Klippe says when a render has ended (`faerdig`) – null for a job that is just gone. */
+  function renderDoneLine(f) {
+    if (!f) return null;
+    if (f.udfald === 'done') return 'Renderen er færdig! 🎬';
+    if (f.udfald === 'failed') return `Renderen fejlede 😟${f.fejl ? ` – ${shorten(f.fejl, 90)}` : ''}`;
+    return f.udfald === 'cancelled' ? 'Renderen blev stoppet ✋' : null;
+  }
+
+  /** One finished render, the same in every event and after a reload (null: none). */
+  function renderKey(f) {
+    return f && f.seq != null ? `${f.seq}|${f.udfald}|${f.sti || f.fil || ''}` : null;
+  }
+
+  const SLOT_KEYS = ['farve', 'striber', 'hat', 'briller', 'mund', 'haand', 'aura'];
+  const OUTFITS = ['none', 'color', 'fusion', 'audio', 'deliver'];
+
+  /** How a colleague's Klippe looks (SSE `besoeg`): only known stages and outfits, only the known
+   *  wardrobe slots with plain item names – they only ever become data-* attributes that the CSS
+   *  matches. A guest from a delivery party wears the Deliver cap. */
+  function guestLook(b) {
+    const v = b && typeof b === 'object' ? b : {};
+    const stage = STAGES.some((s) => s.key === v.stage) ? v.stage : 'baby';
+    const outfit = v.type === 'fest' ? 'deliver' : OUTFITS.includes(v.outfit) ? v.outfit : 'none';
+    const pynt = {};
+    if (v.pynt && typeof v.pynt === 'object') {
+      for (const slot of SLOT_KEYS) {
+        const item = v.pynt[slot];
+        if (typeof item === 'string' && /^[a-z0-9-]{1,32}$/.test(item)) pynt[slot] = item;
+      }
+    }
+    return { stage, outfit, pynt };
+  }
+
+  /** What the guest says: "Hej fra STUDIO-PC! Jeg fik 🏆 Durumkongen". */
+  function visitLine(b) {
+    const v = b || {};
+    const from = `Hej fra ${shorten(v.pc, 15) || 'kontoret'}!`;
+    if (v.type === 'fest') return `${from} Vi har leveret! 🎉`;
+    const t = v.trofae;
+    if (!t || !t.name) return `${from} Jeg har fået et nyt trofæ 🏆`;
+    return t.kind === 'fund' ? `${from} Jeg fandt 🎁 ${shorten(t.name, 32)}` : `${from} Jeg fik 🏆 ${shorten(t.name, 32)}`;
+  }
+
+  /** What Klippe answers its guest. */
+  function visitReply(b) {
+    const name = shorten(b && b.navn, 20) || 'du';
+    return b && b.type === 'fest' ? `Hej ${name}! 👋 Tillykke med leveringen!` : `Hej ${name}! 👋 Flot klaret!`;
+  }
+
+  /** The line of a delivery party (SSE `levering`): "Leveret: Portræt_v3.mp4 🎉". */
+  function deliveryLine(d) {
+    return `Leveret: ${shorten(d && (d.fil || d.projekt), 40) || 'filen'} 🎉`;
+  }
+
+  const FESTKAT_FRAMES = 103;                // GIPHY's party cat (levering.FESTKAT_URL)
+
+  /** Which frames of the party cat stand and which spin ([first, last]): GIPHY's cat stands on
+   *  0–23 and spins on 24–69; any other GIF stands on its first frame and spins through them all. */
+  function catFrames(count) {
+    if (count === FESTKAT_FRAMES) return { stand: [0, 23], spin: [24, 69] };
+    return { stand: [0, 0], spin: [0, Math.max(0, count - 1)] };
+  }
+
+  /** The time until the cat's next spin: 2.5–6 s. */
+  function nextSpin(random = Math.random) {
+    return 2500 + random() * 3500;
+  }
+
+  /** Keys out the green screen of one RGBA frame in place (`p`: its pixels, `width` in pixels):
+   *  clearly green (green over the larger of red and blue by more than 60) is transparent, the soft
+   *  edge (20–60) fades out with its green taken away. Returns the lowest row that still shows
+   *  something (−1: none) – where the cat stands. */
+  function keyGreen(p, width) {
+    let bottom = -1;
+    for (let j = 0; j < p.length; j += 4) {
+      const green = p[j + 1] - Math.max(p[j], p[j + 2]);
+      if (green > 60) {
+        p[j + 3] = 0;
+      } else if (green > 20) {
+        p[j + 3] = Math.round((p[j + 3] * (60 - green)) / 40);
+        p[j + 1] = Math.max(p[j], p[j + 2]);
+      }
+      if (p[j + 3] > 127) bottom = Math.floor(j / 4 / width);
+    }
+    return bottom;
+  }
+
+  /** `url(#stripes)` → `url(#stripes-gaest)` for the ids in `map` (a guest's own copies). */
+  function renameRefs(value, map) {
+    return String(value).replace(/url\(#([^)]+)\)/g, (all, id) => (Object.hasOwn(map, id) ? `url(#${map[id]})` : all));
+  }
+
   const CHEERS = {
     hour: (n) => [`${n} ${n === 1 ? 'time' : 'timer'} i dag! 🎉`, `${n} t i kassen – godt klippet! 🎬`, `Time nr. ${n}! Du er on fire 🔥`],
     goal: () => ['Dagens mål er nået! 🏆', 'MÅL! Hele dagens mål er i hus 🎆'],
@@ -348,8 +460,9 @@
   const helpers = { stageFor, moodFor, outfitFor, crossedHours, crossedMarks, dayStreak, isoDate, hm, words,
     moodLine, cheer, transferInfo, jobLine, messageOrder, quietLine, trophyProgress, progressLine, parsePynt,
     hungerLevel, foodLine, foodSay, foodHint, dropLeft, isCall, callerName, callLine, isRobotSheet, muzzle,
-    directorLine, buildLine, doneLine, STAGES, FOCUS_STARS, BREAK_NUDGES, ROBOT_POSES, ROBOT_COUNT, BODY_SCALE,
-    DIRECTOR_LINES };
+    directorLine, buildLine, doneLine, renderProgress, renderLine, renderDoneLine, renderKey, guestLook, visitLine,
+    visitReply, deliveryLine, catFrames, nextSpin, keyGreen, renameRefs, STAGES, FOCUS_STARS, BREAK_NUDGES,
+    ROBOT_POSES, ROBOT_COUNT, BODY_SCALE, DIRECTOR_LINES, SLOT_KEYS, OUTFITS, FESTKAT_FRAMES };
   if (typeof module === 'object' && module.exports) module.exports = helpers;
   if (typeof document === 'undefined') return;
 
@@ -450,8 +563,10 @@
     hunger: $('hunger'), maet: $('maet'), maetBar: $('maet-bar'), energi: $('energi'), feed: $('feed'),
     tray: $('tray'), trayGrid: $('tray-grid'), trayClose: $('tray-close'), dream: $('drom-mad'),
     eatBite: $('mad-bid'), eatThing: $('mad-ting'), phone: $('telefon'), phoneCount: $('telefon-antal'),
-    demoRobots: $('demo-robots'), demoCall: $('demo-call'),
+    demoRobots: $('demo-robots'), demoCall: $('demo-call'), demoParty: $('demo-party'), demoVisit: $('demo-visit'),
+    renderStatus: $('render-status'), renderWhat: $('render-what'), renderTal: $('render-tal'), renderBar: $('render-bar'),
   };
+  el.box = el.pet.querySelector('.pakke');
 
   const state = {
     status: null, todayS: null, focusStart: null, focusMin: 0, hours: 0, stage: null, streak: 0,
@@ -462,6 +577,9 @@
     food: null, menu: [], hunger: null, energy: null, craving: null, eating: null, feeding: false, laterProgress: [],
     answering: null, revealTag: null, callTags: new Set(),
     build: null, directorTimer: 0, naughtyTimer: 0, naughty: null, aimTimer: 0,
+    render: null, renderSeen: null, peers: [], visit: null, visitWaiting: null, fest: null, festWaiting: null,
+    stageTimer: 0, festkat: null,
+    tempo: 1,                                // tests speed up the visits and the party (their timelines × tempo)
   };
 
   // ---------------------------------------------------------------- memory (per day)
@@ -638,13 +756,19 @@
       el.mood.textContent = `${state.name} ${verb} ${state.eating.name} ${state.eating.kind === 'drop' ? '💉' : '😋'}`;
       return;
     }
+    if (state.fest) {
+      const file = shorten(state.fest.d.fil || state.fest.d.projekt, 36) || 'leveringen';
+      el.mood.textContent = state.fest.stamped ? `🎉 ${state.name} fejrer ${file}` : `📦 ${state.name} pakker ${file} …`;
+      return;
+    }
+    const rendering = renderLine(state.render, state.name);
     const building = buildLine(state.build, state.name);
     const job = jobLine(transferInfo(state.job), state.job);
     const mood = moodFor(state.status);
     const food = hatchedFood();
     const hungry = foodLine(food, mood, state.name, state.craving);
     const rush = food && food.energi && mood === 'working' ? '⚡ ' : '';   // turbo editing
-    el.mood.textContent = building || job || hungry || `${rush}${moodLine(state.status, state.name)}`;
+    el.mood.textContent = rendering || building || job || hungry || `${rush}${moodLine(state.status, state.name)}`;
   }
 
   // ---------------------------------------------------------------- the games (petplay.py)
@@ -1020,7 +1144,8 @@
     const ready = el.app.dataset.haand === 'awp' && el.app.dataset.stage !== 'egg' && !REDUCED
       && !el.app.dataset.sigter && el.app.dataset.play !== 'out'
       && !el.app.dataset.transfer && !state.eating && !state.answering;   // the AWP is put away then
-    const minis = el.pet.querySelectorAll('.mini');
+    // the ones on show: the crew's three, or the render box's two while Resolve renders
+    const minis = [...el.pet.querySelectorAll('.mini')].filter((m) => m.getBoundingClientRect().width > 0);
     if (!ready || !minis.length) {
       scheduleNaughty();
       return;
@@ -1074,9 +1199,433 @@
     }
   }
 
-  // ---------------------------------------------------------------- trophies and wardrobe (achievements.py)
-  const SLOT_KEYS = ['farve', 'striber', 'hat', 'briller', 'mund', 'haand', 'aura'];
+  /** "🎉 Prøv leveringsfesten" / "👋 Prøv et besøg" in the 🏆 panel: the panel closes, so it is seen. */
+  async function demoNow(path) {
+    el.panel.hidden = true;
+    try {
+      await send('POST', path, {});
+    } catch (err) {
+      say(`Øv – ${err.message}`, 5000);
+    }
+  }
 
+  // ---------------------------------------------------------------- Resolve renders (SPEC §22.1)
+  /** Remembers a finished render (the last 20, over reloads); true when it was known already. */
+  function knownRender(key) {
+    const data = memory();
+    const seen = Array.isArray(data.renders) ? data.renders : [];
+    if (seen.includes(key)) return true;
+    data.renders = [...seen, key].slice(-20);
+    remember(data);
+    return false;
+  }
+
+  /** `render` (SSE, and GET /api/render on load and whenever the event stream (re)opens): while
+   *  Resolve renders the mini robots feed the render box and the line under the pet counts; a render
+   *  that ended is celebrated (or mourned) once. `loaded`: from the GET – a render this widget saw end
+   *  before a reload stays quiet then. */
+  function applyRender(data, loaded = false) {
+    if (!data || typeof data !== 'object') return;
+    const info = renderProgress(data);
+    state.render = info ? data : null;
+    if (info) {
+      el.app.dataset.render = '';
+      el.renderWhat.textContent = info.what;
+      el.renderTal.textContent = `· ${info.tal}`;
+      el.renderStatus.title = info.text;
+      el.renderBar.style.width = `${info.pct || 0}%`;
+      el.app.style.setProperty('--render', String((info.pct || 0) / 100));
+    } else {
+      delete el.app.dataset.render;
+    }
+    el.renderStatus.hidden = !info;
+    const key = renderKey(data.faerdig);
+    if (key && key !== state.renderSeen) {
+      state.renderSeen = key;
+      if (!knownRender(key) || !loaded) renderEnded(data.faerdig);
+    }
+    renderMoodLine();
+    reportLook();
+  }
+
+  /** Done: fireworks. Failed: a sad face and the reason. Stopped: a word. Gone: nothing. */
+  function renderEnded(f) {
+    const line = renderDoneLine(f);
+    if (!line) return;
+    if (f.udfald === 'done') {
+      celebrate(line, 'fireworks', 4);
+    } else if (f.udfald === 'failed') {
+      pulse('trist', 6000);
+      say(line, 9000);
+    } else {
+      say(line, 5000);
+    }
+  }
+
+  async function loadRender() {
+    try {
+      applyRender(await get('/api/render'), true);
+    } catch { /* no Resolve bridge (yet) */ }
+  }
+
+  // ---------------------------------------------------------------- office Klippes (SPEC §22.3)
+  /** GET /api/kontor: the colleagues' Klippes about now – only to know them (visits are never
+   *  replayed; why Windows may ask about the network, kontor.py says once by itself). */
+  async function loadKontor() {
+    let data;
+    try {
+      data = await get('/api/kontor');
+    } catch {
+      return;                                // the office has not started
+    }
+    state.peers = Array.isArray(data.peers) ? data.peers.filter((p) => p && typeof p === 'object') : [];
+    const names = state.peers.map((p) => `${shorten(p.navn, 20) || 'Klippe'} (${shorten(p.pc, 15)})`);
+    el.demoVisit.title = names.length ? `Kollegernes Klipper lige nu: ${names.join(', ')}`
+      : 'En kollegas Klippe kigger forbi – som når den har fået et trofæ';
+  }
+
+  /** SSE `besoeg`: a colleague's Klippe comes by (the newest waits – one at most). */
+  function visit(data) {
+    if (!data || typeof data !== 'object') return;
+    state.visitWaiting = data;
+    nextOnStage();
+  }
+
+  /** The next party or guest once the stage is free – never while Klippe eats or plays out of the
+   *  box, a guest not while a card is transferred either; a party goes first. */
+  function nextOnStage() {
+    clearTimeout(state.stageTimer);
+    state.stageTimer = 0;
+    if (state.visit || state.fest || (!state.visitWaiting && !state.festWaiting)) return;
+    const busy = Boolean(state.eating) || el.app.dataset.play === 'out';
+    if (state.festWaiting && !busy) {
+      const data = state.festWaiting;
+      state.festWaiting = null;
+      startParty(data);
+    } else if (state.visitWaiting && !busy && !el.app.dataset.transfer) {
+      const data = state.visitWaiting;
+      state.visitWaiting = null;
+      startVisit(data);
+    } else {
+      state.stageTimer = setTimeout(nextOnStage, 1000);
+    }
+  }
+
+  /** `fn` after `ms` (× tempo), while `run` (a visit or a party) is still on. */
+  function later(run, ms, fn) {
+    run.timers.push(setTimeout(() => {
+      if (state.visit === run || state.fest === run) fn();
+    }, ms * state.tempo));
+  }
+
+  /** Where Klippe stands on the page: the floor (the pet's y 180) and its middle. */
+  function floor() {
+    const r = el.pet.getBoundingClientRect();
+    const k = r.height / 200;
+    return { y: r.top + 180 * k, x: r.left + 100 * k };
+  }
+
+  /** `node` walks from x `from` to `to` (px) in `ms` – or just stands there (reduced motion). */
+  function walk(node, from, to, ms) {
+    if (REDUCED) {
+      node.style.transform = `translateX(${to}px)`;
+      return;
+    }
+    node.classList.add('gaar');
+    node.animate([{ transform: `translateX(${from}px)` }, { transform: `translateX(${to}px)` }],
+      { duration: ms * state.tempo, easing: 'linear', fill: 'forwards' })
+      .finished.then(() => node.classList.remove('gaar'), () => {});
+  }
+
+  const GUEST_PX = 110;
+  const GUEST_IDS = { stripes: 'stripes-gaest', glow: 'glow-gaest' };
+  // What a guest does not bring along: Klippe's own jobs, its phone, its food and its hole.
+  const GUEST_LEAVE_OUT = '.crew, .luge, .render, .pakke, .telefon, .carry, .hole, .zzz, .drop, .drop__tape, .megafon,'
+    + ' .drom, .knurr, .savl, .mad';
+
+  /** A copy of the pet's drawing for a guest: its own stripes and glow (renamed – the colours come
+   *  from the guest's data-*, where the copy sits), no other ids, none of Klippe's jobs. */
+  function guestDrawing() {
+    const svg = el.pet.cloneNode(true);
+    svg.removeAttribute('id');
+    svg.setAttribute('class', 'pet');
+    for (const n of svg.querySelectorAll('defs > *')) {
+      if (!Object.hasOwn(GUEST_IDS, n.id)) n.remove();
+    }
+    for (const n of svg.querySelectorAll(GUEST_LEAVE_OUT)) n.remove();
+    for (const n of svg.querySelectorAll('[id]')) {
+      if (Object.hasOwn(GUEST_IDS, n.id)) {
+        n.id = GUEST_IDS[n.id];
+      } else {
+        n.removeAttribute('id');
+      }
+    }
+    for (const n of svg.querySelectorAll('[fill], [stroke], [mask], [clip-path], [filter]')) {
+      for (const name of ['fill', 'stroke', 'mask', 'clip-path', 'filter']) {
+        const value = n.getAttribute(name);
+        if (value && value.includes('url(')) n.setAttribute(name, renameRefs(value, GUEST_IDS));
+      }
+    }
+    return svg;
+  }
+
+  /** The guest walks in from the left, says its line, both jump and clap (twice), and after ~6 s it
+   *  walks out again. Everything from the packet goes into textContent or data-* only. */
+  function startVisit(data) {
+    const look = guestLook(data);
+    const guest = node('div', 'gaest');
+    Object.assign(guest.dataset, { stage: look.stage, outfit: look.outfit, mood: 'chill', ...look.pynt });
+    const bubble = node('p', 'gaest__boble', visitLine(data));
+    bubble.setAttribute('role', 'status');
+    bubble.hidden = true;
+    guest.append(bubble, guestDrawing());
+    guest.style.left = '-6px';
+    guest.style.top = `${Math.round(floor().y - GUEST_PX * 0.9)}px`;
+    document.body.append(guest);
+    const run = { data, guest, timers: [] };
+    state.visit = run;
+    walk(guest, -GUEST_PX - 20, 0, 1400);
+    later(run, 1400, () => {
+      bubble.hidden = false;
+    });
+    later(run, 1700, () => {
+      cheerTogether(guest);
+      if (data.trofae && data.trofae.rarity === 'legendarisk') floatEmoji('⭐', 4);
+    });
+    later(run, 2600, () => say(visitReply(data), 3200));
+    later(run, 3400, () => cheerTogether(guest));
+    later(run, 5600, () => {
+      bubble.hidden = true;
+      walk(guest, 0, -GUEST_PX - 20, 1400);
+    });
+    later(run, 7100, () => endVisit(run));
+  }
+
+  /** Both jump and clap – and they are glad to see each other. */
+  function cheerTogether(guest) {
+    jump();
+    pulse('clap', 950);
+    party(1600);
+    const svg = guest.querySelector('svg');
+    svg.classList.remove('jump', 'clap');
+    void svg.getBoundingClientRect();          // restart the animations
+    svg.classList.add('jump', 'clap');
+    guest.classList.add('party');
+    guest.dataset.pose = 'cheer';
+    setTimeout(() => {
+      svg.classList.remove('jump', 'clap');
+      guest.classList.remove('party');
+      delete guest.dataset.pose;
+    }, 1000);
+  }
+
+  function endVisit(run) {
+    run.timers.forEach(clearTimeout);
+    run.guest.remove();
+    if (state.visit === run) state.visit = null;
+    nextOnStage();
+  }
+
+  // ---------------------------------------------------------------- the delivery party (SPEC §22.4)
+  /** SSE `levering`: a render into Final, or a new file in the project's Final – a party (the
+   *  newest waits, one at most). */
+  function deliver(data) {
+    if (!data || typeof data !== 'object') return;
+    state.festWaiting = data;
+    nextOnStage();
+  }
+
+  /** ~12 s: Klippe puts on the Deliver cap and packs the reel into a box – flaps, tape, the
+   *  "LEVERET ✓" stamp – then confetti and fireworks, and the party cat walks in, hops, spins now
+   *  and then and walks out again. No sound here (the main process rings once). */
+  function startParty(data) {
+    const run = { d: data, timers: [], cat: null, stamped: false };
+    state.fest = run;
+    el.box.classList.remove('is-lukket', 'is-tapet', 'is-stemplet', 'is-vaek');
+    delete el.app.dataset.fest;
+    void el.app.offsetWidth;                 // restart the cap's and the box's animations
+    el.app.dataset.fest = data.demo ? 'demo' : data.kilde === 'fil' ? 'fil' : 'render';
+    const cat = festkat();                   // fetched and keyed while the box is packed
+    renderMoodLine();
+    later(run, 1700, () => el.box.classList.add('is-lukket'));
+    later(run, 2300, () => el.box.classList.add('is-tapet'));
+    later(run, 3000, () => {
+      el.box.classList.add('is-stemplet');
+      run.stamped = true;
+      renderMoodLine();
+      if (!REDUCED) fx.start('confetti', 5);
+      celebrate(deliveryLine(data), 'fireworks', 5);
+      if (data.demo) say('Bare en prøve – sådan fejrer jeg, når en film er leveret 😉', 5000);
+    });
+    later(run, 3400, () => catEnters(run, cat));
+    later(run, 10600, () => catLeaves(run));
+    later(run, 12000, () => el.box.classList.add('is-vaek'));
+    later(run, 12500, () => endParty(run));
+  }
+
+  function endParty(run) {
+    run.timers.forEach(clearTimeout);
+    stopCat(run);
+    if (state.fest === run) state.fest = null;
+    delete el.app.dataset.fest;
+    el.box.classList.remove('is-lukket', 'is-tapet', 'is-stemplet', 'is-vaek');
+    renderMoodLine();
+    nextOnStage();
+  }
+
+  /** The party cat (GET /api/festkat), every frame decoded once and its green screen keyed out:
+   *  {frames: [{bitmap, ms}], plan, w, h, bottom} – or null without the GIF or ImageDecoder (then
+   *  the drawn cat comes, and the GIF is tried again at the next party). */
+  function festkat() {
+    if (!state.festkat) {
+      state.festkat = decodeFestkat().catch(() => null).then((cat) => {
+        if (!cat) state.festkat = null;
+        return cat;
+      });
+    }
+    return state.festkat;
+  }
+
+  async function decodeFestkat() {
+    if (typeof ImageDecoder === 'undefined') return null;
+    const response = await fetch('/api/festkat');
+    if (!response.ok) return null;
+    const decoder = new ImageDecoder({ data: await response.arrayBuffer(), type: 'image/gif' });
+    try {
+      await decoder.tracks.ready;
+      await decoder.completed;
+      const count = decoder.tracks.selectedTrack.frameCount;
+      const plan = catFrames(count);
+      const work = document.createElement('canvas');
+      const ctx = work.getContext('2d', { willReadFrequently: true });
+      const frames = [];
+      let bottom = -1;
+      for (let i = 0; i < count; i += 1) {
+        const { image } = await decoder.decode({ frameIndex: i });
+        work.width = image.displayWidth;       // (also clears it)
+        work.height = image.displayHeight;
+        ctx.drawImage(image, 0, 0);
+        const pixels = ctx.getImageData(0, 0, work.width, work.height);
+        const low = keyGreen(pixels.data, work.width);
+        if (i >= plan.stand[0] && i <= plan.stand[1]) bottom = Math.max(bottom, low);
+        ctx.putImageData(pixels, 0, 0);
+        frames.push({ bitmap: await createImageBitmap(work), ms: Math.max(20, (image.duration || 1e5) / 1000) });
+        image.close();
+      }
+      return frames.length ? { frames, plan, w: work.width, h: work.height, bottom } : null;
+    } finally {
+      decoder.close();
+    }
+  }
+
+  const CAT_PX = 120;                        // the GIF's picture, high (the cat itself is about half)
+  const DRAWN_CAT_PX = 74;                   // the drawn cat's 100 units
+
+  /** The cat walks in from the right and stands beside Klippe (its feet on Klippe's floor) – the
+   *  GIF once it is decoded (≤ 2 s more), else the drawn cat. */
+  async function catEnters(run, frames) {
+    const cat = await Promise.race([frames, new Promise((resolve) => setTimeout(resolve, 2000, null))]);
+    if (state.fest !== run || run.cat) return;
+    const box = node('div', 'festkat');
+    box.setAttribute('aria-hidden', 'true');
+    let figure;
+    let width;
+    let height;
+    let feet;                                // 0…1: where in its picture the cat stands
+    if (cat) {
+      figure = document.createElement('canvas');
+      figure.width = cat.w;
+      figure.height = cat.h;
+      height = CAT_PX;
+      width = (CAT_PX * cat.w) / cat.h;
+      feet = cat.bottom >= 0 ? (cat.bottom + 1) / cat.h : 1;
+    } else {
+      figure = document.createElementNS(SVG_NS, 'svg');
+      figure.setAttribute('viewBox', '0 0 100 100');
+      const use = document.createElementNS(SVG_NS, 'use');
+      use.setAttribute('href', '#kat-tegning');
+      figure.append(use);
+      height = width = DRAWN_CAT_PX;
+      feet = 0.95;
+    }
+    figure.classList.add('festkat__kat', 'hopper');
+    figure.style.width = `${width}px`;
+    figure.style.height = `${height}px`;
+    box.append(figure);
+    const ground = floor();
+    box.style.left = `${Math.round(Math.min(window.innerWidth - width * 0.55, ground.x + 85 - width / 2))}px`;
+    box.style.top = `${Math.round(ground.y - height * feet)}px`;
+    document.body.append(box);
+    run.cat = { box, figure, cat, width, timer: 0, spins: 0 };
+    walk(box, width + 20, 0, 1500);
+    if (cat) {
+      playCat(run);
+    } else if (!REDUCED) {
+      run.cat.timer = setTimeout(() => spinDrawnCat(run), 1800 * state.tempo);
+    }
+  }
+
+  /** The GIF: it stands and hops (the stand frames over and over), and every 2.5–6 s it spins once
+   *  (the spin frames, no hop meanwhile). Reduced motion: one standing frame. */
+  function playCat(run) {
+    const c = run.cat;
+    const { frames, plan } = c.cat;
+    const ctx = c.figure.getContext('2d');
+    let index = plan.stand[0];
+    let spinning = false;
+    let spinAt = performance.now() + nextSpin() * state.tempo;
+    const show = () => {
+      if (run.cat !== c) return;
+      ctx.clearRect(0, 0, c.figure.width, c.figure.height);
+      ctx.drawImage(frames[index].bitmap, 0, 0);
+      if (REDUCED) return;
+      const wait = frames[index].ms;
+      if (spinning) {
+        if (index >= plan.spin[1]) {
+          spinning = false;
+          index = plan.stand[0];
+          c.figure.classList.add('hopper');
+          spinAt = performance.now() + nextSpin() * state.tempo;
+        } else {
+          index += 1;
+        }
+      } else if (performance.now() >= spinAt) {
+        spinning = true;
+        c.spins += 1;
+        index = plan.spin[0];
+        c.figure.classList.remove('hopper');
+      } else {
+        index = index >= plan.stand[1] ? plan.stand[0] : index + 1;
+      }
+      c.timer = setTimeout(show, wait);
+    };
+    show();
+  }
+
+  /** The drawn cat spins with CSS (three quick turns), then hops again until the next spin. */
+  function spinDrawnCat(run) {
+    const c = run.cat;
+    if (!c) return;
+    c.spins += 1;
+    c.figure.classList.replace('hopper', 'snurrer');
+    c.timer = setTimeout(() => {
+      c.figure.classList.replace('snurrer', 'hopper');
+      c.timer = setTimeout(() => spinDrawnCat(run), nextSpin() * state.tempo);
+    }, 1400);
+  }
+
+  function catLeaves(run) {
+    if (run.cat) walk(run.cat.box, 0, run.cat.width + 20, 1400);
+  }
+
+  function stopCat(run) {
+    if (!run.cat) return;
+    clearTimeout(run.cat.timer);
+    run.cat.box.remove();
+    run.cat = null;
+  }
+
+  // ---------------------------------------------------------------- trophies and wardrobe (achievements.py)
   /** What Klippe wears: data-farve, data-hat … on the page (the CSS draws it). */
   function applyWardrobe(equipped) {
     for (const slot of SLOT_KEYS) {
@@ -1232,6 +1781,8 @@
   });
   el.demoRobots.addEventListener('click', () => demo(false));
   el.demoCall.addEventListener('click', () => demo(true));
+  el.demoParty.addEventListener('click', () => demoNow('/api/levering/demo'));
+  el.demoVisit.addEventListener('click', () => demoNow('/api/kontor/demo'));
   for (const tab of el.panel.querySelectorAll('[data-panel-tab]')) {
     tab.addEventListener('click', () => {
       state.panelTab = tab.dataset.panelTab;
@@ -1689,7 +2240,7 @@
   })();
   window.__klippe = { celebrate, fx, state, applyStatus, applyStage, applyJob, applyPlay, lookReport,
     renderMessages, applySettings, celebrateProgress, openPanel, applyFood, feed, openTray, answerCall,
-    applyBuild, applyRobot, aim, naughtyRobot };   // for tests
+    applyBuild, applyRobot, aim, naughtyRobot, applyRender, visit, deliver, festkat, floor };   // for tests
 
   // ---------------------------------------------------------------- events
   function connectEvents() {
@@ -1779,11 +2330,29 @@
         applySettings(JSON.parse(event.data));
       } catch { /* ignore */ }
     });
+    source.addEventListener('render', (event) => {
+      try {
+        applyRender(JSON.parse(event.data));
+      } catch { /* ignore */ }
+    });
+    source.addEventListener('levering', (event) => {
+      try {
+        deliver(JSON.parse(event.data));
+      } catch { /* ignore */ }
+    });
+    source.addEventListener('besoeg', (event) => {
+      try {
+        visit(JSON.parse(event.data));
+      } catch { /* ignore */ }
+    });
     // Events are not replayed: when the stream is (back) up, what it may have missed is asked for –
-    // a build that ended or a call that stopped ringing in a gap would otherwise stay on screen.
+    // a build that ended, a call that stopped ringing or a render that finished in a gap – and, on
+    // load too, which colleagues' Klippes are about (visits are never replayed).
     source.onopen = () => {
       loadBuild();
       loadMessages();
+      loadRender();
+      loadKontor();
     };
     source.onerror = () => {
       source.close();
@@ -1803,7 +2372,9 @@
     setInterval(() => reportLook(true), 60e3);
     setInterval(() => renderMessages(state.messages), 60e3);   // expired messages go
     setInterval(() => state.build && loadBuild(), 30e3);         // a lost "done" never leaves it building
+    setInterval(() => state.render && loadRender(), 30e3);       // … nor rendering
     await loadMessages();
+    await loadRender();                    // before the stream: a finished render is celebrated once
     loadBuild();
     loadPet();
     loadFood();

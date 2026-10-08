@@ -301,6 +301,32 @@ class FakeCrew(Fake):
     def handle_uri(self, uri: str) -> None: return self._call("handle_uri", uri)
 
 
+class FakeKontor(Fake):
+    """projektsog.kontor.Kontor stand-in (never opens a socket)."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.returns.update({"state": {"enabled": False, "peers": [], "grund": None}, "demo": {"ok": True}})
+
+    def start(self) -> None: return self._call("start")
+    def close(self) -> None: return self._call("close")
+    def state(self) -> dict: return self._call("state")
+    def demo(self) -> dict: return self._call("demo")
+
+
+class FakeLevering(Fake):
+    """projektsog.levering.Levering stand-in (never watches a folder or fetches the cat)."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.returns.update({"demo": {"ok": True}, "festkat": None})
+
+    def start(self) -> None: return self._call("start")
+    def close(self) -> None: return self._call("close")
+    def demo(self) -> dict: return self._call("demo")
+    def festkat(self) -> bytes | None: return self._call("festkat")
+
+
 class FakeMessages(Fake):
     """projektsog.messages.MessageBoard stand-in."""
 
