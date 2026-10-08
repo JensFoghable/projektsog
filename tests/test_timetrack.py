@@ -343,6 +343,22 @@ class ReportTests(TrackerCase):
         per_day = self.tracker.export_csv(date(2026, 10, 1), date(2026, 10, 1), per_day=True)
         self.assertEqual(per_day.lstrip("﻿").splitlines()[1].split(";")[0], "2026-10-01")
 
+    def test_brief_visits_are_left_out_of_the_overview(self) -> None:
+        day = date(2026, 10, 1)
+        start = datetime(2026, 10, 1, 9, 0).timestamp()
+        self.store.insert(("Mette Juhl", "Local", "u1", "edit", ""), None, start, start + 600, "PC")    # 10 min
+        self.store.insert(("Mette Juhl - v2", "Local", "u2", "edit", ""), None, start + 700, start + 712, "PC")
+        self.store.insert(("Rikke Lindholm", None, "u3", "color", ""), None, start + 800, start + 900, "PC")
+        rep = self.tracker.report(day, day)                                    # under 3 min (the default)
+        self.assertEqual([p["project"] for p in rep["projects"]], ["Mette Juhl"])
+        self.assertEqual(rep["total_s"], 600.0)
+        self.assertEqual(rep["skjult"], {"projekter": 2, "total_s": 112.0, "minimum_s": 180.0})
+        text = self.tracker.export_csv(day, day, round_minutes=15)            # not billed as 0,25 either
+        self.assertEqual(len(text.lstrip("﻿").splitlines()), 2)
+        self.cfg.update({"time_min_minutes": 0})                               # "Vis alle"
+        self.assertEqual(len(self.tracker.report(day, day)["projects"]), 3)
+        self.assertEqual(len(self.tracker.report(day, day, minimum_s=0)["projects"]), 3)
+
     def test_per_day_rows_hold_that_day_s_pages(self) -> None:
         self.w.advance(3600)                  # Thursday: an hour in Edit
         self.w.t = datetime(2026, 10, 2, 9, 0).timestamp()

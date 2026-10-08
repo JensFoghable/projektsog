@@ -992,7 +992,11 @@ Supports `?q=<query>` and `?panel=settings` URL parameters (dev/testing).
 * `install.ps1` (saved as **UTF-8 with BOM**): Start-menu shortcut "Projektsøg" → pythonw.exe
   `"<repo>\Projektsøg.pyw"` with the app icon and AppUserModelID `Projektsog.App` (= `app.AUMID`);
   autostart **on by default** (writes exactly `RUN_COMMAND`; `-NoAutostart` skips); copies the
-  Resolve script(s) into the Utility folder; starts the app with `--background`; prints
+  Resolve script(s) into the Utility folder; registers the Claude sessions' Resolve queue
+  (`<python> koe.py installer`, SPEC §21.2) when `-Koe <path>` or `Davinci\resolve-koe\koe.py`
+  beside the repo folder, `C:\Github\Davinci\…`, `%USERPROFILE%\Github\Davinci\…` or
+  `%USERPROFILE%\Documents\GitHub\Davinci\…` is found (else a note, the install goes on);
+  starts the app with `--background`; prints
   "Projektsøg kører – tryk Shift+Mellemrum hvor som helst" and "Genstart DaVinci Resolve for at se
   ‘Projektsøg’ under Workspace ▸ Scripts ▸ Utility". `config.DEFAULTS["hosts"]` is empty; the
   optional `-Hosts A,B` adds computers to `cfg["hosts"]` (names checked like
@@ -1133,9 +1137,13 @@ rendering, folder}` from the Resolve helper's poll (`GetCurrentPage`, the curren
   activity when Resolve's process is gone.
 * Storage: `time.db` (local SQLite, WAL) table `segments(project, database, uid, folder, bucket,
   start, end, host)`, epoch seconds; the running segment's end is saved every 30 s.
-* `report(first, last)`: per (project, database), sorted by total desc: `buckets`, `days`,
-  `day_buckets` (per local day, split at midnight), `total_s`, `folder`, `last`; plus `total_s`
-  and `buckets` (labels in display order). Includes the running segment.
+* `report(first, last, minimum_s=None)`: per (project, database), sorted by total desc:
+  `buckets`, `days`, `day_buckets` (per local day, split at midnight), `total_s`, `folder`,
+  `last`; plus `total_s` and `buckets` (labels in display order). Includes the running segment.
+  A project with less than `minimum_s` in the period (default `time_min_minutes` × 60, config
+  default 3, 0–60, 0 = all) is left out of `projects`, `total_s` and the export; `skjult:
+  {projekter, total_s, minimum_s}` tells the Tid tab ("6 korte besøg under 3 min er ikke med").
+  `status().today_s` counts everything (`minimum_s=0`).
 * `export_csv(first, last, round_minutes, per_day)`: UTF-8 BOM, `;`, decimal comma, hours with
   two decimals; rounding is UP to whole steps, per row (per project, or per day with `per_day`).
 * `status()`: `{state: recording|idle|paused|no-resolve|off, enabled, project, bucket,

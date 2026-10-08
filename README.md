@@ -55,6 +55,9 @@ Stifinder.
    - opretter genvejen **Projektsøg** i Start-menuen,
    - slår **Start med Windows** til (vil du ikke det, så tilføj `-NoAutostart`),
    - kopierer DaVinci Resolve-scriptet til *Workspace ▸ Scripts ▸ Utility*,
+   - registrerer Claude-sessionernes Resolve-kø (`koe.py installer`), hvis Davinci-mappen ligger ved
+     siden af Projektsøg-mappen eller i `C:\Github\Davinci` (ellers angiv `-Koe "C:\sti\til\koe.py"`) –
+     så virker **Byg nu**, telefonen og robotterne i Klippe på den pc (også efter **Opdater nu**),
    - gemmer listen over de andre computere, hvis du angiver `-Hosts` (se nedenfor),
    - starter Projektsøg i baggrunden.
 
@@ -333,7 +336,10 @@ tæller lige nu); klik på det for at åbne fanen **Tid**.
 **Rapport og fakturering:** Vælg **I dag**, **Denne uge**, **Sidste måned** osv. (eller egne
 datoer). Tabellen viser tiden pr. projekt og side; **Pr. dag** viser hver dag for sig, og
 **Afrunding** (standard 15 min, opad) giver timerne til fakturaen. **Eksportér til Excel**
-henter en CSV-fil, der åbner direkte i dansk Excel (semikolon, komma som decimaltegn).
+henter en CSV-fil, der åbner direkte i dansk Excel (semikolon, komma som decimaltegn). Projekter
+med under 3 minutter i perioden (et projekt, der kun lige blev åbnet – også af en Claude-session)
+kommer ikke med i oversigten og eksporten og bliver ikke rundet op; under tabellen står, hvor mange
+der er skjult. Grænsen ændres under **Skjul korte besøg** (eller „Vis alle").
 
 Tiden gemmes kun på den pc, hvor der er arbejdet (`%LOCALAPPDATA%\Projektsog\time.db`). Der
 tages ingen skærmbilleder, og der gemmes ingen tastetryk – kun *hvornår* mus eller tastatur

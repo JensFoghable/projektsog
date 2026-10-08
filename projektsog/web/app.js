@@ -854,7 +854,7 @@
     timeNowMain: $('time-now-main'), timeNowSub: $('time-now-sub'), timeNowToday: $('time-now-today'),
     timePeriods: $('time-periods'), timeFrom: $('time-from'), timeTo: $('time-to'),
     timeReportTitle: $('time-report-title'), timeDetail: $('time-detail'), timeRound: $('time-round'),
-    timeExport: $('time-export'), timeTable: $('time-table'), timeIdle: $('time-idle'),
+    timeExport: $('time-export'), timeTable: $('time-table'), timeIdle: $('time-idle'), timeMin: $('time-min'),
     timeSitesForm: $('time-sites-form'), timeSites: $('time-sites'), timeSitesError: $('time-sites-error'),
     timeAiSitesForm: $('time-ai-sites-form'), timeAiSites: $('time-ai-sites'), timeAiSitesError: $('time-ai-sites-error'),
     petGoal: $('pet-goal'), petNameForm: $('pet-name-form'), petName: $('pet-name'),
@@ -2856,6 +2856,8 @@
     selectValue(el.timeRound, round, `Afrund til ${round} min`);
     const idle = Number(s.time_idle_minutes) || 10;
     selectValue(el.timeIdle, idle, `${idle} min`);
+    const brief = Number(s.time_min_minutes) || 0;
+    selectValue(el.timeMin, brief, brief ? `Under ${brief} min` : 'Vis alle');
     for (const list of SITE_LISTS) {
       const input = el[list.input];
       if (document.activeElement !== input && !state.time.sitesDirty.has(list.key)) {
@@ -2887,6 +2889,8 @@
         perTimeline: state.time.detail === 'timeline' });
       title = `${plural(report.projects.length, 'projekt', 'projekter')} · ${durationWords(table.sums.total)}`;
       content = timeTableNode(table, roundMinutes);
+      const note = briefNote(report.skjult);
+      if (note) content = h('div', null, content, h('p', { class: 'time-table__note' }, note));
     }
     el.timeExport.disabled = !(report && report.projects.length);
     setText(el.timeReportTitle, title);
@@ -2901,6 +2905,14 @@
       const again = [...el.timeTable.querySelectorAll('[data-time-find]')].find((b) => b.dataset.timeFind === find);
       if (again) again.focus();
     }
+  }
+
+  /** "6 korte besøg under 3 min er ikke med (0:04)" – the projects the report left out. */
+  function briefNote(hidden) {
+    if (!hidden || !hidden.projekter) return '';
+    const minutes = Math.round((hidden.minimum_s || 0) / 60);
+    const visits = hidden.projekter === 1 ? '1 kort besøg' : `${hidden.projekter} korte besøg`;
+    return `${visits} under ${minutes} min er ikke med (${formatDuration(hidden.total_s || 0)}) – se Indstillinger ▸ Tid`;
   }
 
   function timeTableNode(table, roundMinutes) {
@@ -2971,7 +2983,7 @@
   function saveTimeSetting(key, value) {
     if (state.settings) state.settings = { ...state.settings, [key]: value };
     renderTimeReport();
-    saveSettings({ [key]: value });
+    return saveSettings({ [key]: value });
   }
 
   async function submitTimeSites(list, event) {
@@ -4095,6 +4107,10 @@
     el.timeDetail.addEventListener('keydown', (event) => onRovingKeys(event, detailButtons, chooseDetail));
     el.timeRound.addEventListener('change', () => saveTimeSetting('time_round_minutes', Number(el.timeRound.value) || 0));
     el.timeIdle.addEventListener('change', () => saveTimeSetting('time_idle_minutes', Number(el.timeIdle.value) || 10));
+    el.timeMin.addEventListener('change', async () => {                 // the report is filtered by the server
+      await saveTimeSetting('time_min_minutes', Number(el.timeMin.value) || 0);
+      loadTimeReport();
+    });
     el.timeExport.addEventListener('click', exportTime);
     el.timeTable.addEventListener('click', (event) => {
       const find = event.target.closest('[data-time-find]');

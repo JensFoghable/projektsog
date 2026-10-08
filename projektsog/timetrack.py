@@ -377,12 +377,14 @@ class TimeTracker:
                           bucket_label=BUCKET_LABELS.get(seg["key"][3], seg["key"][3].title()),
                           timeline=seg["key"][4] or None, folder=seg["folder"], since=seg["start"])
         today = datetime.fromtimestamp(self._wall()).date()   # the tracker's own clock
-        result["today_s"] = round(sum(r["total_s"] for r in self.report(today, today)["projects"]))
+        result["today_s"] = round(sum(r["total_s"] for r in self.report(today, today, minimum_s=0)["projects"]))
         return result
 
-    def report(self, first: date, last: date) -> dict[str, Any]:
+    def report(self, first: date, last: date, minimum_s: float | None = None) -> dict[str, Any]:
         """Totals per project between two local dates (inclusive), split by bucket, by day and
-        by timeline (``timelines``: largest first; "" = time recorded before timelines were)."""
+        by timeline (``timelines``: largest first; "" = time recorded before timelines were).
+        A project with less than ``minimum_s`` in the period (default: ``time_min_minutes``) is
+        left out – only counted in ``skjult`` {"projekter", "total_s"}."""
         start = datetime.combine(first, datetime.min.time()).timestamp()
         end = datetime.combine(last + timedelta(days=1), datetime.min.time()).timestamp()
         rows = self.store.between(start, end) if self.store else []
@@ -423,8 +425,14 @@ class TimeTracker:
                               for t in sorted(p["timelines"].values(),
                                               key=lambda t: (-t["total_s"], t["name"].casefold()))]
             p["total_s"] = round(p["total_s"], 1)
-        return {"from": first.isoformat(), "to": last.isoformat(), "projects": ordered,
-                "total_s": round(sum(p["total_s"] for p in ordered), 1),
+        if minimum_s is None:
+            minimum_s = max(0.0, float(self._cfg.get("time_min_minutes", 3) or 0)) * 60.0
+        shown = [p for p in ordered if p["total_s"] >= minimum_s]
+        brief = [p for p in ordered if p["total_s"] < minimum_s]
+        return {"from": first.isoformat(), "to": last.isoformat(), "projects": shown,
+                "total_s": round(sum(p["total_s"] for p in shown), 1),
+                "skjult": {"projekter": len(brief), "total_s": round(sum(p["total_s"] for p in brief), 1),
+                           "minimum_s": minimum_s},
                 "buckets": BUCKET_LABELS}
 
     def folders_on(self, day: date) -> list[str]:

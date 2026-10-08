@@ -7,6 +7,9 @@
     - opretter genvejen "Projektsøg" i Start-menuen (med ikon og AppUserModelID)
     - slår "Start med Windows" til (spring over med -NoAutostart)
     - kopierer DaVinci Resolve-scriptet til Workspace > Scripts > Utility
+    - registrerer Claude-sessionernes Resolve-kø (koe.py installer), så "Byg nu" i Klippe virker
+      og robotterne kan se, når en session bygger - koe.py findes i Davinci-mappen ved siden af
+      Projektsøg-mappen eller i C:\Github\Davinci (eller angiv -Koe)
     - gemmer listen over computere, hvis -Hosts er angivet
     - starter Projektsøg i baggrunden
     Kræver ikke administratorrettigheder. Kør scriptet igen for at opdatere en installation.
@@ -16,6 +19,10 @@
 
 .PARAMETER Python
     Sti til python.exe (3.14 eller nyere), hvis den ikke findes automatisk.
+
+.PARAMETER Koe
+    Sti til Resolve-køens koe.py, hvis den ikke ligger i Davinci\resolve-koe ved siden af
+    Projektsøg-mappen eller i C:\Github\Davinci\resolve-koe.
 
 .PARAMETER Hosts
     Andre computere, hvis delte mapper Projektsøg skal søge i - navnene adskilt af komma uden
@@ -34,7 +41,8 @@
 param(
     [switch] $NoAutostart,
     [string] $Python,
-    [string[]] $Hosts
+    [string[]] $Hosts,
+    [string] $Koe
 )
 
 Set-StrictMode -Version 3.0
@@ -526,6 +534,43 @@ function Install-ResolveScripts {
     return $true
 }
 
+function Find-ResolveQueue {
+    # The Claude sessions' Resolve queue lives in the Davinci folder (not in this repo): beside the
+    # Projektsøg folder, or in C:\Github\Davinci - or wherever -Koe says.
+    if ($Koe) {
+        if (Test-Path -LiteralPath $Koe -PathType Leaf) { return (Resolve-Path -LiteralPath $Koe).Path }
+        Write-Warning "koe.py findes ikke: $Koe"
+        return $null
+    }
+    $candidates = @(
+        (Join-Path (Split-Path -Parent $Repo) 'Davinci\resolve-koe\koe.py'),
+        'C:\Github\Davinci\resolve-koe\koe.py',
+        (Join-Path $env:USERPROFILE 'Github\Davinci\resolve-koe\koe.py'),
+        (Join-Path $env:USERPROFILE 'Documents\GitHub\Davinci\resolve-koe\koe.py'))
+    foreach ($path in $candidates) {
+        if (Test-Path -LiteralPath $path -PathType Leaf) { return $path }
+    }
+    return $null
+}
+
+function Install-ResolveQueue([string] $PythonExe) {
+    # "koe.py installer" registers the resolvekoe: links (HKCU, no admin): the "Byg nu" buttons
+    # open them, and Projektsøg finds the queue's state through them (SPEC §21.2).
+    $queue = Find-ResolveQueue
+    if (-not $queue) {
+        Write-Host ('  Resolve-køen (Davinci\resolve-koe\koe.py) blev ikke fundet - springer over. ' +
+                    'Angiv den med -Koe "C:\sti\til\koe.py".')
+        return $false
+    }
+    $output = @(& $PythonExe $queue installer 2>&1 | ForEach-Object { "$_" })
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Resolve-køen kunne ikke registreres: $(($output -join ' ').Trim())"
+        return $false
+    }
+    Write-Host "  $queue"
+    return $true
+}
+
 function Start-Projektsog([string] $Pythonw) {
     $start = @{
         FilePath         = $Pythonw
@@ -614,6 +659,9 @@ Remove-ItemProperty -LiteralPath $StartupApprovedKey -Name $AppName -ErrorAction
 
 Write-Step 'Kopierer DaVinci Resolve-script ...'
 $resolveScriptsInstalled = Install-ResolveScripts
+
+Write-Step 'Registrerer Resolve-køen (Byg nu og robotterne) ...'
+$queueInstalled = Install-ResolveQueue $pythonInfo.executable
 
 if ($HostsGiven) {
     # Only now: the stopped app can no longer overwrite config.json with its own copy.

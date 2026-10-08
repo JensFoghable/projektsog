@@ -138,6 +138,11 @@ switch ($plan.action) {
             ForEach-Object { $_.ProcessId })
     }
     'install-resolve' { $result['installed'] = Install-ResolveScripts }
+    'install-queue' {
+        $said = @(Install-ResolveQueue $plan.python 6>&1)
+        $result['installed'] = @($said | Where-Object { $_ -is [bool] })
+        $result['said'] = (@($said | Where-Object { $_ -isnot [bool] } | ForEach-Object { "$_" }) -join ' ').Trim()
+    }
     'remove-resolve' { Remove-ResolveScripts }
 }
 'RESULT ' + (ConvertTo-Json $result -Compress -Depth 5)
@@ -483,6 +488,30 @@ class InstallScriptTests(unittest.TestCase):
             self.assertNotIn("taskkill", text)
 
     # -- known issue 4 ------------------------------------------------------------------------
+    def test_the_resolve_queue_is_registered_when_found(self) -> None:
+        # A stand-in koe.py: "installer" only writes down that it ran (never the real registry).
+        parent = os.path.join(self.tmp, "github")
+        repo = os.path.join(parent, "Search")
+        queue = os.path.join(parent, "Davinci", "resolve-koe")
+        os.makedirs(repo)
+        os.makedirs(queue)
+        marker = os.path.join(self.tmp, "registered.txt")
+        with open(os.path.join(queue, "koe.py"), "w", encoding="utf-8") as fh:
+            fh.write("import sys\n"
+                     f"open({marker!r}, 'w').write(' '.join(sys.argv[1:]))\n")
+        result = self.run_harness("install.ps1", "install-queue", python=sys.executable,
+                                  variables={"Repo": repo, "Koe": ""})
+        self.assertEqual(result["installed"], [True])
+        with open(marker, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "installer")
+        self.assertIn("koe.py", result["said"])
+        # -Koe pointing nowhere: a warning, nothing registered, and the install goes on.
+        os.remove(marker)
+        result = self.run_harness("install.ps1", "install-queue", python=sys.executable,
+                                  variables={"Repo": repo, "Koe": os.path.join(self.tmp, "nope", "koe.py")})
+        self.assertEqual(result["installed"], [False])
+        self.assertFalse(os.path.exists(marker))
+
     def test_only_the_unicode_menu_script_is_installed_and_both_are_removed(self) -> None:
         repo = os.path.join(self.tmp, "repo")
         support = os.path.join(self.tmp, "Resolve")

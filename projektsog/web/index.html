@@ -439,6 +439,23 @@
                   <svg class="icon select__chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg>
                 </label>
               </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <label class="setting__label" for="time-min">Skjul korte besøg</label>
+                  <span class="setting__hint">Et projekt med mindre tid end dette i perioden kommer ikke med i oversigten og eksporten – f.eks. et projekt, der kun lige blev åbnet.</span>
+                </div>
+                <label class="select">
+                  <select id="time-min">
+                    <option value="0">Vis alle</option>
+                    <option value="1">Under 1 min</option>
+                    <option value="2">Under 2 min</option>
+                    <option value="3">Under 3 min</option>
+                    <option value="5">Under 5 min</option>
+                    <option value="10">Under 10 min</option>
+                  </select>
+                  <svg class="icon select__chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+                </label>
+              </div>
               <form id="time-sites-form" class="setting setting--stack" autocomplete="off">
                 <div class="setting__text">
                   <label class="setting__label" for="time-sites">Musik- og lydsider</label>

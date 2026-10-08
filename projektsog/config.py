@@ -127,6 +127,9 @@ DEFAULTS: dict[str, Any] = {
     # Browser tab titles that count as "AI-video/billeder" work (generating AI video and images).
     "time_ai_sites": ["Higgsfield"],
     "time_round_minutes": 15,          # default rounding offered in the report (0 = none)
+    # A project with less than this in the report's period is left out of the overview and the
+    # export (a project opened by mistake, or for a moment by a Claude session) – 0 shows all.
+    "time_min_minutes": 3,
     # Import helper (importer.py): camera cards (XDROOT, PRIVATE\M4ROOT, DJI, GoPro) are offered
     # for import into a project's Klip\<camera> folder.
     "import_enabled": True,
@@ -345,6 +348,8 @@ def validate(changes: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Pausegrænsen skal være mellem 1 og 120 minutter")
         if key == "time_round_minutes" and value > 240:
             raise ValueError("Afrunding må højst være 240 minutter")
+        if key == "time_min_minutes" and value > 60:
+            raise ValueError("Korte besøg må højst være 60 minutter")
         if key == "port" and not (1024 <= value <= 65535):
             raise ValueError("port skal være mellem 1024 og 65535")
         out[key] = value
