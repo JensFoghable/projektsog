@@ -306,12 +306,55 @@ class FakeKontor(Fake):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self.returns.update({"state": {"enabled": False, "peers": [], "grund": None}, "demo": {"ok": True}})
+        self.returns.update({"state": {"enabled": False, "peers": [], "grund": None}, "demo": {"ok": True},
+                             "lunch": {"ok": True}, "lunch_demo": {"ok": True}, "send_post": {"ok": True},
+                             "post_demo": {"ok": True}, "treat_or_trick": {"ok": True, "ballade": None},
+                             "slik_demo": {"ok": True}, "bets": {"vaeddemaal": []}, "guess": {"ok": True},
+                             "bet_demo": {"ok": True}, "record": 0, "share_year": {"ok": True}})
 
     def start(self) -> None: return self._call("start")
     def close(self) -> None: return self._call("close")
     def state(self) -> dict: return self._call("state")
     def demo(self) -> dict: return self._call("demo")
+    # The fun in the office (SPEC §23.7)
+    def lunch(self) -> dict: return self._call("lunch")
+    def lunch_demo(self) -> dict: return self._call("lunch_demo")
+    def send_post(self, til: Any, tekst: Any) -> dict: return self._call("send_post", til, tekst)
+    def post_demo(self) -> dict: return self._call("post_demo")
+    def treat_or_trick(self, ident: Any, svar: Any) -> dict: return self._call("treat_or_trick", ident, svar)
+    def slik_demo(self) -> dict: return self._call("slik_demo")
+    def bets(self) -> dict: return self._call("bets")
+    def guess(self, pc: Any, vid: Any, tid: Any) -> dict: return self._call("guess", pc, vid, tid)
+    def bet_demo(self) -> dict: return self._call("bet_demo")
+    def record(self, score: Any) -> int: return self._call("record", score)
+    def share_year(self, summary: Any) -> dict: return self._call("share_year", summary)
+
+
+class FakeRod(Fake):
+    """projektsog.rod.Rod stand-in (never lists a folder)."""
+
+    ROD_IDLE = {"aktiv": False, "projekt": None, "mappe": None, "antal": 0, "niveau": "ren", "filer": [],
+                "mere": 0, "bad": False}
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.returns.update({"state": dict(self.ROD_IDLE), "demo": {"ok": True}})
+
+    def start(self) -> None: return self._call("start")
+    def close(self) -> None: return self._call("close")
+    def state(self) -> dict: return self._call("state")
+    def demo(self) -> dict: return self._call("demo")
+
+
+class FakeSne(Fake):
+    """projektsog.sne.Sne stand-in (never starts the snow's helper)."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.returns["start"] = {"ok": True}
+
+    def start(self, seconds: float, demo: bool = False) -> dict: return self._call("start", seconds, demo=demo)
+    def close(self) -> None: return self._call("close")
 
 
 class FakeLevering(Fake):

@@ -213,7 +213,7 @@ at slå det fra igen.
 - **Vokser:** fra æg til baby, junior, pro og legende med al den tid, du har registreret, og viser
   🔥 dage i træk med mindst en times arbejde. Klik på den, så bliver den glad.
 
-**Trofæer og garderobe:** Klik på 🏆 øverst i Klippe. Der er 47 trofæer – for at nå dagens mål,
+**Trofæer og garderobe:** Klik på 🏆 øverst i Klippe. Der er 59 trofæer – for at nå dagens mål,
 holde pauser, gå hjem til tiden, arbejde stabilt (kun hverdage tæller), bruge alle Resolves sider,
 overføre kort og meget mere; nogle kun i bestemte måneder, og nogle er hemmelige. Mange giver en ny
 ting til garderoben: farver, striber, hatte, briller, noget i munden eller hånden og en aura. De
@@ -250,7 +250,7 @@ rører du musen eller tastaturet, løber de straks ind i kassen igen (og kommer 
 pause). Når sessionen er færdig, jubler de og går hjem, og Klippe fejrer det. Har Klippe AWP'en i
 hånden, bliver en robot af og til uartig – så sigter Klippe og skyder den. Slå det fra med
 **Robotterne må komme ud på skærmen, mens en Claude-session bygger**, eller prøv det med
-**🤖 Vis robotterne** og **📞 Prøv telefonen** under 🏆.
+**🤖 Vis robotterne** og **📞 Prøv telefonen** under 🏆 ▸ **🎛️ Prøv**.
 
 **Renders:** Når Resolve renderer, holder Klippe øje: små robotter fodrer en render-boks, og
 under Klippe står „Renderer Portræt_v3.mp4 · 47 % · ca. 3 min". Når renderen er færdig, er der
@@ -261,7 +261,7 @@ hvorfor.
 holder Klippe leveringsfest: den grønne levérings-kasket på, filmen pakkes i en kasse med
 „LEVERET ✓"-stempel, konfetti og fyrværkeri – og den roterende meme-kat kommer forbi, hopper og
 tager en runde (uden lyd). Katten hentes fra GIPHY første gang; ligger der en `festkat.gif` i
-Projektsøgs mappe, bruges den i stedet. Prøv det med **🎉 Prøv leveringsfesten** under 🏆, eller
+Projektsøgs mappe, bruges den i stedet. Prøv det med **🎉 Prøv leveringsfesten** under 🏆 ▸ **🎛️ Prøv**, eller
 slå det fra med **Leveringsfest, når en fil lander i Final**.
 
 **Kontor-Klipper:** Får en kollegas Klippe et trofæ, eller holder den leveringsfest, kigger den kort
@@ -280,6 +280,49 @@ Babyen leger i hver pause, en junior hver anden, en pro sjældent – et æg ald
 én gang pr. pause og aldrig under afspilning i Resolve, mens et kort overføres, mens en session
 bygger, i fuld skærm eller på en låst skærm (en render er fin). Slå det fra med **Klippe må lege
 med musen i pauser**, eller prøv det med **Vis legen nu**.
+
+### Klippes sjov
+
+Alt herunder kan slås fra én for én under **Indstillinger ▸ Generelt ▸ Klippes sjov**, og det
+meste kan prøves med det samme under 🏆 ▸ **🎛️ Prøv**. Intet af det flytter, omdøber eller sletter
+nogensinde dine filer.
+
+- **Natte-Klippe:** Ved fyraften (standard kl. 16) gaber Klippe, tager nathue på, døser hen og
+  falder i søvn – en venlig påmindelse om at gå hjem. Klik på den, så vågner den lidt. Tiden vælges
+  under **Natte-Klippe** (eller *Fra*). Der er et trofæ for at gå hjem til tiden.
+- **Klippe danser**, når du leder efter musik på Artlist og de andre musiksider: høretelefoner på,
+  nikker i takt og noder i luften.
+- **Halloween** (Halloween-ugen, i 2026 uge 44): Klippe har kostume på – vampyr, spøgelse, skelet
+  eller heks, forskelligt fra pc til pc – og et græskar står og blafrer ved siden af. Kollegernes
+  Klipper kommer forbi og råber **slik eller ballade**: giv dem en Booster, så går de glade (og deres
+  Klippe bliver mæt), ellers stjæler de Klippes hat resten af dagen – eller pakker den ind i
+  toiletpapir. Er du ikke ved pc'en, sker der ingenting.
+- **Julekalender** (december): 🎄 øverst i Klippe åbner 24 låger – én om dagen (glemte låger kan
+  åbnes til nytår). Bag lågerne er ting til garderoben (bl.a. halstørklæde og rensdyrgevir), julemad
+  til Klippe, julevitser – og sne: på låge 1, 13 og 24 sner det over hele skærm 2 et øjeblik. Hver pc
+  har sin egen rækkefølge, så sammenlign med kollegerne.
+- **Klippe i bad:** Ligger der løse filer i roden af projektmappen (i stedet for i Klip, Musik,
+  Grafik …), bliver Klippe beskidt – jo flere, jo værre (til sidst med fluer). I søgevinduet står
+  „🧽 7 løse filer …" med **Vis forslag**: hvor hver fil hører hjemme, og en knap, der åbner mappen.
+  Du flytter selv filerne – når roden er ryddet, får Klippe et skumbad med badeand.
+- **Frokostklokken:** 🔔 øverst i Klippe (hverdage 10.45–13.30) ringer alle kontorets Klipper til
+  frokost – de ringer med klokken og løber ud ad døren, til du er tilbage (eller klik på skiltet).
+- **Klippe-post:** ✉️ øverst i Klippe sender din Klippe over til en kollega med en lille besked (eller
+  et af de hurtige forslag). Den dukker op hos kollegaen med en kuvert, og beskeden kan besvares.
+- **Render-væddemål:** Starter en lang render (over 3 minutter), kan hele kontoret gætte, hvornår den
+  er færdig – Klippe kårer vinderen, når renderen er klar.
+- **Render-spillet:** Mens Resolve renderer, står der **🎮 Spil** ved renderlinjen: hjælp Klippe med
+  at hoppe over klippefejl (Media Offline, sorte frames, glitches) og samle filmruder. Klik, mellemrum
+  eller ↑ for at hoppe – to gange for dobbelthop. Spillet slutter, når renderen er færdig, og
+  kontorets rekord deles med de andre Klipper.
+- **Påskeæg i søgefeltet:** Prøv at skrive *kaffe*, *fredag*, *deadline*, *durum*, *booster*,
+  *festkat*, *hjælp*, *fyraften*, *sne* – eller Klippes navn. Søgningen virker som altid.
+- **I dag for N år siden:** Når søgefeltet er tomt, står der af og til et minde øverst – det projekt,
+  der blev optaget eller lavet flest filer i på samme dato for et eller flere år siden. Klippe nævner
+  det også om morgenen.
+- **Klippet 2026:** I december og januar står 🎬 øverst i Klippe: din årsoversigt i din browser –
+  timer, de største projekter, Resolves sider, kort, leveringer, hvad Klippe har spist og kontorets
+  sjov – og en knap, der deler tallene (aldrig projektnavne) med kollegerne.
 
 ## Import af kort
 
@@ -536,9 +579,12 @@ Alt, hvad Projektsøg gemmer, ligger i `%LOCALAPPDATA%\Projektsog`:
 
 Projektsøg lytter kun på `127.0.0.1` (port 47811 eller den næste ledige) – den kan ikke nås
 fra andre computere. Den eneste undtagelse er **Kontor-Klipper**: Klippe sender og modtager små
-hilsner (UDP port 47850) med de andre pc'er på kontoret – kun navn, udseende og trofæ, aldrig
-filer eller kommandoer. Første gang spørger Windows måske, om Projektsøg må bruge netværket; sig
-ja (eller slå **Kontor-Klipper** fra, så lyttes der ikke).
+hilsner (UDP port 47850) med de andre pc'er på kontoret – navn, udseende og trofæ, frokostklokken,
+Klippe-post (kun til den kollega, du sender til), slik eller ballade, render-væddemål (navnet på
+den fil, der renderes – det kan rumme kundens navn – og gættene), rekorden i render-spillet og
+tallene fra *Klippet* (kun tal, aldrig projektnavne) – aldrig selve filerne eller kommandoer.
+Første gang spørger Windows måske, om Projektsøg må bruge netværket; sig ja (eller slå
+**Kontor-Klipper** fra, så lyttes der ikke).
 
 ## Kommandolinje (avanceret)
 

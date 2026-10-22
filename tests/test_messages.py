@@ -539,5 +539,130 @@ class KeptTests(unittest.TestCase):
         self.assertEqual(kept, {"koe:venter": (True, True, False), "koe:lov-Mette": (False, True, False)})
 
 
+POST = {"tag": "post:STUDIE-PC:7", "titel": "✉️ Post fra Bobby (STUDIE-PC)", "tekst": "Kaffe? ☕",
+        "knapper": [{"tekst": "Svar", "uri": "projektsog:post/STUDIE-PC"}], "udloeber": 8 * 3600, "lyd": True,
+        "opkald": False}
+
+
+class PostCardTests(BoardCase):
+    """SPEC §23.7: a colleague's post has a "Svar" button but is no call – it never rings."""
+
+    def test_a_post_is_a_card_not_a_phone(self) -> None:
+        self.board.post(POST, internal=True)
+        self.assertEqual(self.state("post:STUDIE-PC:7"), (False, True, False))
+        self.assertEqual((self.rings, self.timers, self.sounds), ([], [], 1))   # the plain notification
+        message = self.one("post:STUDIE-PC:7")
+        self.assertNotIn("aldrig_opkald", message)
+        self.assertEqual(message["udloeber_ved"], self.now + 8 * 3600)
+        self.board.click("post:STUDIE-PC:7", 0)
+        self.assertEqual(self.internal, ["projektsog:post/STUDIE-PC"])
+
+    def test_only_projektsog_may_say_it_is_no_call(self) -> None:
+        # From outside, "opkald" is not a field: a card with a button stays a call.
+        self.board.post({**ASK, "opkald": False})
+        self.assertEqual(self.state(), (True, False, True))
+        self.assertNotIn("aldrig_opkald", messages.clean_message({**POST, "opkald": True}, internal=True))
+        self.assertNotIn("aldrig_opkald", messages.clean_message({**POST, "opkald": "nej"}, internal=True))
+
+    def test_projektsogs_own_cards_may_stay_longer(self) -> None:
+        self.board.post({"tag": "aar:STUDIE-PC:2026", "titel": "📊 Klippet 2026", "udloeber": 2 * 86400,
+                         "lyd": False}, internal=True)
+        self.assertEqual(self.one("aar:STUDIE-PC:2026")["udloeber_ved"], self.now + 2 * 86400)
+        with self.assertRaisesRegex(ValueError, "udloeber skal være 1–86400 sekunder"):
+            self.board.post({"tag": "x", "titel": "x", "udloeber": 2 * 86400})
+        with self.assertRaisesRegex(ValueError, "udloeber"):
+            self.board.post({"tag": "x", "titel": "x", "udloeber": 8 * 86400}, internal=True)
+
+    def post_from(self, n: int) -> dict:
+        return self.board.post({**POST, "tag": f"post:STUDIE-PC:{n}", "tekst": f"Post {n}"}, internal=True)
+
+    def test_at_most_six_cards_from_colleagues(self) -> None:
+        self.board.post(ASK)                                     # a session's question waits
+        for n in range(10):
+            self.assertEqual(self.post_from(n)["ok"], True)
+        tags = [m["tag"] for m in self.listed()]
+        self.assertEqual(tags, [f"post:STUDIE-PC:{n}" for n in range(9, 3, -1)] + ["koe:venter"])
+        self.assertEqual(self.state(), (True, False, True))      # still waiting – and still ringing
+        # A year card is a colleague's card too.
+        self.board.post({"tag": "aar:STUDIE-PC:2026", "titel": "📊 Klippet 2026", "lyd": False}, internal=True)
+        self.assertNotIn("post:STUDIE-PC:4", [m["tag"] for m in self.listed()])
+        self.assertEqual(sum(m["tag"].startswith(messages.LAN_TAGS) for m in self.listed()), messages.MAX_LAN_MESSAGES)
+
+    def test_colleagues_never_push_out_a_waiting_question(self) -> None:
+        # A full board of other messages – the oldest of them a session's unanswered call.
+        self.board.post(ASK)
+        for i in range(messages.MAX_MESSAGES - 1):
+            self.board.post({**WAIT, "tag": f"t{i}"})
+        self.assertEqual(self.post_from(1), {"ok": False, "vist": False})       # no room: refused
+        tags = [m["tag"] for m in self.listed()]
+        self.assertIn("koe:venter", tags)
+        self.assertNotIn("post:STUDIE-PC:1", tags)
+        self.assertEqual(self.state(), (True, False, True))
+        # With a colleague card on the board, a new one takes its place – nothing else goes.
+        self.board.remove("t0")
+        self.assertTrue(self.post_from(2)["ok"])
+        self.assertTrue(self.post_from(3)["ok"])
+        tags = [m["tag"] for m in self.listed()]
+        self.assertEqual(len(tags), messages.MAX_MESSAGES)
+        self.assertEqual((tags[0], "post:STUDIE-PC:2" in tags, "koe:venter" in tags), ("post:STUDIE-PC:3", False, True))
+        # A re-post of the same card replaces it in place, also on a full board.
+        self.assertTrue(self.post_from(3)["ok"])
+        self.assertEqual(len(self.listed()), messages.MAX_MESSAGES)
+
+    def test_other_programs_are_as_before(self) -> None:
+        # Only Projektsøg's own cards count as a colleague's: a program's "post:" tag is a plain message.
+        for i in range(messages.MAX_MESSAGES + 2):
+            self.board.post({**WAIT, "tag": f"post:x{i}"})
+        self.assertEqual(len(self.listed()), messages.MAX_MESSAGES)
+        self.assertEqual(self.listed()[0]["tag"], f"post:x{messages.MAX_MESSAGES + 1}")
+
+
+class BellSoundTests(unittest.TestCase):
+    """The office Klippes' lunch bell (SPEC §23.7), against a stand-in for winsound."""
+
+    fake_winsound = RingSoundTests.fake_winsound
+
+    def test_the_bell_is_three_quiet_strokes(self) -> None:
+        samples = messages.bell_samples()
+        rate = messages.RINGTONE_RATE
+        self.assertAlmostEqual(len(samples) / rate, messages.BELL_SECONDS, places=2)
+        self.assertAlmostEqual(max(abs(v) for v in samples), messages.RINGTONE_PEAK)
+        for stroke in messages.BELL_STROKES:                   # each "ding" starts loud …
+            start = int(stroke * rate)
+            self.assertGreater(max(abs(v) for v in samples[start:start + rate // 50]), 0.05)
+        self.assertLess(abs(samples[-1]), 0.001)                # … and it ends without a click
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "bell.wav")
+            messages.write_bell(path)
+            with wave.open(path) as wav:
+                self.assertEqual((wav.getnchannels(), wav.getsampwidth(), wav.getframerate(), wav.getnframes()),
+                                 (1, 2, rate, len(samples)))
+
+    def test_the_bell_file_is_made_once(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"LOCALAPPDATA": folder}):
+            path = messages.bell_path()
+            self.assertEqual(os.path.basename(path), "klippe-frokost-1.wav")
+            self.assertTrue(os.path.isfile(path))
+            with mock.patch.object(messages, "write_bell") as again:
+                self.assertEqual(messages.bell_path(), path)
+                again.assert_not_called()
+
+    def test_the_bell_is_played_once(self) -> None:
+        module, played = self.fake_winsound()
+        with mock.patch.object(messages, "bell_path", lambda: "bell.wav"), \
+                mock.patch.dict(sys.modules, {"winsound": module}):
+            messages.bell_sound()
+        self.assertEqual(played, [("bell.wav", 0x20000 | 0x1 | 0x2)])
+        module, played = self.fake_winsound()
+        with mock.patch.object(messages, "bell_path", lambda: None), \
+                mock.patch.dict(sys.modules, {"winsound": module}):
+            messages.bell_sound()                               # no file: the notification sound
+        self.assertEqual(played, [("SystemNotification", 0x10000 | 0x1 | 0x2)])
+        module, _ = self.fake_winsound(RuntimeError("no sound device"))
+        with mock.patch.object(messages, "bell_path", lambda: "bell.wav"), \
+                mock.patch.dict(sys.modules, {"winsound": module}):
+            messages.bell_sound()                               # errors are swallowed
+
+
 if __name__ == "__main__":
     unittest.main()

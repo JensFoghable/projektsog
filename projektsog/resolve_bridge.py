@@ -173,6 +173,11 @@ class _NotSent(ChildError):
     """A request never reached the helper (it is not running or was stopped)."""
 
 
+class ChildTimeout(ChildError):
+    """The helper did not answer in time - Resolve is busy (it does not answer scripts while
+    it plays back)."""
+
+
 class _ResolveUnavailable(Exception):
     """Resolve stopped answering scripting calls (quit, restarting or busy). ``code``: the
     helper's error code, if it answered."""
@@ -350,7 +355,7 @@ class _ChildProcess:
         try:
             message = self._answers.get(timeout=max(0.001, deadline - time.monotonic()))
         except queue.Empty:
-            raise ChildError(f"no answer to {what!r} in time") from None
+            raise ChildTimeout(f"no answer to {what!r} in time") from None
         if message is None:
             self._answers.put(None)        # stays gone for every later call
             raise ChildError(f"the helper exited (exit code {self._proc.poll()})")
@@ -871,6 +876,7 @@ class ResolveBridge:
         self._state: dict[str, Any] = _idle_state(bool(cfg.get("resolve_enabled")), False)
         self._state_uid = ""                  # unique id of the state's project (with _state)
         self._activity: dict[str, Any] | None = None   # latest poll, for the time tracker
+        self._silent = False                  # guarded by _lock: Resolve runs but stopped answering
         self._refresh_requested = 0
         self._refresh_completed = 0
         self._window_shown = False
@@ -937,19 +943,23 @@ class ResolveBridge:
         """What the editor is doing in Resolve, from the latest poll, for the time tracker:
         ``{"project", "database", "uid", "page", "timeline", "timecode", "rendering", "folder"}``.
 
-        None when Resolve is not running or the last poll is older than ``max_age`` seconds.
+        None when Resolve is not running or the last poll is older than ``max_age`` seconds -
+        unless Resolve runs but has stopped answering (``busy``: it does not answer scripts while
+        it plays back): then its last answer holds until it answers again or quits.
         ``folder`` is the name of the project folder the media maps to (the primary), if known;
         ``age`` how many seconds ago Resolve answered (it answers slowly while it is busy).
         """
         with self._lock:
             act = self._activity
+            busy = self._silent
             primary = self._state.get("primary")
             state_project = self._state.get("project")
         age = self._clock() - act["at"] if act is not None else None
-        if act is None or age > max_age:
+        if act is None or (age > max_age and not busy):
             return None
         result = {k: v for k, v in act.items() if k != "at"}
         result["age"] = max(0.0, age)
+        result["busy"] = busy
         same_project = act["project"] is not None and act["project"] == state_project
         result["folder"] = (primary.get("name") if same_project and isinstance(primary, dict)
                             else None)
@@ -1605,6 +1615,8 @@ class ResolveBridge:
         try:
             return self._connected_tick(now, poll_s, follow, refresh_target, refresh_wanted, shown)
         except ChildError as exc:
+            if isinstance(exc, ChildTimeout):
+                self._set_silent(True)
             self._disconnect()
             self._complete_refresh(refresh_target)
             self._fail_jobs(ERR_BUSY)
@@ -1656,6 +1668,8 @@ class ResolveBridge:
         try:
             answer = child.request("connect", CHILD_CONNECT_TIMEOUT_S)
         except ChildError as exc:
+            if isinstance(exc, ChildTimeout):
+                self._set_silent(True)
             if self._stop.is_set():
                 return 0.0
             log.warning("The DaVinci Resolve helper did not answer the connect request: %s", exc)
@@ -1668,6 +1682,7 @@ class ResolveBridge:
             self._connected = True
             self._connect_error = None
             return None
+        self._set_silent(False)                 # it answered: not busy, just not reachable
         code = answer.get("error") if isinstance(answer, dict) else None
         detail = answer.get("detail") if isinstance(answer, dict) else answer
         if code == "module":
@@ -1703,6 +1718,13 @@ class ResolveBridge:
         self._connect_error = None
         self._child_failures = 0
         self._child_retry_at = 0.0
+        self._set_silent(False)
+
+    def _set_silent(self, silent: bool) -> None:
+        """Resolve runs but did not answer in time - or it answered again, quit or the
+        integration is off. While silent, activity() keeps its last answer (``busy``)."""
+        with self._lock:
+            self._silent = silent
 
     def _connected_tick(self, now: float, poll_s: float, follow: str, refresh_target: int,
                         refresh_wanted: bool, shown: bool) -> float:
@@ -1750,6 +1772,7 @@ class ResolveBridge:
                     "rendering": answer.get("rendering") is True, "at": self._clock()}
         with self._lock:
             self._activity = activity
+            self._silent = False
         if name is None:
             return _Snapshot(db_id + ("", ""), None, database)
         if not isinstance(name, str):

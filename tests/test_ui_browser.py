@@ -1699,9 +1699,17 @@ class WidgetTests(UiCase):
 
     def open_widget(self) -> None:
         self.page.set_viewport(260, 430)
-        self.page.navigate(self.server.url + "widget.html")
+        # A fixed Monday morning for the widget's clock (SPEC §23): no fyraften, no season, no lunch bell.
+        self.page.navigate(self.server.url + "widget.html?nu=2026-10-12T10:00:00")
         self.page.wait_for("document.querySelector('#app').dataset.mood === 'working'"
                            " && document.querySelector('#pet-level').textContent.includes('Lv')")
+
+    def open_demos(self) -> None:
+        """The 🏆 panel's Prøv tab, where every demo button is (SPEC §23.12)."""
+        self.page.click("#trophies")
+        self.page.wait_for("!document.querySelector('#panel').hidden")
+        self.page.click("[data-panel-tab=proev]")
+        self.page.wait_for("document.querySelector('#panel-proev')?.checkVisibility()")
 
     def test_klippe_works_along_and_grows(self) -> None:
         self.open_widget()
@@ -1931,11 +1939,11 @@ class WidgetTests(UiCase):
     def test_klippe_directs_the_robot_crew(self) -> None:
         self.open_widget()
         shown = "getComputedStyle(document.querySelector('#pet {}')).display !== 'none'"
-        self.page.click("#trophies")
+        self.open_demos()
         self.page.click("#demo-robots")                        # "🤖 Vis robotterne" – Klippe is off
         self.wait(f"{self.SAID}.includes('Øv – Slå Klippe til først')")
         self.control("/api/settings", {"widget_enabled": True})
-        self.page.click("#trophies")
+        self.open_demos()
         self.page.click("#demo-robots")
         self.assertEqual(self.wait_request("/api/bygger/demo", count=2)["body"], {"opkald": False})
         self.wait("document.querySelector('#app').dataset.bygger === 'demo' && document.querySelector('#panel').hidden")
@@ -1991,7 +1999,7 @@ class WidgetTests(UiCase):
         self.assertFalse(self.js(shown.format(".crew")) or self.js(shown.format(".luge")))
         self.assertEqual(self.js("window.__klippe.state.build"), None)
         # "📞 Prøv telefonen": the demo call rings.
-        self.page.click("#trophies")
+        self.open_demos()
         self.page.click("#demo-call")
         self.assertEqual(self.wait_request("/api/bygger/demo", count=3)["body"], {"opkald": True})
         self.wait("document.querySelector('.message--call .message__title')?.textContent === '📞 Demo ringer'")
@@ -2140,7 +2148,7 @@ class WidgetTests(UiCase):
         # GET /api/kontor: whose Klippes are about (only to know them – visits are never replayed).
         self.wait("document.querySelector('#demo-visit').title === 'Kollegernes Klipper lige nu: Bobby (KLIPPER-PC)'")
         self.assertTrue(self.requests("/api/kontor", "GET"))
-        self.page.click("#trophies")
+        self.open_demos()
         self.page.click("#demo-visit")                       # "👋 Prøv et besøg"
         self.wait_request("/api/kontor/demo")
         guest = "document.querySelector('body > .gaest')"
@@ -2192,11 +2200,11 @@ class WidgetTests(UiCase):
     def test_the_delivery_party(self) -> None:
         self.open_widget()
         self.js("window.__klippe.state.tempo = 0.3")
-        self.page.click("#trophies")
+        self.open_demos()
         self.page.click("#demo-party")                       # "🎉 Prøv leveringsfesten" – Klippe is off
         self.wait(f"{self.SAID}.includes('Øv – Slå Klippe til først')")
         self.control("/api/settings", {"widget_enabled": True})
-        self.page.click("#trophies")
+        self.open_demos()
         self.page.click("#demo-party")
         self.wait_request("/api/levering/demo", count=2)
         self.wait("document.querySelector('#app').dataset.fest === 'demo' && document.querySelector('#panel').hidden")
@@ -2245,7 +2253,7 @@ class WidgetTests(UiCase):
         self.control("/api/_mock/publish", {"type": "render", "data": self.RENDER})
         self.wait("'render' in document.querySelector('#app').dataset")
         self.assertTrue(self.js(self.SHOWN.format("#pet .render")))
-        self.page.click("#trophies")
+        self.open_demos()
         self.page.click("#demo-party")                       # the box stands where the render box does
         self.wait("!!document.querySelector('#app').dataset.fest")
         self.assertFalse(self.js(self.SHOWN.format("#pet .render")))

@@ -106,6 +106,23 @@ class FollowTests(unittest.TestCase):
                 config.validate(bad)
         self.assertEqual(widget.widget_url("http://127.0.0.1:47811/"), "http://127.0.0.1:47811/widget.html")
 
+    def test_fun_settings(self) -> None:
+        # SPEC §23.0: every fun thing can be switched off; Natte-Klippe starts at fyraften (16:00).
+        from projektsog import config
+        self.assertEqual(config.DEFAULTS["widget_fyraften"], "16:00")
+        for key in ("widget_saeson", "widget_dans", "widget_bad", "widget_frokost", "widget_post",
+                    "widget_vaeddemaal", "widget_renderspil", "widget_aarsrapport", "search_paaskeaeg",
+                    "search_minder"):
+            with self.subTest(key=key):
+                self.assertIs(config.DEFAULTS[key], True)
+                self.assertEqual(config.validate({key: False}), {key: False})
+        for good in ("", "12:00", "15:30", "16:00", " 18:00 ", "23:59"):
+            with self.subTest(good=good):
+                self.assertEqual(config.validate({"widget_fyraften": good})["widget_fyraften"], good.strip())
+        for bad in ("16", "4:00", "11:59", "24:00", "16:60", "16.00", "16:0a", 16):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                config.validate({"widget_fyraften": bad})
+
 
 if __name__ == "__main__":
     unittest.main()

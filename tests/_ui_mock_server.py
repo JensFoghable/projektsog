@@ -96,6 +96,7 @@ from typing import Any
 from projektsog import __version__, achievements, config, importer, textutil, timetrack
 from projektsog.events import EventBus
 from projektsog.server import content_disposition, time_export, time_range
+from tests import _ui_mock_sjov as sjov
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEB_DIR = os.path.join(REPO_ROOT, "projektsog", "web")
@@ -118,6 +119,9 @@ STATIC_FILES = {
     "/widget.html": ("widget.html", "text/html; charset=utf-8"),
     "/widget.js": ("widget.js", "text/javascript; charset=utf-8"),
     "/widget.css": ("widget.css", "text/css; charset=utf-8"),
+    "/aar.html": ("aar.html", "text/html; charset=utf-8"),
+    "/aar.js": ("aar.js", "text/javascript; charset=utf-8"),
+    "/aar.css": ("aar.css", "text/css; charset=utf-8"),
 }
 ASSET_TYPES = {".png": "image/png", ".ico": "image/x-icon", ".svg": "image/svg+xml"}
 HOTKEY_RE = re.compile(r"^((ctrl|alt|shift|win)\+)+(space|[a-z0-9]|f([1-9]|1[0-9]|2[0-4]))$")
@@ -520,7 +524,7 @@ class MockBackend:
                        "available": False, "blocked": None, "busy": None, "checked": time.time() - 600,
                        "error": None}
         self.pet_equipped = {"farve": "midnat", "striber": "klassisk", "hat": "ingen", "briller": "ingen-briller",
-                             "mund": "ingen-mund", "haand": "ingen-haand", "aura": "ingen-aura"}
+                             "mund": "ingen-mund", "hals": "ingen-hals", "haand": "ingen-haand", "aura": "ingen-aura"}
         self.errors: list[str] = []                # tracebacks of 500 responses
         self.sse_generation = 0                    # bumped by /api/_mock/drop-events
         self.settings: dict[str, Any] = config.validate({**config.DEFAULTS, "hosts": list(HOSTS)})
@@ -541,6 +545,8 @@ class MockBackend:
         # Renders (§22.1) and the party cat (§22.4): see the module docstring.
         self.render: dict[str, Any] = dict(RENDER_IDLE)
         self.festkat: bytes | None = festkat_test_gif()
+        # The fun in the office (§23): tests/_ui_mock_sjov.py.
+        self.sjov = sjov.MockSjov(self)
 
     def next_id(self) -> int:
         self._next_id += 1
@@ -1772,6 +1778,8 @@ class MockHandler(BaseHTTPRequestHandler):
         elif route == "/api/import/plan":
             self._json(backend.importer.plan(query.get("card", ""), query.get("project", ""),
                                              query.get("separate") in ("1", "true"), flags))
+        elif route in sjov.GET_ROUTES:
+            self._json(backend.sjov.get(route, query))
         elif route == "/api/events":
             self._events(flags)
         else:
@@ -1885,8 +1893,14 @@ class MockHandler(BaseHTTPRequestHandler):
                 if isinstance(equipped, dict):
                     with backend.lock:
                         backend.pet_equipped.update(equipped)
+            backend.sjov.on_publish(str(body.get("type", "")), body.get("data"))
             backend.bus.publish(str(body.get("type", "")), body.get("data"))
             self._json({"ok": True})
+        elif (method, route) == ("POST", "/api/_mock/set"):  # test control: §23 state (tests/_ui_mock_sjov.py)
+            backend.sjov.set(str(body.get("key", "")), body.get("data"))
+            self._json({"ok": True})
+        elif method == "POST" and route in sjov.POST_ROUTES:
+            self._json(backend.sjov.post(route, body))
         elif (method, route) == ("POST", "/api/_mock/drop-events"):  # test control: end all SSE streams
             with backend.lock:
                 backend.sse_generation += 1

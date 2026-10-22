@@ -70,9 +70,11 @@ class TrophyTests(unittest.TestCase):
         self.assertEqual(len(rewards), len(set(rewards)))                 # one item, one trophy
         self.assertTrue(all(r in ach.ITEMS_BY_ID for r in rewards))
         finds = {i for i, _chance in ach.FINDS}
+        self.assertTrue(ach.JUL_ITEMS <= set(ach.ITEMS_BY_ID))                    # the calendar's gifts
         for item in ach.ITEMS:
             with self.subTest(item=item.id):
-                self.assertTrue(item.default or item.id in rewards or item.id in finds, "cannot be had")
+                self.assertTrue(item.default or item.id in rewards or item.id in finds or item.id in ach.JUL_ITEMS,
+                                "cannot be had")
                 self.assertIn(item.slot, ach.SLOTS)
         self.assertEqual(set(ach.DEFAULTS), set(ach.SLOTS))
         legendary = {i.id for i in ach.ITEMS if i.rarity == "legendarisk"}

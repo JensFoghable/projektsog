@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Klippet</title>
+  <link rel="icon" href="/assets/icon.png">
+  <link rel="stylesheet" href="/aar.css">
+  <script src="/aar.js" defer></script>
+</head>
+<body>
+  <!-- Klippet <år> (SPEC §23.11): a story of the year – aar.js builds the slides from GET /api/aar. -->
+  <div class="backdrop" id="backdrop" data-theme="intro" aria-hidden="true"></div>
+  <main class="stage">
+    <button type="button" class="nav nav--prev" id="prev" aria-label="Forrige" title="Forrige (←)">‹</button>
+    <section class="story" id="story" data-theme="intro" aria-roledescription="historie" aria-label="Klippet – dit år i Resolve">
+      <div class="bars" id="bars" aria-hidden="true"></div>
+      <header class="story__head">
+        <span class="story__brand" id="brand">Klippet</span>
+        <button type="button" class="story__pause" id="pause" aria-label="Pause" title="Pause (P)">❚❚</button>
+      </header>
+      <div class="slides" id="slides" aria-live="polite"></div>
+      <p class="story__hint" id="hint">Tryk for næste · hold nede for at pause · ← →</p>
+    </section>
+    <button type="button" class="nav nav--next" id="next" aria-label="Næste" title="Næste (→)">›</button>
+  </main>
+</body>
+</html>

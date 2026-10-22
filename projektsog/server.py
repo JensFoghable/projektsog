@@ -24,6 +24,7 @@ import socket
 import socketserver
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -46,6 +47,8 @@ if TYPE_CHECKING:
     from .updater import Updater
     from .messages import MessageBoard
     from .petplay import PetPlay
+    from .rod import Rod
+    from .sne import Sne
     from .timetrack import TimeTracker
 
 log = logging.getLogger(__name__)
@@ -60,6 +63,14 @@ SSE_HEARTBEAT_S = 15.0
 SEARCH_KINDS = frozenset({"all", "project", "dir", "file"})
 INTERNAL_ERROR = "Intern fejl – se loggen"
 SHUTTING_DOWN = "Projektsøg lukker ned"
+# The fun in the office (SPEC §23): easter eggs in the search field, the render game, Klippet.
+EASTER_EGGS = frozenset({"kaffe", "fredag", "deadline", "klippe", "durum", "booster", "festkat", "hjaelp",
+                         "fyraften", "sne"})
+EASTER_EGG_GAP_S = 3.0              # the same egg within this long hatches once
+RENDER_GAME_S = 300.0               # a score counts while a render was active this recently
+SCORE_MAX = 10_000_000
+FIRST_YEAR = 2026                   # Klippet starts with the year Klippe arrived
+SNOW_DEMO_S = 20
 
 # WSAEADDRINUSE, plus WSAEACCES which Windows reports for ports inside a reserved range
 # (Hyper-V/WinNAT "excluded port ranges").
@@ -142,6 +153,14 @@ class Server:
         self.crew: "Crew | None" = None           # the robot crew (SPEC §21), with the widget
         self.kontor: "Kontor | None" = None       # office Klippes (SPEC §22.3)
         self.levering: "Levering | None" = None   # the delivery party (SPEC §22.4)
+        self.rod: "Rod | None" = None             # Klippe i bad (SPEC §23.6)
+        self.sne: "Sne | None" = None             # snow on monitor 2 (SPEC §23.5)
+        # Whether a render was active within RENDER_GAME_S (SPEC §23.10) – set by the app; without
+        # it the bridge's render state is asked.
+        self.render_recent: Callable[[], bool] | None = None
+        self.open_url: Callable[[str], None] = _open_url    # Klippet in the default browser
+        self._egg_lock = threading.Lock()
+        self._eggs: dict[str, float] = {}
         self.web_dir = web_dir or os.path.join(package_dir, "web")
         self.assets_dir = assets_dir or os.path.join(package_dir, "assets")
         self.sse_heartbeat_s = sse_heartbeat_s
@@ -310,6 +329,31 @@ class Server:
             ("POST", r"/api/messages/svar", self._messages_answer),
             ("GET", r"/api/bygger", self._build_state),
             ("POST", r"/api/bygger/demo", self._build_demo),
+            # The fun in the office (SPEC §23.13)
+            ("GET", r"/api/pet/saeson", self._pet_season),
+            ("GET", r"/api/pet/jul", self._pet_calendar),
+            ("POST", r"/api/pet/jul", self._pet_open_door),
+            ("POST", r"/api/pet/jul/demo", self._pet_calendar_demo),
+            ("GET", r"/api/pet/spil", self._pet_game),
+            ("POST", r"/api/pet/spil", self._pet_game_score),
+            ("POST", r"/api/sne/demo", self._snow_demo),
+            ("GET", r"/api/rod", self._rod_state),
+            ("POST", r"/api/rod/aabn", self._rod_open),
+            ("POST", r"/api/rod/demo", self._rod_demo),
+            ("POST", r"/api/kontor/frokost", self._kontor_lunch),
+            ("POST", r"/api/kontor/frokost/demo", self._kontor_lunch_demo),
+            ("POST", r"/api/kontor/post", self._kontor_post),
+            ("POST", r"/api/kontor/post/demo", self._kontor_post_demo),
+            ("POST", r"/api/kontor/slik", self._kontor_treat),
+            ("POST", r"/api/kontor/slik/demo", self._kontor_treat_demo),
+            ("GET", r"/api/kontor/vaeddemaal", self._kontor_bets),
+            ("POST", r"/api/kontor/gaet", self._kontor_guess),
+            ("POST", r"/api/kontor/vaeddemaal/demo", self._kontor_bet_demo),
+            ("GET", r"/api/minder", self._memories),
+            ("POST", r"/api/paaskeaeg", self._easter_egg),
+            ("GET", r"/api/aar", self._year),
+            ("POST", r"/api/aar/aabn", self._year_open),
+            ("POST", r"/api/aar/del", self._year_share),
             ("GET", r"/api/events", None),
         ]
         return [_Route(method, re.compile(pattern), handler) for method, pattern, handler in table]
@@ -564,6 +608,143 @@ class Server:
         if data is None:
             raise ValueError("Festkatten kunne ikke hentes")
         return _FileResponse(data, "image/gif", "festkat.gif")
+
+    # -- the fun in the office (SPEC §23) ----------------------------------------------------
+    def _pet_season(self, req: _Request) -> Any:
+        return self._wardrobe().season_state()
+
+    def _pet_calendar(self, req: _Request) -> Any:
+        return self._wardrobe().calendar()
+
+    def _pet_open_door(self, req: _Request) -> Any:
+        return self._wardrobe().open_door(_body_door(req.body))
+
+    def _pet_calendar_demo(self, req: _Request) -> Any:
+        return self._wardrobe().calendar_demo(_body_door(req.body))
+
+    def _pet_game(self, req: _Request) -> Any:
+        return self._wardrobe().game_state()
+
+    def _pet_game_score(self, req: _Request) -> Any:
+        score = req.body.get("score")
+        if type(score) is not int or not 0 <= score <= SCORE_MAX:
+            raise ValueError("Ugyldig værdi: score")
+        demo = _body_bool(req.body, "demo", False)
+        progress = self._wardrobe()
+        if not demo and not self._rendered_lately():
+            raise ValueError("Render-spillet kan kun spilles, mens Resolve renderer")
+        result = progress.game_result(score, demo)
+        if not demo and isinstance(result, dict) and result.get("ny_rekord") and self.kontor is not None:
+            try:
+                self.kontor.record(score)            # the office hears a new best
+            except Exception:
+                log.exception("the render game's record could not be told to the office")
+        return result
+
+    def _rendered_lately(self) -> bool:
+        recent = self.render_recent
+        if recent is not None:
+            return bool(recent())
+        state = getattr(self.bridge, "render_state", None)
+        try:
+            return bool(callable(state) and (state() or {}).get("aktiv"))
+        except Exception:
+            log.debug("no render state for the render game", exc_info=True)
+            return False
+
+    def _snow_helper(self) -> "Sne":
+        if self.sne is None:
+            raise ValueError("Sneen er ikke startet")
+        return self.sne
+
+    def _snow_demo(self, req: _Request) -> Any:
+        return self._snow_helper().start(SNOW_DEMO_S, demo=True)
+
+    def _rod_helper(self) -> "Rod":
+        if self.rod is None:
+            raise ValueError("Klippes bad er ikke startet")
+        return self.rod
+
+    def _rod_state(self, req: _Request) -> Any:
+        return self._rod_helper().state()
+
+    def _rod_open(self, req: _Request) -> Any:
+        state = self._rod_helper().state()
+        folder = state.get("mappe") if isinstance(state, dict) else None
+        if not isinstance(folder, str) or not folder.strip():
+            raise ValueError("Der er ingen projektmappe at åbne")
+        return self.controller.open_path(folder, "folder")
+
+    def _rod_demo(self, req: _Request) -> Any:
+        return self._rod_helper().demo()
+
+    def _kontor_lunch(self, req: _Request) -> Any:
+        return self._kontor().lunch()
+
+    def _kontor_lunch_demo(self, req: _Request) -> Any:
+        return self._kontor().lunch_demo()
+
+    def _kontor_post(self, req: _Request) -> Any:
+        return self._kontor().send_post(req.body.get("til"), req.body.get("tekst"))
+
+    def _kontor_post_demo(self, req: _Request) -> Any:
+        return self._kontor().post_demo()
+
+    def _kontor_treat(self, req: _Request) -> Any:
+        return self._kontor().treat_or_trick(req.body.get("id"), req.body.get("svar"))
+
+    def _kontor_treat_demo(self, req: _Request) -> Any:
+        return self._kontor().slik_demo()
+
+    def _kontor_bets(self, req: _Request) -> Any:
+        return self._kontor().bets()
+
+    def _kontor_guess(self, req: _Request) -> Any:
+        return self._kontor().guess(req.body.get("pc"), req.body.get("vid"), req.body.get("tid"))
+
+    def _kontor_bet_demo(self, req: _Request) -> Any:
+        return self._kontor().bet_demo()
+
+    def _memories(self, req: _Request) -> Any:
+        today = date.today()
+        memories = getattr(self.indexer, "memories", None)
+        if not self.cfg.get("search_minder", True) or not callable(memories):
+            return {"dato": today.isoformat(), "minder": []}
+        return {"dato": today.isoformat(), "minder": memories()}
+
+    def _easter_egg(self, req: _Request) -> Any:
+        if not self.cfg.get("search_paaskeaeg", True):
+            raise ValueError("Påskeæggene er slået fra")
+        word = req.body.get("ord")
+        if not isinstance(word, str) or word not in EASTER_EGGS:
+            raise ValueError("Ukendt påskeæg")
+        now = time.monotonic()
+        with self._egg_lock:
+            last = self._eggs.get(word)
+            if last is not None and 0 <= now - last < EASTER_EGG_GAP_S:
+                return {"ok": True, "ignoreret": True}
+            self._eggs[word] = now
+        self.bus.publish("paaskeaeg", {"ord": word})
+        return {"ok": True}
+
+    def _year(self, req: _Request) -> Any:
+        return self._wardrobe().year_review(_klippet_year(req.query.get("aar")))
+
+    def _year_open(self, req: _Request) -> Any:
+        year = _klippet_year(req.body.get("aar"))
+        url = f"http://{HOST}:{self.port}/aar.html?aar={year}"
+        try:
+            self.open_url(url)
+        except OSError as exc:
+            log.warning("Klippet could not be opened: %s", exc)
+            raise ValueError("Klippet kunne ikke åbnes") from None
+        return {"ok": True, "url": url}
+
+    def _year_share(self, req: _Request) -> Any:
+        from .kontor import year_summary        # (the office's own packet; imported when needed)
+        year = _klippet_year(req.body.get("aar"))
+        office = self._kontor()
+        return office.share_year(year_summary(self._wardrobe().year_review(year)))
 
     def _get_settings(self, req: _Request) -> Any:
         return self._settings_payload()
@@ -1008,6 +1189,31 @@ def _body_str(body: dict[str, Any], name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} mangler")
     return value
+
+
+def _body_door(body: dict[str, Any]) -> int:
+    """A door of the Christmas calendar (1–24)."""
+    value = body.get("nr")
+    if type(value) is not int or not 1 <= value <= 24:
+        raise ValueError("Ugyldig værdi: nr")
+    return value
+
+
+def _klippet_year(value: Any) -> int:
+    """The year of a Klippet: 2026 … this year (none or "" = this year)."""
+    this_year = date.today().year
+    if value is None or value == "":
+        return this_year
+    if isinstance(value, str) and value.strip().isdigit():
+        value = int(value.strip())
+    if type(value) is not int or not FIRST_YEAR <= value <= this_year:
+        raise ValueError("Det år findes ikke i Klippet")
+    return value
+
+
+def _open_url(url: str) -> None:
+    """Hand a http:// url of this server to the default browser (Klippet, SPEC §23.11)."""
+    os.startfile(url)                         # noqa: S606 - our own http://127.0.0.1 page only
 
 
 def _body_optional_str(body: dict[str, Any], name: str) -> str | None:

@@ -54,6 +54,7 @@
     <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.3V12l3.2 2"/></symbol>
     <symbol id="i-card" viewBox="0 0 24 24"><path d="M8.2 3.5h8.6c1 0 1.7.8 1.7 1.7v13.6c0 1-.8 1.7-1.7 1.7H7.2c-1 0-1.7-.8-1.7-1.7V6.2z"/><path d="M9.8 4v3.2M12.4 4v3.2M15 4v3.2"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/></symbol>
+    <symbol id="i-broom" viewBox="0 0 24 24"><path d="M20 4 13.4 10.6"/><path d="M11.2 9.8 14.2 12.8 12.9 15.2c-1.2 2.2-3 4-5.3 5L4.5 21.4l1.2-3.1c1-2.3 2.8-4.1 5-5.3z"/><path d="m7.4 17.6 2.3-2.3M9.9 18.9l1.6-1.6"/></symbol>
   </svg>
 
   <div class="app">
@@ -302,6 +303,95 @@
                   <button class="btn btn--secondary" type="submit">Gem</button>
                 </div>
               </form>
+            </section>
+
+            <section class="box" aria-labelledby="fun-title">
+              <h3 id="fun-title" class="box__title">Klippes sjov</h3>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-fun-saeson">Halloween og julekalender</span>
+                  <span class="setting__hint">Kostume, græskar, slik eller ballade, 24 låger og sne på skærm 2.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="widget_saeson" aria-checked="false" aria-labelledby="lbl-fun-saeson"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-fun-dans">Klippe danser, når du finder musik</span>
+                  <span class="setting__hint">På Artlist og de andre musiksider – med høretelefoner og noder.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="widget_dans" aria-checked="false" aria-labelledby="lbl-fun-dans"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <label class="setting__label" for="pet-fyraften">Natte-Klippe</label>
+                  <span class="setting__hint">Fra fyraften gaber Klippe, tager nathue på og falder i søvn – en blid påmindelse om at gå hjem.</span>
+                </div>
+                <label class="select">
+                  <select id="pet-fyraften">
+                    <option value="">Fra</option><option value="15:00">15:00</option><option value="15:30">15:30</option>
+                    <option value="16:00">16:00</option><option value="16:30">16:30</option><option value="17:00">17:00</option>
+                    <option value="17:30">17:30</option><option value="18:00">18:00</option>
+                  </select>
+                  <svg class="icon select__chevron" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+                </label>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-fun-bad">Klippe i bad</span>
+                  <span class="setting__hint">Klippe bliver beskidt af løse filer i projektmappens rod – og får skumbad, når du rydder op. Projektsøg viser, hvor filerne hører hjemme, men flytter dem aldrig selv.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="widget_bad" aria-checked="false" aria-labelledby="lbl-fun-bad"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-fun-frokost">Frokostklokken</span>
+                  <span class="setting__hint">Ring alle kontorets Klipper til frokost.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="widget_frokost" aria-checked="false" aria-labelledby="lbl-fun-frokost"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-fun-post">Klippe-post</span>
+                  <span class="setting__hint">Send Klippe over til en kollega med en lille besked.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="widget_post" aria-checked="false" aria-labelledby="lbl-fun-post"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-fun-vaeddemaal">Render-væddemål</span>
+                  <span class="setting__hint">Gæt, hvornår en lang render er færdig – kollegerne gætter med.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="widget_vaeddemaal" aria-checked="false" aria-labelledby="lbl-fun-vaeddemaal"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-fun-spil">Render-spillet</span>
+                  <span class="setting__hint">Et lille spil, der kun kan spilles, mens Resolve renderer.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="widget_renderspil" aria-checked="false" aria-labelledby="lbl-fun-spil"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-fun-aar">Klippet – din årsoversigt</span>
+                  <span class="setting__hint">I december: dit år i Resolve fortalt af Klippe – timer, projekter, kort, leveringer og durum.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="widget_aarsrapport" aria-checked="false" aria-labelledby="lbl-fun-aar"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-fun-paaskeaeg">Påskeæg i søgefeltet</span>
+                  <span class="setting__hint">Prøv „kaffe“, „fredag“ eller „deadline“ – søgningen virker som altid.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="search_paaskeaeg" aria-checked="false" aria-labelledby="lbl-fun-paaskeaeg"><span class="switch__thumb"></span></button>
+              </div>
+              <div class="setting">
+                <div class="setting__text">
+                  <span class="setting__label" id="lbl-fun-minder">„I dag for N år siden“</span>
+                  <span class="setting__hint">Et minde fra dine projekter, når søgefeltet er tomt – fx de klip, der blev optaget på dagen for 3 år siden.</span>
+                </div>
+                <button type="button" role="switch" class="switch" data-setting="search_minder" aria-checked="false" aria-labelledby="lbl-fun-minder"><span class="switch__thumb"></span></button>
+              </div>
+              <p class="box__note">Frokostklokken, Klippe-post, render-væddemål og slik eller ballade går over netværket og kræver Kontor-Klipper.</p>
             </section>
 
             <section class="box" aria-labelledby="behaviour-title">

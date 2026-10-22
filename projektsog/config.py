@@ -168,6 +168,18 @@ DEFAULTS: dict[str, Any] = {
     "widget_kontor": True,
     # The delivery party (SPEC §22.4): a render into Final, or a new file in the project's Final.
     "widget_levering": True,
+    # Fun in the office (SPEC §23) – every one can be switched off.
+    "widget_saeson": True,             # Halloween week and the Christmas calendar (+ snow)
+    "widget_dans": True,               # Klippe dances while you look for music
+    "widget_fyraften": "16:00",        # Natte-Klippe from this time ("" = off)
+    "widget_bad": True,                # loose files in the project folder's root → a dirty Klippe
+    "widget_frokost": True,            # the lunch bell (office Klippes)
+    "widget_post": True,               # Klippe-post to a colleague
+    "widget_vaeddemaal": True,         # render bets
+    "widget_renderspil": True,         # the game while Resolve renders
+    "widget_aarsrapport": True,        # "Klippet <year>" in December
+    "search_paaskeaeg": True,          # easter eggs in the search field
+    "search_minder": True,             # "I dag for N år siden" in the search window
 }
 
 VALID_RESOLVE_FOLLOW = ("off", "notify", "open")
@@ -313,6 +325,14 @@ class Config:
             self._listeners.append(callback)
 
 
+def _valid_fyraften(value: str) -> bool:
+    """"HH:MM" between 12:00 and 23:59 (Natte-Klippe, SPEC §23.2)."""
+    if len(value) != 5 or value[2] != ":" or not (value[:2] + value[3:]).isdigit():
+        return False
+    hours, minutes = int(value[:2]), int(value[3:])
+    return 12 <= hours <= 23 and minutes <= 59
+
+
 def validate(changes: dict[str, Any]) -> dict[str, Any]:
     """Light validation/coercion of user supplied settings. Raises ValueError."""
     out: dict[str, Any] = {}
@@ -347,6 +367,8 @@ def validate(changes: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Dagens mål skal være mellem 1 og 16 timer")
         if key == "widget_pet_name":
             value = value[:20] or "Klippe"
+        if key == "widget_fyraften" and value and not _valid_fyraften(value):
+            raise ValueError("Fyraften skal være et klokkeslæt mellem 12:00 og 23:59")
         if key == "widget_play_idle_minutes" and not (1 <= value <= 60):
             raise ValueError("Pausen før legen skal være mellem 1 og 60 minutter")
         if key == "time_idle_minutes" and not (1 <= value <= 120):

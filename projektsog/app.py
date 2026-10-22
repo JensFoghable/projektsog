@@ -22,6 +22,7 @@ import logging.handlers
 import ntpath
 import os
 import queue
+import re
 import stat
 import sys
 import threading
@@ -38,10 +39,10 @@ from .events import EventBus
 from .hotkey import HotkeyManager
 from .indexer import Indexer
 from .resolve_bridge import ResolveBridge
-from .server import HOST, Server
+from .server import HOST, RENDER_GAME_S, Server
 from .importer import Importer
 from .achievements import PetProgress
-from .messages import MessageBoard
+from .messages import MessageBoard, bell_sound
 from .updater import Updater
 from .petplay import PetPlay, window_shown
 from .crew import Crew, KoeWatch
@@ -608,6 +609,106 @@ class Controller:
 # App
 # ============================================================================================
 
+def make_rod(*args: Any, **kwargs: Any) -> Any:
+    """Klippe i bad (rod.py, SPEC §23.6) – imported when it is made."""
+    from .rod import Rod
+    return Rod(*args, **kwargs)
+
+
+def make_sne(*args: Any, **kwargs: Any) -> Any:
+    """Snow on monitor 2 (sne.py, SPEC §23.5) – imported when it is made."""
+    from .sne import Sne
+    return Sne(*args, **kwargs)
+
+
+class PetTally:
+    """What Klippe's year counts from the bus (SPEC §23.13): a delivery (``levering``, not a
+    demo) and a done render (``render`` with a new ``faerdig`` whose ``udfald`` is done) go to
+    ``progress.note``; and it knows whether a render was active lately – the render game's scores
+    count only then (§23.10)."""
+
+    def __init__(self, bus: EventBus, progress: Any, *, render_state: Callable[[], Any] | None = None,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        self.bus = bus
+        self.progress = progress
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._active = False                     # the last render state said: rendering
+        self._active_at: float | None = None     # … and when it last did
+        self._seq: Any = None                    # the last render end seen
+        self._queue: queue.Queue | None = None
+        self._thread: threading.Thread | None = None
+        try:
+            state = render_state() if render_state is not None else None
+        except Exception:
+            state = None
+        if isinstance(state, dict):              # a render that ended before we started is no news
+            done = state.get("faerdig")
+            self._seq = done.get("seq") if isinstance(done, dict) else None
+            self._active = bool(state.get("aktiv"))
+            self._active_at = clock() if self._active else None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._queue = self.bus.subscribe()
+        self._thread = threading.Thread(target=self._run, name="pet-tally", daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        q, self._queue = self._queue, None
+        if q is None:
+            return
+        self.bus.unsubscribe(q)
+        while True:                                  # (a full queue makes room for the stop)
+            try:
+                q.put_nowait(_STOP)
+                return
+            except queue.Full:
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    pass
+
+    def _run(self) -> None:
+        q = self._queue
+        while q is not None and (item := q.get()) is not _STOP:
+            kind, data, _ts = item
+            try:
+                self.handle(kind, data)
+            except Exception:
+                log.exception("Klippe's tally of %s failed", kind)
+
+    def handle(self, kind: str, data: Any) -> None:
+        if not isinstance(data, dict):
+            return
+        if kind == "levering" and not data.get("demo"):
+            self._note("leveringer")
+        elif kind == "render":
+            now = self._clock()
+            done = data.get("faerdig")
+            with self._lock:
+                was_active, self._active = self._active, bool(data.get("aktiv"))
+                if self._active or was_active:           # rendering – or it was until just now
+                    self._active_at = now
+                fresh = isinstance(done, dict) and done.get("seq") != self._seq
+                if fresh:
+                    self._seq = done.get("seq")
+                    self._active_at = now                # it was rendering until just now
+            if fresh and done.get("udfald") == "done":
+                self._note("renders")
+
+    def render_recent(self, within_s: float = RENDER_GAME_S) -> bool:
+        """Resolve renders now, or did within ``within_s``."""
+        with self._lock:
+            return self._active or (self._active_at is not None and 0 <= self._clock() - self._active_at <= within_s)
+
+    def _note(self, name: str) -> None:
+        note = getattr(self.progress, "note", None)
+        if callable(note):
+            note(name)
+
+
 @dataclass(frozen=True)
 class Components:
     """Factories App.start() uses for its collaborators (tests substitute fakes)."""
@@ -625,6 +726,8 @@ class Components:
     koe: Callable[[], KoeWatch] = KoeWatch
     kontor: Callable[..., Kontor] = Kontor
     levering: Callable[..., Levering] = Levering
+    rod: Callable[..., Any] = make_rod
+    sne: Callable[..., Any] = make_sne
     messages: Callable[..., MessageBoard] = MessageBoard
     progress: Callable[..., PetProgress] = PetProgress
     updater: Callable[..., Updater] = Updater
@@ -710,8 +813,11 @@ class App:
         self.koe: KoeWatch | None = None
         self.kontor: Kontor | None = None
         self.levering: Levering | None = None
+        self.rod: Any = None                        # Klippe i bad (rod.py, SPEC §23.6)
+        self.sne: Any = None                        # snow on monitor 2 (sne.py, SPEC §23.5)
         self.messages: MessageBoard | None = None
         self.progress: PetProgress | None = None
+        self.tally: PetTally | None = None
         self.updater: Updater | None = None
         self.tray: TrayIcon | None = None
         self._actions: _ActionRunner | None = None
@@ -778,6 +884,11 @@ class App:
         self.progress = c.progress(cfg, bus, tracker=self.tracker, importer=self.importer,
                                    path=os.path.join(config.app_dir(), "pet.json"))
         self.server.progress = self.progress
+        # What Klippe's year counts from the bus (deliveries, done renders) and whether a render
+        # was active lately – the render game's scores count only then (SPEC §23.10, §23.13).
+        self.tally = PetTally(bus, self.progress, render_state=getattr(self.bridge, "render_state", None))
+        self.tally.start()
+        self.server.render_recent = self.tally.render_recent
         # New versions from GitHub with one button (updater.py, Indstillinger ▸ Generelt).
         self.updater = c.updater(cfg, bus, repo_dir=REPO_DIR, data_dir=config.app_dir(),
                                  autostart=self.controller.get_run_at_login)
@@ -803,18 +914,28 @@ class App:
                                messages=self.messages, base_url=f"http://{HOST}:{port}")
             self.server.crew = self.crew
             # Office Klippes (kontor.py): Klippe greets the colleagues' Klippes on the LAN and visits
-            # them with a new trophy. The delivery party (levering.py): a render into Final, or a new
-            # file in the project's Final folder.
+            # them with a new trophy – and rings for lunch, carries posts, goes trick-or-treating,
+            # lets them bet on renders (SPEC §23.7). The delivery party (levering.py): a render into
+            # Final, or a new file in the project's Final folder.
             self.kontor = c.kontor(cfg, bus, equipped=self.progress.equipped, stats=self.progress.stats,
-                                   look=self.petplay.look, shown=self._klippe_shown)
+                                   look=self.petplay.look, shown=self._klippe_shown, progress=self.progress,
+                                   board=self.messages, working=self._recording, bell=bell_sound)
             self.server.kontor = self.kontor
             self.levering = c.levering(cfg, bus, bridge=self.bridge, shown=self._klippe_shown)
             self.server.levering = self.levering
+            # Klippe i bad (rod.py): loose files in the project folder's root make Klippe dirty;
+            # snow on monitor 2 (sne.py) from the Christmas calendar.
+            self.rod = c.rod(cfg, bus, bridge=self.bridge, on_bath=self._klippe_bath)
+            self.server.rod = self.rod
+            self.sne = c.sne(cfg, bus, widget=self.widget)
+            self.server.sne = self.sne
+            self.progress.on_snow = self.sne.start
             self.widget.start()
             self.petplay.start()
             self.crew.start()
             self.kontor.start()
             self.levering.start()
+            self.rod.start()
             self._start_tray()
             self._spawn(self._forward_notifications, "notify-forwarder")
             self._hotkey_settings = _hotkey_settings(cfg.snapshot())
@@ -843,8 +964,32 @@ class App:
         crew = self.crew
         return bool(crew is not None and crew.active())
 
+    def _recording(self) -> bool:
+        """The time tracking records now (you work in Resolve) – a trick or treat waits for it."""
+        status = getattr(self.tracker, "status", None)
+        try:
+            return callable(status) and (status() or {}).get("state") == "recording"
+        except Exception:
+            log.debug("no time tracking status", exc_info=True)
+            return False
+
+    def _klippe_bath(self) -> None:
+        """A project folder was tidied: Klippe's bath counts (SPEC §23.6)."""
+        note = getattr(self.progress, "note", None)
+        if callable(note):
+            note("bade")
+
     def _internal_uri(self, uri: str) -> None:
-        """A "projektsog:" button of a message Projektsøg posted itself (MessageBoard.click)."""
+        """A "projektsog:" button of a message Projektsøg posted itself (MessageBoard.click): a
+        colleague's post answered ("projektsog:post/<PC>" opens Klippe's post panel, SPEC §23.7),
+        anything else is the robots' (the demo call)."""
+        head, _, pc = uri.partition("/")
+        if head.casefold() == "projektsog:post":
+            pc = pc.strip().upper()
+            if not re.fullmatch(r"[A-Z0-9-]{1,15}", pc):
+                raise ValueError("Knappen kunne ikke åbnes")
+            self.bus.publish("post_svar", {"til": pc})
+            return
         crew = self.crew
         if crew is None:
             raise ValueError("Robotterne er ikke startet")
@@ -895,9 +1040,11 @@ class App:
         if self.server is not None:
             steps["server"] = self.server.stop
         # The robots go first (they are told to quit and do not wait), a ringing phone stops, the
-        # office and the delivery watch close, then a game ends: the helper puts the pointer back.
-        windows = [w.close for w in (self.crew, self.messages, self.kontor, self.levering, self.petplay,
-                                     self.progress, self.updater, self.widget, self.window) if w is not None]
+        # office, the delivery watch and Klippe's bath close, the snow is told to stop, then a game
+        # ends: the helper puts the pointer back.
+        windows = [w.close for w in (self.crew, self.messages, self.kontor, self.levering, self.rod, self.sne,
+                                     self.petplay, self.progress, self.tally, self.updater, self.widget,
+                                     self.window) if w is not None]
         if windows:
             steps["window"] = lambda: [close() for close in windows]
         for name, budget in budgets.items():

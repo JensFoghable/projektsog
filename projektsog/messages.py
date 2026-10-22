@@ -23,9 +23,14 @@ again. The sound calls are injected (``sound()``, ``ring(on)``), so tests never 
 A button opens its uri through Windows (the program's registered protocol handler), so
 Projektsøg never runs anything itself, and only the schemes in ``URI_SCHEMES`` are accepted.
 Projektsøg's own messages (``post(..., internal=True)``) may also use ``projektsog:``; such a
-button is handed to ``on_internal(uri)`` instead of Windows. The messages are kept in
-``messages.json``: a restart of Projektsøg does not lose a question a session is waiting on
-(Projektsøg's own messages are not reloaded).
+button is handed to ``on_internal(uri)`` instead of Windows. They may also say ``"opkald": false``
+(a colleague's post with its "Svar" button, SPEC §23.7): such a card never rings and is never
+shown as a phone. The messages are kept in ``messages.json``: a restart of Projektsøg does not
+lose a question a session is waiting on (Projektsøg's own messages with a ``projektsog:`` button
+are not reloaded).
+
+The office Klippes' lunch bell (SPEC §23.7) is made here like the ring: a small hand bell,
+"ding-ding-ding" (``bell_sound()``).
 """
 
 from __future__ import annotations
@@ -52,7 +57,12 @@ MAX_MESSAGES = 20
 TAG_MAX, TITLE_MAX, TEXT_MAX, BUTTON_MAX, SESSION_MAX, URI_MAX = 80, 120, 400, 40, 40, 2000
 DEFAULT_TTL_S = 3600
 MAX_TTL_S = 86400
+MAX_INTERNAL_TTL_S = 7 * 86400              # Projektsøg's own cards (a colleague's year: 2 days)
 RING_S = 30.0                               # a call rings this long at most, then it is missed
+# A colleague's post or year (SPEC §23.7) – cards from the LAN: at most this many, and they never push
+# out a message from a program on this PC (a session's waiting question least of all).
+LAN_TAGS = ("post:", "aar:")
+MAX_LAN_MESSAGES = 6
 
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
@@ -107,8 +117,9 @@ def clean_message(data: Any, *, internal: bool = False) -> dict[str, Any]:
         clean_buttons.append({"tekst": _text(button, "tekst", BUTTON_MAX, required=True),
                               "uri": check_uri(button.get("uri"), internal=internal)})
     ttl = data.get("udloeber", DEFAULT_TTL_S)
-    if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or not 1 <= ttl <= MAX_TTL_S:
-        raise ValueError(f"udloeber skal være 1–{MAX_TTL_S} sekunder")
+    max_ttl = MAX_INTERNAL_TTL_S if internal else MAX_TTL_S
+    if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or not 1 <= ttl <= max_ttl:
+        raise ValueError(f"udloeber skal være 1–{max_ttl} sekunder")
     message = {"tag": _text(data, "tag", TAG_MAX, required=True),
                "titel": _text(data, "titel", TITLE_MAX), "tekst": _text(data, "tekst", TEXT_MAX),
                "knapper": clean_buttons, "session": _text(data, "session", SESSION_MAX)}
@@ -123,6 +134,8 @@ def clean_message(data: Any, *, internal: bool = False) -> dict[str, Any]:
     if priority not in ("normal", "stille"):
         raise ValueError("prioritet skal være normal eller stille")
     message.update(ttl=float(ttl), lyd=sound and priority == "normal", visning=view, prioritet=priority)
+    if internal and data.get("opkald", True) is False:
+        message["aldrig_opkald"] = True       # (taken out again by post(): never kept or shown)
     return message
 
 
@@ -222,6 +235,73 @@ def ring_sound(on: bool) -> None:
         log.debug("could not play Klippe's ring", exc_info=True)
 
 
+BELL_FILE = "klippe-frokost-1.wav"      # the office Klippes' lunch bell (SPEC §23.7)
+BELL_STROKES = (0.0, 0.34, 0.68)        # ding – ding – ding
+BELL_SECONDS = 1.1
+
+
+def bell_samples(rate: int = RINGTONE_RATE) -> list[float]:
+    """A small hand bell rung three times: each stroke a bright, inharmonic chime that dies away,
+    with a short metallic click of the clapper (−1…1, peak RINGTONE_PEAK)."""
+    partials = ((1.0, 1.0, 0.28), (2.76, 0.45, 0.16), (5.40, 0.22, 0.08), (8.93, 0.10, 0.05))   # (ratio, gain, decay s)
+    base = 1480.0
+    out = [0.0] * int(rate * BELL_SECONDS)
+    click = random.Random(11)
+    for stroke in BELL_STROKES:
+        start = int(rate * stroke)
+        for i in range(start, len(out)):
+            t = (i - start) / rate
+            attack = min(1.0, t / 0.003)
+            value = sum(gain * math.exp(-t / decay) * math.sin(2 * math.pi * base * ratio * t)
+                        for ratio, gain, decay in partials)
+            if t < 0.012:
+                value += click.uniform(-1, 1) * 0.35 * (1 - t / 0.012)
+            out[i] += value * attack
+    fade = int(rate * 0.05)                         # no click at the very end
+    for k in range(fade):
+        out[-1 - k] *= k / fade
+    peak = max(abs(v) for v in out) or 1.0
+    return [v / peak * RINGTONE_PEAK for v in out]
+
+
+def write_bell(path: str) -> None:
+    """The lunch bell as a 16-bit mono WAV (written beside, then moved into place)."""
+    temp = path + ".tmp"
+    with wave.open(temp, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(RINGTONE_RATE)
+        wav.writeframes(b"".join(struct.pack("<h", round(v * 32767)) for v in bell_samples()))
+    os.replace(temp, path)
+
+
+def bell_path() -> str | None:
+    """The lunch bell in Projektsøg's data folder, made the first time it is needed."""
+    from . import config
+    path = os.path.join(config.app_dir(), BELL_FILE)
+    if not os.path.isfile(path):
+        try:
+            write_bell(path)
+        except OSError as exc:
+            log.warning("could not make Klippe's lunch bell: %s", exc)
+            return None
+    return path
+
+
+def bell_sound() -> None:
+    """Somebody rang for lunch: Klippe's quiet hand bell, once (the notification sound if it
+    cannot be made)."""
+    path = bell_path()
+    if path is None:
+        notification_sound()
+        return
+    try:
+        import winsound
+        winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+    except (ImportError, RuntimeError, OSError):
+        log.debug("could not play Klippe's lunch bell", exc_info=True)
+
+
 def ring_timer(delay: float, action: Callable[[], None]) -> threading.Timer:
     """The default timer that ends a call's ringing (not started yet)."""
     timer = threading.Timer(delay, action)
@@ -266,6 +346,7 @@ class MessageBoard:
     # -- API ---------------------------------------------------------------------------------
     def post(self, data: Any, *, internal: bool = False) -> dict[str, Any]:
         message = clean_message(data, internal=internal)
+        never_a_call = message.pop("aldrig_opkald", False)
         now = self._clock()
         ttl, sound, view = message.pop("ttl"), message.pop("lyd"), message.pop("visning")
         message.update(tid=now, udloeber_ved=now + ttl, lyd=sound)
@@ -283,11 +364,17 @@ class MessageBoard:
             self.bus.publish("say", {"tekst": line})
             log.info("note %s: %s", message["tag"], line[:80])
             return {"ok": True, "vist": shown}
-        call, ring_on = is_call(message), self._ring_enabled()
+        call, ring_on = is_call(message) and not never_a_call, self._ring_enabled()
         tag = message["tag"]
+        lan = internal and tag.startswith(LAN_TAGS)
         with self._lock:
             self._prune(now)
             old = self._messages.pop(tag, None)
+            if lan and not self._room_for_lan():
+                if old is not None:
+                    self._messages[tag] = old
+                log.info("no room for %s: the board is full of other messages", tag)
+                return {"ok": False, "vist": False}
             news = old is None or (old["titel"], old["tekst"]) != (message["titel"], message["tekst"])
             # A call that is news (or was no call before) rings anew; a silent re-post keeps the
             # answer of the one it replaces.
@@ -533,6 +620,17 @@ class MessageBoard:
         tag = next(iter(self._messages))
         del self._messages[tag]
         return tag
+
+    def _room_for_lan(self) -> bool:
+        """Make room for one more card from a colleague (lock held): beyond MAX_LAN_MESSAGES of them,
+        or on a full board, the oldest colleague card goes – never anything else. False: the board
+        is full of other messages."""
+        lan = [tag for tag in self._messages if tag.startswith(LAN_TAGS)]
+        while lan and (len(lan) >= MAX_LAN_MESSAGES or len(self._messages) >= MAX_MESSAGES):
+            gone = lan.pop(0)
+            del self._messages[gone]
+            self._stop_ringing(gone)
+        return len(self._messages) < MAX_MESSAGES
 
     def _snapshot(self) -> list[dict[str, Any]]:
         return [dict(m, knapper=[dict(b) for b in m["knapper"]], ringer=m["tag"] in self._ringing)

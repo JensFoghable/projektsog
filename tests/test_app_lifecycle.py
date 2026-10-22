@@ -410,6 +410,7 @@ class AppHarness:
             tracker=self._tracker, importer=self._importer,
             controller=self._controller, server=self._server, window=self._window, widget=self._widget,
             petplay=self._petplay, crew=self._crew, kontor=self._kontor, levering=self._levering,
+            rod=self._rod, sne=self._sne,
             messages=self._messages, tray=self._tray, hotkeys=self._hotkeys, updater=self._updater)
         self.app = app.App(app.parse_args(list(flags)), self.instance, components=components,
                            exit_deadline_s=exit_deadline_s, hotkey_recheck_s=hotkey_recheck_s)
@@ -496,9 +497,11 @@ class AppHarness:
         self.crew = fakes.FakeCrew(self.journal, "crew")
         return self.crew
 
-    def _kontor(self, cfg, bus, *, equipped, stats, look, shown) -> fakes.FakeKontor:
+    def _kontor(self, cfg, bus, *, equipped, stats, look, shown, progress, board, working,
+                bell) -> fakes.FakeKontor:
         self.journal.append("kontor.create")
-        self.kontor_kwargs = {"equipped": equipped, "stats": stats, "look": look, "shown": shown}
+        self.kontor_kwargs = {"equipped": equipped, "stats": stats, "look": look, "shown": shown,
+                              "progress": progress, "board": board, "working": working, "bell": bell}
         self.kontor = fakes.FakeKontor(self.journal, "kontor")          # never opens a socket
         return self.kontor
 
@@ -508,6 +511,19 @@ class AppHarness:
         self.levering_shown = shown
         self.levering = fakes.FakeLevering(self.journal, "levering")    # never watches or fetches
         return self.levering
+
+    def _rod(self, cfg, bus, *, bridge, on_bath) -> fakes.FakeRod:
+        self.journal.append("rod.create")
+        assert bridge is self.bridge
+        self.rod_on_bath = on_bath
+        self.rod = fakes.FakeRod(self.journal, "rod")                   # never lists a folder
+        return self.rod
+
+    def _sne(self, cfg, bus, *, widget) -> fakes.FakeSne:
+        self.journal.append("sne.create")
+        assert widget is self.widget
+        self.sne = fakes.FakeSne(self.journal, "sne")                   # never starts its helper
+        return self.sne
 
     def _messages(self, cfg, bus, *, shown, on_internal, path: str) -> fakes.FakeMessages:
         self.messages_kwargs = {"shown": shown, "on_internal": on_internal, "path": path}
@@ -566,7 +582,8 @@ class AppStartupTests(unittest.TestCase):
                "tracker.create", "tracker.start",
                "controller.create", "importer.create", "server.create", "server.start",
                "window.create", "widget.create", "petplay.create", "crew.create", "kontor.create",
-               "levering.create", "widget.start", "petplay.start", "crew.start", "kontor.start", "levering.start",
+               "levering.create", "rod.create", "sne.create", "widget.start", "petplay.start", "crew.start",
+               "kontor.start", "levering.start", "rod.start",
                "tray.create", "tray.start", "hotkeys.create", "hotkeys.start", "importer.start"]
 
     def test_startup_order_and_wiring(self) -> None:
@@ -622,8 +639,51 @@ class AppStartupTests(unittest.TestCase):
         self.assertIs(h.server.kontor, h.kontor)
         self.assertIs(h.server.levering, h.levering)
         self.assertEqual(h.kontor_kwargs, {"equipped": h.app.progress.equipped, "stats": h.app.progress.stats,
-                                           "look": h.petplay.look, "shown": h.app._klippe_shown})
+                                           "look": h.petplay.look, "shown": h.app._klippe_shown,
+                                           "progress": h.app.progress, "board": h.messages,
+                                           "working": h.app._recording, "bell": app.bell_sound})
         self.assertEqual(h.levering_shown, h.app._klippe_shown)
+
+    def test_the_fun_in_the_office_is_wired_up(self) -> None:
+        # SPEC §23.13: Klippe's bath and the snow come with the widget; the calendar's snow falls
+        # through Sne.start; a tally of the bus counts for Klippe's year.
+        h = AppHarness(self, "--background")
+        h.app.start()
+        self.assertIs(h.server.rod, h.rod)
+        self.assertIs(h.server.sne, h.sne)
+        self.assertEqual(h.app.progress.on_snow, h.sne.start)
+        self.assertIsInstance(h.app.tally, app.PetTally)
+        self.assertEqual(h.server.render_recent, h.app.tally.render_recent)
+        noted: list[str] = []
+        h.app.progress.note = noted.append                    # (whatever achievements.py counts with)
+        h.rod_on_bath()
+        self.assertEqual(noted, ["bade"])
+        # The time tracking records → a trick or treat may go out.
+        self.assertFalse(h.app._recording())                  # FakeTracker has no status
+        h.tracker.status = lambda: {"state": "recording"}
+        self.assertTrue(h.app._recording())
+        h.tracker.status = lambda: {"state": "idle"}
+        self.assertFalse(h.app._recording())
+
+    def test_a_post_answered_opens_the_post_panel(self) -> None:
+        h = AppHarness(self, "--background")
+        h.app.start()
+        events = EventLog(h.app.bus)
+        h.messages_kwargs["on_internal"]("projektsog:post/STUDIE-PC")
+        self.assertEqual(events.of("post_svar"), [{"til": "STUDIE-PC"}])
+        self.assertEqual(h.crew.called("handle_uri"), [])     # not the robots'
+        with self.assertRaises(ValueError):
+            h.messages_kwargs["on_internal"]("projektsog:post/<script>")
+        self.assertEqual(events.of("post_svar"), [{"til": "STUDIE-PC"}])
+
+    def test_the_fun_closes_with_the_widget(self) -> None:
+        h = AppHarness(self, "--background")
+        h.app.start()
+        h.app.exit_sequence()
+        for entry in ("rod.close", "sne.close"):
+            self.assertIn(entry, h.journal)
+        self.assertLess(h.journal.index("levering.close"), h.journal.index("rod.close"))
+        self.assertLess(h.journal.index("sne.close"), h.journal.index("petplay.close"))
 
     def test_background_preloads_instead_of_showing(self) -> None:
         h = AppHarness(self, "--background")
@@ -803,8 +863,8 @@ class AppRuntimeTests(unittest.TestCase):
 
 class ExitSequenceTests(unittest.TestCase):
     EXIT = ["hotkeys.stop", "tray.stop", "importer.stop", "tracker.stop", "bridge.stop", "indexer.stop",
-            "server.stop", "crew.close", "kontor.close", "levering.close", "petplay.close", "widget.close",
-            "window.close", "instance.release"]
+            "server.stop", "crew.close", "kontor.close", "levering.close", "rod.close", "sne.close",
+            "petplay.close", "widget.close", "window.close", "instance.release"]
 
     def test_exit_order_and_cleanup(self) -> None:
         h = AppHarness(self)

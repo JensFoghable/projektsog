@@ -165,7 +165,7 @@ class PacketTests(unittest.TestCase):
         self.assertEqual(msg, {"type": "besoeg", "pc": "STUDIE-PC", "id": OTHER_ID, "seq": 1, "navn": "Klippe",
                                "stage": "pro", "outfit": "color",
                                "pynt": {**DEFAULT_PYNT, "hat": "festhat", "haand": "durum"},
-                               "trofae": {"kind": "trofae", "id": "durum10"}})
+                               "trofae": {"kind": "trofae", "id": "durum10"}, "x": None})
         self.assertIsNone(kontor.parse_packet(raw(packet()))["trofae"])
         # trofae belongs to a visit only
         self.assertIsNone(kontor.parse_packet(raw(packet(trofae={"kind": "fund", "id": "awp"})))["trofae"])
@@ -492,7 +492,7 @@ class SendTests(unittest.TestCase):
         msg = sent[0][0]
         self.assertEqual(msg, {"app": "projektsog-klippe", "v": 1, "type": "hej", "pc": "TESTPC", "id": h.k.id,
                                "seq": 1, "navn": "Klippe", "stage": "pro", "outfit": "fusion",
-                               "pynt": h.equipped})
+                               "pynt": kontor.clean_pynt(h.equipped)})     # every slot of the wardrobe
         self.assertEqual(sent[1][0], msg)                          # one message, the same seq
         self.assertRegex(h.k.id, r"^[0-9a-f]{16}$")
         self.assertEqual(kontor.parse_packet(sock.sent[0][0])["pc"], "TESTPC")   # we pass our own check

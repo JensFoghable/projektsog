@@ -11,9 +11,10 @@ Every few seconds the tracker looks at three cheap signals:
 
 Time counts when Resolve is in front with a project open (bucket = the page), or when a music
 site (bucket ``"musik"``) or an AI site (bucket ``"ai"``) is in front while a Resolve project is
-open. A moving playhead counts as activity, so watching playback is not "idle" - for up to an
-hour without any input, so a timeline left looping overnight does not bill the night. Rendering
-alone is not activity.
+open. A moving playhead counts as activity, so watching playback is not "idle" - and so does a
+Resolve that has stopped answering scripts (``busy``: it does not answer while it plays back).
+Both only for up to an hour without any input, so a timeline left looping overnight does not
+bill the night. Rendering alone is not activity.
 
 One rule for every pause, ``time_idle_minutes`` long (the "Pause efter" setting): a pause
 shorter than that counts fully, a longer one not at all. A pause is either no input at all (the
@@ -21,8 +22,9 @@ stretch is cut back to the last input) or time in another program while a Resolv
 open (mail, Stifinder, Projektsøg …: the clock keeps running, and if you are not back in Resolve
 in time, the stretch is cut back to when you left it).
 
-Resolve answers scripts slowly while it is busy (editing, Fusion, playback). Its last known
-project, page and timeline therefore stay valid for ``STALE_OK_S``.
+Resolve answers scripts slowly while it is busy (editing, Fusion), and not at all while it plays
+back. Its last known project, page and timeline therefore stay valid for ``STALE_OK_S`` - and for
+as long as it does not answer at all, until it answers again or quits.
 
 Stretches of counted time are stored as segments in ``time.db`` (local SQLite, never shared):
 ``(project, database, uid, folder, bucket, start, end, host)`` with epoch seconds.
@@ -243,7 +245,9 @@ class TimeTracker:
             exe, title = self._foreground()
             idle = max(0.0, self._idle())
             last_active = now - idle
-            if self._playhead_moved(act) and idle <= PLAYBACK_MAX_S:
+            # A Resolve that does not answer at all is playing back (or busy working).
+            playing = self._playhead_moved(act) or bool(act and act.get("busy") and not act.get("rendering"))
+            if playing and idle <= PLAYBACK_MAX_S:
                 last_active = now   # watching playback counts - but a forgotten loop doesn't bill all night
 
             ctx = self._context(act, exe, title)

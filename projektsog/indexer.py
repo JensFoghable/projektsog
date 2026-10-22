@@ -24,6 +24,7 @@ says so) and wake the owning thread.  Everything that can hang runs on a discove
 from __future__ import annotations
 
 import collections
+import copy
 import difflib
 import json
 import logging
@@ -37,6 +38,7 @@ import threading
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from . import APP_NAME, __version__, config, db, discovery, search, textutil, winfs
@@ -58,6 +60,7 @@ NEW_VOLUME_MAX_WAIT_S = 60.0        # announce a new disk even if its probes hav
 HOST_RETRY_DELAY_S = 2.0            # one retry before a host counts as unreachable
 HOST_ACTIVITY_GRACE_S = 30.0        # worker progress on a host this recent proves it is alive
 OWN_IPS_REFRESH_S = 300.0
+MEMORIES_TTL_S = 600.0              # "I dag for N år siden" is looked up again this much later
 DB_SIZE_REFRESH_S = 10.0
 LAST_SEEN_WRITE_S = 60.0            # last_seen of online sources is persisted at most this often
 DB_RETRY_S = 2.0
@@ -753,6 +756,9 @@ class Indexer:
         self._scheduler_thread: threading.Thread | None = None
         self._db_thread: threading.Thread | None = None
         self._readers: db.ReaderPool | None = None
+        # "I dag for N år siden" (SPEC §23.9): (day, online_only, monotonic time, memories)
+        self._memories_lock = threading.Lock()
+        self._memories: tuple[date, bool, float, list[dict[str, Any]]] | None = None
 
     # ==================================================================================
     # Lifecycle
@@ -992,6 +998,28 @@ class Indexer:
         with readers.connection() as conn:
             return search.recent_projects(conn, view.sources, max(0, int(limit)),
                                           online_only=online_only)
+
+    def memories(self, today: date | None = None) -> list[dict[str, Any]]:
+        """"I dag for N år siden" (SPEC §23.9): ``search.memories`` for ``today`` – kept 10 minutes
+        per day ([] while ``search_minder`` is off)."""
+        if not self.cfg.get("search_minder", True):
+            return []
+        day = today or date.today()
+        online_only = not bool(self.cfg.get("show_offline", True))
+        now = time.monotonic()
+        with self._memories_lock:
+            cached = self._memories
+            if cached is not None and cached[:2] == (day, online_only) and 0 <= now - cached[2] < MEMORIES_TTL_S:
+                return copy.deepcopy(cached[3])
+        view = self._snapshot()
+        readers = self._readers
+        if readers is None:
+            return []
+        with readers.connection() as conn:
+            found = search.memories(conn, view.sources, day, online_only=online_only)
+        with self._memories_lock:
+            self._memories = (day, online_only, time.monotonic(), found)
+        return copy.deepcopy(found)
 
     def children(self, source_id: int, rel_path: str) -> list[dict[str, Any]]:
         view = self._snapshot()

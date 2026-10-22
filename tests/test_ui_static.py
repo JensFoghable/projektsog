@@ -87,9 +87,23 @@ class StaticUiTests(unittest.TestCase):
         keys = set(re.findall(r'data-setting="([\w]+)"', self.html))
         self.assertEqual(keys, {"hotkey_enabled", "hide_after_open", "show_offline", "run_at_login", "time_tracking_enabled", "import_auto_open",
                                 "widget_enabled", "widget_on_top", "widget_play", "widget_ring", "widget_crew",
-                                "widget_kontor", "widget_levering", "resolve_enabled"})
+                                "widget_kontor", "widget_levering", "resolve_enabled",
+                                # §23.0 "Klippes sjov": every fun thing can be switched off
+                                "widget_saeson", "widget_dans", "widget_bad", "widget_frokost", "widget_post",
+                                "widget_vaeddemaal", "widget_renderspil", "widget_aarsrapport", "search_paaskeaeg",
+                                "search_minder"})
         self.assertLessEqual(keys - {"run_at_login"}, set(config.DEFAULTS))
         self.assertEqual(set(re.findall(r'data-follow="(\w+)"', self.html)), set(config.VALID_RESOLVE_FOLLOW))
+
+    def test_fyraften_choices_are_valid_settings(self) -> None:
+        # Natte-Klippe (§23.2): "Fra" or a time the config accepts; 16:00 (the office's fyraften) is one.
+        select = re.search(r'<select id="pet-fyraften">(.*?)</select>', self.html, re.S).group(1)
+        values = re.findall(r'<option value="([^"]*)"', select)
+        self.assertIn("", values)
+        self.assertIn(config.DEFAULTS["widget_fyraften"], values)
+        for value in values:
+            with self.subTest(value=value):
+                self.assertEqual(config.validate({"widget_fyraften": value}), {"widget_fyraften": value})
 
     def test_spec_copy_is_present(self) -> None:
         text = self.html + self.js
@@ -112,6 +126,11 @@ class StaticUiTests(unittest.TestCase):
             # §22: offline media found and relinked; office Klippes and the delivery party
             "klip er offline i Resolve", "Find og genlink …", "klip er genlinket", "(ikke tilsluttet)",
             "Kontor-Klipper: Klippe hilser på kollegernes Klipper", "Leveringsfest, når en fil lander i Final",
+            # §23: fun in the office
+            "Klippes sjov", "Halloween og julekalender", "Natte-Klippe", "Frokostklokken", "Klippe-post",
+            "Render-væddemål", "Render-spillet", "Påskeæg i søgefeltet", "I dag for", "år siden",
+            "løse filer", "i roden af", "Vis forslag", "Ryd op i", "Åbn projektmappen", "findes ikke endnu",
+            "Projektsøg flytter aldrig selv filer",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, text)
@@ -128,6 +147,14 @@ class StaticUiTests(unittest.TestCase):
             self.assertTrue(args.startswith("'projektsog.theme'"), args)
         self.assertEqual(self.js.count("localStorage"), len(uses))
 
+    def test_the_memory_and_the_loose_files_are_wired(self) -> None:
+        # §23.6/§23.9: SSE rod is handled; a memory is never the default selection.
+        self.assertRegex(self.js, r"\brod: applyRod,")
+        self.assertIn("g.key !== 'minde'", self.js)
+        self.assertIn("'/api/minder'", self.js)
+        self.assertIn("'/api/paaskeaeg'", self.js)
+        self.assertIn("'/api/rod/aabn'", self.js)
+
     def test_dark_default_with_light_override(self) -> None:
         self.assertRegex(self.css, r":root \{\s*color-scheme: dark;")
         # Light only on request (the "theme" setting, applied by app.js) – never just because
@@ -135,6 +162,52 @@ class StaticUiTests(unittest.TestCase):
         self.assertRegex(self.css, r':root\[data-theme="light"\] \{\s*color-scheme: light;')
         self.assertNotIn("prefers-color-scheme", self.css)
         self.assertIn("@media (prefers-reduced-motion: reduce)", self.css)
+
+
+class YearReviewPageTests(unittest.TestCase):
+    """Klippet <år> (SPEC §23.11): aar.html, aar.js and aar.css – self-contained, same origin only."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.html = _read("aar.html")
+        cls.js = _read("aar.js")
+        cls.css = _read("aar.css")
+
+    def test_entry_points(self) -> None:
+        self.assertIn('<html lang="da">', self.html)
+        self.assertEqual(re.findall(r"<title>(.*?)</title>", self.html), ["Klippet"])
+        self.assertIn('<link rel="stylesheet" href="/aar.css">', self.html)
+        self.assertIn('<script src="/aar.js" defer></script>', self.html)
+        # the same colour scheme as widget.html, so Klippe's frame stays transparent
+        self.assertIn('<meta name="color-scheme" content="dark">', self.html)
+
+    def test_no_external_resources(self) -> None:
+        for name, text in (("aar.html", self.html), ("aar.js", self.js), ("aar.css", self.css)):
+            with self.subTest(file=name):
+                urls = [u for u in re.findall(r"(?:https?:)?//[\w.-]+\.[a-z]{2,}[^\s\"')]*", text)
+                        if u != SVG_NAMESPACE and not u.startswith("//www.w3.org/2000/svg")]
+                self.assertEqual(urls, [])
+                self.assertNotIn("@import", text)
+        for target in re.findall(r"url\(([^)]*)\)", self.css):
+            self.assertRegex(target.strip("'\""), r"^(data:|#)")
+        for ref in re.findall(r'(?:src|href)="([^"]+)"', self.html + self.js):
+            with self.subTest(ref=ref):
+                self.assertRegex(ref, r"^(/[\w./-]+|#[\w-]+)$")
+
+    def test_ids_used_by_the_script_exist(self) -> None:
+        html_ids = set(re.findall(r'\sid="([\w-]+)"', self.html))
+        created = set(re.findall(r"\bid: '([\w-]+)'", self.js))     # buttons the script makes itself
+        for element_id in re.findall(r"\$\('([\w-]+)'\)", self.js):
+            self.assertIn(element_id, html_ids | created)
+
+    def test_writes_carry_the_csrf_header_and_motion_can_be_reduced(self) -> None:
+        self.assertIn("'X-Projektsog': '1'", self.js)
+        self.assertIn("'/api/aar/del'", self.js)
+        self.assertNotIn("console.log", self.js)
+        self.assertNotIn("debugger", self.js)
+        self.assertNotIn("localStorage", self.js)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", self.css)
+        self.assertIn("prefers-reduced-motion: reduce", self.js)
 
 
 if __name__ == "__main__":

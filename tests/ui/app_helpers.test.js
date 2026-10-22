@@ -664,3 +664,85 @@ test('relink: the result says what was relinked, what is still offline and what 
   { tone: 'warn', title: 'DaVinci Resolve renderer lige nu – genlink, når renderen er færdig', lines: [] });
   assert.equal(h.relinkResultView(null), null);
 });
+
+// ---------------------------------------------------------------- fun in the office (SPEC §23)
+
+test('easter eggs are whole words, folded, with a trailing ! ? or . allowed (§23.8)', () => {
+  for (const [query, egg] of [['kaffe', 'kaffe'], ['  KAFFE! ', 'kaffe'], ['Fredag?', 'fredag'], ['deadline...', 'deadline'],
+    ['durum', 'durum'], ['Booster', 'booster'], ['Faxe  Kondi Booster', 'booster'], ['festkat', 'festkat'], ['kat', 'festkat'],
+    ['Hjælp!', 'hjaelp'], ['hjaelp', 'hjaelp'], ['help', 'hjaelp'], ['Fyraften', 'fyraften'], ['sne', 'sne'], ['snow', 'sne'],
+    ['klippe', 'klippe']]) {
+    assert.equal(h.easterEgg(query), egg, query);
+  }
+  // the pet's own name is "klippe" too; nothing else – a real search is never an egg by accident
+  assert.equal(h.easterEgg('Bobby', 'Bobby'), 'klippe');
+  assert.equal(h.easterEgg('bøbby', 'Bøbby'), 'klippe');
+  assert.equal(h.easterEgg('Klippe', 'Bobby'), 'klippe');
+  for (const query of ['', '   ', 'kaffe kop', 'kaffebar', 'Rikke Lindholm', 'fredags', '!', 'sne storm']) {
+    assert.equal(h.easterEgg(query, 'Klippe'), null, query);
+  }
+  assert.equal(h.eggFold('  Ærø  Å  É! '), 'aeroe aa e');
+});
+
+test('an egg Klippe acts out has a line in the search window; the window\'s own effects have none', () => {
+  assert.equal(h.eggToast('kaffe', 'Bobby'), '☕ Bobby kommer med kaffe!');
+  assert.equal(h.eggToast('klippe'), '👋 Klippe vinker til dig!');
+  assert.equal(h.eggToast('hjaelp', ''), '🦸 Klippe til undsætning!');
+  for (const egg of ['durum', 'booster', 'fyraften']) assert.ok(h.eggToast(egg).length > 5, egg);
+  for (const egg of ['fredag', 'sne', 'festkat', 'deadline', 'nonsense']) assert.equal(h.eggToast(egg), null, egg);
+});
+
+test('a memory: "📸 I dag for 3 år siden" and "112 klip fra 12. oktober 2023" (§23.9)', () => {
+  assert.equal(h.memoryLabel({ aar_siden: 3 }), '📸 I dag for 3 år siden');
+  assert.equal(h.memoryLabel({ aar_siden: 1 }), '📸 I dag for 1 år siden');
+  assert.equal(h.memoryText({ antal: 112, slags: 'klip', dato: '2023-10-12' }), '112 klip fra 12. oktober 2023');
+  assert.equal(h.memoryText({ antal: 1, slags: 'klip', dato: '2023-10-12' }), '1 klip fra 12. oktober 2023');
+  assert.equal(h.memoryText({ antal: 1, slags: 'billeder', dato: '2021-02-28' }), '1 billede fra 28. februar 2021');
+  assert.equal(h.memoryText({ antal: 1200, slags: 'lydfiler', dato: '2019-10-12' }), '1.200 lydfiler fra 12. oktober 2019');
+  assert.equal(h.memoryText({ antal: 7, slags: 'filer', dato: 'nonsense' }), '7 filer');
+  assert.equal(h.memoryText({ antal: 7, slags: '?', dato: '2024-10-12' }), '7 filer fra 12. oktober 2024');
+});
+
+test('the memory shown is the nearest year – never the Resolve project\'s own folder', () => {
+  const m = (id, path, years) => ({ id, path, name: path, minde: { aar_siden: years, antal: 9, slags: 'klip', dato: '2020-01-01' } });
+  const list = [m(3, 'D:\\Old', 6), m(1, 'C:\\Kunder\\Rikke', 3), m(2, 'H:\\Mellem', 4)];
+  assert.equal(h.pickMemory(list, null).id, 1);
+  assert.equal(h.pickMemory(list, { id: 1, path: 'C:\\Kunder\\Rikke' }), null);
+  assert.equal(h.pickMemory(list, { id: null, path: 'c:\\kunder\\rikke\\' }), null);
+  assert.equal(h.pickMemory(list, { id: 9, path: 'E:\\Andet' }).id, 1);
+  assert.equal(h.pickMemory([], null), null);
+  assert.equal(h.pickMemory(null, null), null);
+  assert.equal(h.pickMemory([{ id: 5, path: 'X:\\' }], null), null);   // no minde: not a memory
+});
+
+test('Klippe i bad: the loose files\' line, where each belongs and the panel\'s facts (§23.6)', () => {
+  const rod = { aktiv: true, projekt: 'Rikke Lindholm - Testimonial', mappe: 'C:\\Kunder 2026\\Rikke Lindholm', antal: 7,
+    niveau: 'beskidt', mere: 0, bad: false, filer: [
+      { navn: 'A.mov', forslag: 'Klip', ny: false }, { navn: 'B.mov', forslag: 'Klip', ny: false },
+      { navn: 'Speak.wav', forslag: 'Speak', ny: true }, { navn: 'x.zip', forslag: null, ny: false }] };
+  assert.equal(h.rodEntryText(rod), '7 løse filer i roden af Rikke Lindholm – Klippe er beskidt');
+  assert.equal(h.rodEntryText({ ...rod, antal: 1 }, 'Bobby'), '1 løs fil i roden af Rikke Lindholm – Bobby er beskidt');
+  assert.equal(h.rodEntryText({ ...rod, mappe: null }), '7 løse filer i roden af Rikke Lindholm - Testimonial – Klippe er beskidt');
+  assert.equal(h.rodEntryText({ ...rod, antal: 0 }), null);
+  assert.equal(h.rodEntryText({ ...rod, aktiv: false }), null);
+  assert.equal(h.rodEntryText(null), null);
+  assert.deepEqual(h.rodTarget(rod.filer[0]), { text: '→ Klip', tone: 'ok' });
+  assert.deepEqual(h.rodTarget(rod.filer[2]), { text: '→ Speak (findes ikke endnu)', tone: 'new' });
+  assert.deepEqual(h.rodTarget(rod.filer[3]), { text: 'Ingen forslag', tone: 'none' });
+  assert.equal(h.rodFacts(rod), '7 løse filer · 2 i Klip, 1 i Speak, 1 uden forslag');
+  assert.equal(h.rodFacts({ antal: 0, filer: [] }), '0 løse filer');
+});
+
+test('the party cat\'s frames: GIPHY\'s cat stands and spins; its green screen is keyed out', () => {
+  assert.deepEqual(h.catFrames(103), { stand: [0, 23], spin: [24, 69] });
+  assert.deepEqual(h.catFrames(4), { stand: [0, 0], spin: [0, 3] });
+  assert.deepEqual(h.catFrames(1), { stand: [0, 0], spin: [0, 0] });
+  // 2×2 pixels: green screen, a soft green edge, grey cat, grey cat
+  const p = new Uint8ClampedArray([20, 200, 20, 255, 100, 140, 100, 255, 90, 90, 90, 255, 90, 90, 90, 255]);
+  assert.equal(h.keyGreen(p, 2), 1);
+  assert.equal(p[3], 0);                     // keyed out
+  assert.equal(p[7], 128);                   // the edge fades (green 40 over: half)
+  assert.equal(p[5], 100);                   // … and loses its green
+  assert.equal(p[11], 255);
+  assert.equal(h.keyGreen(new Uint8ClampedArray([0, 255, 0, 255]), 1), -1);
+});

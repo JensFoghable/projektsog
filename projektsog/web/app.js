@@ -951,6 +951,141 @@
     return view;
   }
 
+  // ---------------------------------------------------------------- fun in the office (SPEC §23)
+
+  // Easter eggs in the search field (§23.8): the whole query, folded, is the word – the search
+  // itself runs as always.
+  const EGG_WORDS = {
+    kaffe: 'kaffe', fredag: 'fredag', deadline: 'deadline', klippe: 'klippe', durum: 'durum',
+    booster: 'booster', 'faxe kondi booster': 'booster', festkat: 'festkat', kat: 'festkat',
+    hjaelp: 'hjaelp', help: 'hjaelp', fyraften: 'fyraften', sne: 'sne', snow: 'sne',
+  };
+  // The eggs Klippe acts out; the search window only says so (while Klippe is on).
+  const EGG_TOASTS = {
+    kaffe: (name) => `☕ ${name} kommer med kaffe!`,
+    klippe: (name) => `👋 ${name} vinker til dig!`,
+    durum: (name) => `🌯 ${name} savler …`,
+    booster: (name) => `⚡ ${name} får et boost!`,
+    hjaelp: (name) => `🦸 ${name} til undsætning!`,
+    fyraften: (name) => `🏠 Fyraften? ${name} gaber allerede …`,
+  };
+  // The window's own effects in words, for reduced motion.
+  const EGG_QUIET = { fredag: '🎉 God fredag!', sne: '❄️ Sne!', festkat: '🐱 Festkatten siger hej!', deadline: '😱 Deadline!' };
+
+  /** Lower case, æ/ø/å spelt out, accents and extra spaces gone, a trailing "!", "?" or "." dropped. */
+  function eggFold(text) {
+    return String(text || '').toLocaleLowerCase(LOCALE).replace(/æ/g, 'ae').replace(/ø/g, 'oe').replace(/å/g, 'aa')
+      .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim().replace(/[!?.]+$/, '').trim();
+  }
+
+  /** The easter egg a query is – kaffe, fredag, deadline, klippe (or the pet's own name), durum,
+   *  booster, festkat, hjaelp, fyraften, sne – or null. */
+  function easterEgg(query, petName = 'Klippe') {
+    const word = eggFold(query);
+    if (!word) return null;
+    if (Object.hasOwn(EGG_WORDS, word)) return EGG_WORDS[word];
+    return word === eggFold(petName) ? 'klippe' : null;
+  }
+
+  /** The search window's line for an egg Klippe acts out ("☕ Klippe kommer med kaffe!"); null
+   *  for the eggs that have an effect in the window itself. */
+  function eggToast(egg, petName = 'Klippe') {
+    const line = EGG_TOASTS[egg];
+    return line ? line(petName || 'Klippe') : null;
+  }
+
+  // "I dag for N år siden" (§23.9)
+  const LONG_DATE = new Intl.DateTimeFormat(LOCALE, { day: 'numeric', month: 'long', year: 'numeric' });
+  const MEMORY_KINDS = { klip: ['klip', 'klip'], billeder: ['billede', 'billeder'], lydfiler: ['lydfil', 'lydfiler'],
+    filer: ['fil', 'filer'] };
+
+  /** "📸 I dag for 3 år siden" – the memory's heading in the list. */
+  function memoryLabel(minde) {
+    const years = Math.max(1, Math.round(Number(minde && minde.aar_siden) || 1));
+    return `📸 I dag for ${years} år siden`;
+  }
+
+  /** "112 klip fra 12. oktober 2023" – the memory's own line. */
+  function memoryText(minde) {
+    const m = minde || {};
+    const [one, many] = MEMORY_KINDS[m.slags] || MEMORY_KINDS.filer;
+    const what = plural(Math.max(0, Math.round(Number(m.antal) || 0)), one, many);
+    const day = parseIsoDate(m.dato);
+    return day ? `${what} fra ${LONG_DATE.format(day)}` : what;
+  }
+
+  /** The memory to show: the nearest year – not the Resolve project's own folder, which already
+   *  has its row at the top. */
+  function pickMemory(list, primary) {
+    const memories = (Array.isArray(list) ? list : []).filter((m) => m && m.minde && m.path);
+    memories.sort((a, b) => (Number(a.minde.aar_siden) || 0) - (Number(b.minde.aar_siden) || 0));
+    const first = memories[0] || null;
+    if (first && primary && ((primary.id != null && primary.id === first.id) || samePath(primary.path, first.path))) {
+      return null;
+    }
+    return first;
+  }
+
+  // Klippe i bad (§23.6): loose files in the root of the Resolve project's folder.
+
+  /** "7 løse filer i roden af Rikke Lindholm – Klippe er beskidt" (null: a clean folder). */
+  function rodEntryText(rod, petName = 'Klippe') {
+    const count = rod && rod.aktiv ? Math.round(Number(rod.antal) || 0) : 0;
+    if (count <= 0) return null;
+    const where = leafName(rod.mappe) || rod.projekt || 'projektmappen';
+    return `${plural(count, 'løs fil', 'løse filer')} i roden af ${where} – ${petName || 'Klippe'} er beskidt`;
+  }
+
+  /** Where a loose file belongs: "→ Klip", "→ Musik (findes ikke endnu)" or "Ingen forslag". */
+  function rodTarget(file) {
+    const f = file || {};
+    if (!f.forslag) return { text: 'Ingen forslag', tone: 'none' };
+    return { text: `→ ${f.forslag}${f.ny ? ' (findes ikke endnu)' : ''}`, tone: f.ny ? 'new' : 'ok' };
+  }
+
+  /** The panel's facts: "12 løse filer · 10 i Klip, 1 i Speak, 1 uden forslag". */
+  function rodFacts(rod) {
+    const files = (rod && rod.filer) || [];
+    const count = Math.round(Number(rod && rod.antal) || 0);
+    const by = new Map();
+    for (const file of files) {
+      const key = file.forslag || '';
+      by.set(key, (by.get(key) || 0) + 1);
+    }
+    // the most first; the files without a suggestion last
+    const parts = [...by.entries()].sort((a, b) => (!a[0] - !b[0]) || b[1] - a[1] || COLLATOR.compare(a[0], b[0]))
+      .map(([folder, n]) => (folder ? `${formatInt(n)} i ${folder}` : `${formatInt(n)} uden forslag`));
+    return [plural(count, 'løs fil', 'løse filer'), parts.join(', ')].filter(Boolean).join(' · ');
+  }
+
+  // The party cat (§22.4, also an easter egg here): the GIF's green screen keyed out like the widget does.
+  const FESTKAT_FRAMES = 103;
+
+  /** Which frames stand and which spin ([first, last]): GIPHY's cat stands on 0–23 and spins on
+   *  24–69; any other GIF stands on its first frame and spins through them all. */
+  function catFrames(count) {
+    if (count === FESTKAT_FRAMES) return { stand: [0, 23], spin: [24, 69] };
+    return { stand: [0, 0], spin: [0, Math.max(0, count - 1)] };
+  }
+
+  /** Keys out the green screen of one RGBA frame in place (`p`: its pixels, `width` in pixels):
+   *  clearly green is transparent, the soft edge fades out with its green taken away. Returns the
+   *  lowest row that still shows something (−1: none) – where the cat stands. */
+  function keyGreen(p, width) {
+    let bottom = -1;
+    for (let j = 0; j < p.length; j += 4) {
+      const green = p[j + 1] - Math.max(p[j], p[j + 2]);
+      if (green > 60) {
+        p[j + 3] = 0;
+      } else if (green > 20) {
+        p[j + 3] = Math.round((p[j + 3] * (60 - green)) / 40);
+        p[j + 1] = Math.max(p[j], p[j + 2]);
+      }
+      if (p[j + 3] > 127) bottom = Math.floor(j / 4 / width);
+    }
+    return bottom;
+  }
+
   const helpers = {
     itemVisual, isFolder, openAction, formatInt, plural, formatBytes, formatDay, relativeTime,
     modifiedText, highlightParts, itemLocation, sourceBadge, itemOnline, offlineHint, offlineSince,
@@ -962,6 +1097,8 @@
     formatDuration, durationWords, formatHours, roundUpSeconds, isoDate, parseIsoDate, periodRange,
     periodOf, formatReportDay, timeStatusText, timeTable, downloadName,
     cardTitle, cardFacts, cardStatus, formatEta, importProgress, planText, petPlayText, updateView,
+    eggFold, easterEgg, eggToast, memoryLabel, memoryText, pickMemory, rodEntryText, rodTarget, rodFacts,
+    catFrames, keyGreen,
   };
   if (typeof module === 'object' && module.exports) module.exports = helpers;
   if (typeof document === 'undefined') return;
@@ -1013,6 +1150,7 @@
     timeAiSitesForm: $('time-ai-sites-form'), timeAiSites: $('time-ai-sites'), timeAiSitesError: $('time-ai-sites-error'),
     petGoal: $('pet-goal'), petNameForm: $('pet-name-form'), petName: $('pet-name'),
     petPlayIdle: $('pet-play-idle'), petPlayNow: $('pet-play-now'), petPlayState: $('pet-play-state'),
+    petFyraften: $('pet-fyraften'),
     importJob: $('import-job'), importNone: $('import-none'), importMain: $('import-main'),
     importCardpick: $('import-cardpick'), importCard: $('import-card'), importChoices: $('import-choices'),
     importSearch: $('import-search'), importResults: $('import-results'), importNewChoice: $('import-new-choice'),
@@ -1050,6 +1188,10 @@
     imp: { cards: [], job: null, history: [], cardId: null, options: null, choice: null, picked: [],
       results: [], root: null, plan: null, planSeq: 0, optionsSeq: 0, searchSeq: 0, separate: false,
       busy: false, timer: 0, searchTimer: 0, hidden: new Set(), confirmMove: false, confirmTimer: 0 },
+    // Fun in the office (§23): easter eggs (when each last fired), today's memories, the loose files.
+    egg: { timer: 0, fired: new Map(), cat: null, festkat: null },
+    memory: { day: '', list: [], seq: 0, pending: null },
+    rod: null, rodOpen: false, rodAnimate: false,
   };
 
   // ------------------------------------------------------------------------------ DOM helpers
@@ -1240,7 +1382,9 @@
     let view;
     try {
       if (!query) {
-        const data = await api.get('/api/recent', { limit: RECENT_LIMIT }, controller.signal);
+        // Today's memory, when it is on its way, joins the first paint instead of pushing it down.
+        const [data] = await Promise.all([api.get('/api/recent', { limit: RECENT_LIMIT }, controller.signal),
+          memoryReady(MEMORY_WAIT_MS)]);
         view = { mode: 'recent', results: (data && data.results) || [] };
       } else {
         const params = { q: query, kind: state.kind, limit: RESULT_LIMIT };
@@ -1280,10 +1424,14 @@
       const groups = [];
       const primary = resolvePrimary();
       if (primary) groups.push({ key: 'resolve', label: 'Fra DaVinci Resolve', items: [primary] });
+      // §23.9: "I dag for 3 år siden" – one memory, after Resolve's project and never pre-selected.
+      const memory = pickMemory(state.memory.list, primary);
+      if (memory) groups.push({ key: 'minde', label: memoryLabel(memory.minde), items: [memory] });
       // The primary may lack an index id (built from a ProjectRef), so compare paths as well.
       const samePlace = (item) => primary && (keyOf(item) === keyOf(primary)
         || (item.path && primary.path && item.path.toLowerCase() === primary.path.toLowerCase()));
-      const recent = view.results.filter((item) => !samePlace(item));
+      const isMemory = (item) => memory && (keyOf(item) === keyOf(memory) || samePath(item.path, memory.path));
+      const recent = view.results.filter((item) => !samePlace(item) && !isMemory(item));
       if (recent.length) groups.push({ key: 'recent', label: 'Seneste projekter', items: recent });
       return groups;
     }
@@ -1293,12 +1441,10 @@
     return [];
   }
 
-  /** First row – except that a Resolve suggestion ("Muligt match") is never pre-selected. */
+  /** First row – except that a Resolve suggestion ("Muligt match") and a memory are never pre-selected. */
   function defaultSelection(groups) {
-    const [first, second] = groups;
-    if (!first) return null;
-    if (first.key === 'resolve' && first.items[0].match === 'name') return second ? keyOf(second.items[0]) : null;
-    return keyOf(first.items[0]);
+    const group = groups.find((g) => g.key !== 'minde' && !(g.key === 'resolve' && g.items[0].match === 'name'));
+    return group ? keyOf(group.items[0]) : null;
   }
 
   function applyView(view, reason) {
@@ -1352,7 +1498,7 @@
       const pending = [];
       for (const group of state.groups) {
         const labelId = group.label ? `section-${group.key}` : null;
-        const node = h('div', { class: 'group', role: 'group', 'aria-labelledby': labelId });
+        const node = h('div', { class: `group group--${group.key}`, role: 'group', 'aria-labelledby': labelId });
         if (group.label) node.append(h('div', { class: 'section', id: labelId }, group.label));
         fragment.append(node);
         for (const item of group.items) pending.push([node, item, group.key]);
@@ -1405,10 +1551,11 @@
     for (const tag of rowTags(item, groupKey)) {
       title.append(h('span', { class: tag.tone ? `tag tag--${tag.tone}` : 'tag' }, tag.text));
     }
-    const body = h('div', { class: 'row__body' }, title, renderLocation(item));
+    const memory = groupKey === 'minde' && item.minde ? h('div', { class: 'row__memory' }, memoryText(item.minde)) : null;
+    const body = h('div', { class: 'row__body' }, title, memory, renderLocation(item));
     const notice = rowNotice(item, key, online);
     if (notice) body.append(notice);
-    else if (!file && Array.isArray(item.subfolders) && item.subfolders.length) body.append(renderChips(item));
+    else if (!file && !memory && Array.isArray(item.subfolders) && item.subfolders.length) body.append(renderChips(item));
     row.append(body);
 
     const facts = [];
@@ -1753,8 +1900,8 @@
 
   /** Re-run the view and open the row from the fresh results (applyView → pendingOpen). */
   function openWhenRefreshed(item, key, alternate) {
-    if (key == null || state.groupOf.get(key) === 'resolve') {
-      openViaLiveSource(item, key, alternate); // the Resolve primary is not re-fetched by runView
+    if (key == null || state.groupOf.get(key) === 'resolve' || state.groupOf.get(key) === 'minde') {
+      openViaLiveSource(item, key, alternate); // the Resolve primary and the memory are not re-fetched by runView
       return;
     }
     // Consumed by the first view fetched from now on (runView); a query on its way counts too.
@@ -1856,7 +2003,7 @@
     clearTimeout(state.toastTimer);
     const iconName = tone === 'ok' ? 'check' : tone === 'warn' ? 'warn' : 'open';
     el.toast.dataset.tone = tone;
-    el.toast.replaceChildren(svgIcon(iconName),
+    el.toast.replaceChildren(tone === 'egg' ? '' : svgIcon(iconName), // an egg's line brings its own emoji
       h('div', { class: 'toast__body' }, h('div', null, message), detail ? h('span', { class: 'toast__detail' }, detail) : null));
     el.toast.hidden = false;
     el.toast.style.animation = 'none';
@@ -2056,12 +2203,26 @@
         h('span', null, warning)));
     }
     if (rs.connected && state.relink.open) parts.push(renderRelinkPanel(rs));
+    // §23.6: "🧽 7 løse filer i roden af ‹projekt› – Klippe er beskidt [Vis forslag]" and its panel.
+    const rodLine = rs.connected && rodShown() ? rodEntryText(state.rod, petName()) : null;
+    if (rodLine) {
+      parts.push(h('div', { class: 'resolve__rod' }, svgIcon('broom'), h('span', { class: 'resolve__rod-text' }, rodLine),
+        h('button', {
+          type: 'button', class: 'btn btn--secondary btn--sm', dataset: { resolve: 'rod-open' },
+          'aria-expanded': String(state.rodOpen), 'aria-controls': 'resolve-rod',
+          title: 'Se, hvor filerne hører hjemme',
+        }, state.rodOpen ? 'Skjul forslag' : 'Vis forslag')));
+      if (state.rodOpen) parts.push(renderRodPanel(state.rod));
+    }
     if (details && state.resolveExpanded) parts.push(renderResolveDetails(rs, !entry));
     const groupsScroll = node.querySelector('.rl__groups')?.scrollTop || 0;
+    const rodScroll = node.querySelector('.rod__list')?.scrollTop || 0;
     node.replaceChildren(...parts);
     node.hidden = false;
     const groups = node.querySelector('.rl__groups');
     if (groups) groups.scrollTop = groupsScroll;
+    const rodList = node.querySelector('.rod__list');
+    if (rodList) rodList.scrollTop = rodScroll;
     if (focused) {
       let target = node.querySelector(`[data-resolve="${focused}"]`);
       // A panel control that is gone or off now (a relink started or ended): stay in the panel.
@@ -2324,6 +2485,370 @@
       state.resolveBusy = false;
       renderResolve();
     }
+  }
+
+  // ------------------------------------------------------------------------------ fun in the office (SPEC §23)
+
+  const EGG_DELAY_MS = 700;      // the query has to stay the word this long …
+  const EGG_REPEAT_MS = 60e3;    // … and the same egg fires at most once a minute
+  const MEMORY_WAIT_MS = 400;    // the first paint of the recent view waits this long for today's memory
+  const CAT_WALK_MS = 6500;
+  const CAT_PX = 116;
+
+  function petName() {
+    return (state.settings && state.settings.widget_pet_name) || 'Klippe';
+  }
+
+  function reducedMotion() {
+    return Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  // §23.6 Klippe i bad: the loose files in the root of the Resolve project's folder.
+
+  function rodShown() {
+    const rod = state.rod;
+    return Boolean(rod && rod.aktiv && rod.antal > 0 && !(state.settings && state.settings.widget_bad === false));
+  }
+
+  /** `rod` (SSE, and GET /api/rod on load and after a reconnect). A clean-up (`bad`) closes the panel. */
+  function applyRod(data) {
+    if (!data || typeof data !== 'object') return;
+    const before = JSON.stringify(state.rod);
+    state.rod = data;
+    if (data.bad && state.rodOpen) {
+      state.rodOpen = false;
+      toast(`Alt ligger på plads – ${petName()} er i bad 🛁`, 'ok');
+    }
+    if (!rodShown()) state.rodOpen = false;
+    if (JSON.stringify(state.rod) !== before || data.bad) renderResolve();
+  }
+
+  async function loadRod() {
+    try {
+      applyRod(await api.get('/api/rod'));
+    } catch {
+      // An older server, or the bath is not running: no line.
+    }
+  }
+
+  function closeRod() {
+    state.rodOpen = false;
+    renderResolve();
+  }
+
+  /** "Ryd op i ‹projekt›": each loose file and where it belongs; Projektsøg never moves a file. */
+  function renderRodPanel(rod) {
+    const box = h('div', {
+      class: state.rodAnimate ? 'resolve__rod-panel is-entering' : 'resolve__rod-panel', id: 'resolve-rod',
+      role: 'region', 'aria-label': 'Ryd op i projektmappen',
+    });
+    state.rodAnimate = false;
+    const where = leafName(rod.mappe) || rod.projekt || 'projektmappen';
+    box.append(h('div', { class: 'rod__head' },
+      h('span', { class: 'rod__title' }, `Ryd op i ${where}`),
+      h('span', { class: 'rod__facts' }, rodFacts(rod)),
+      h('button', {
+        type: 'button', class: 'btn btn--ghost btn--icon btn--sm', dataset: { resolve: 'rod-close' },
+        title: 'Luk', 'aria-label': 'Luk',
+      }, svgIcon('close'))));
+    box.append(h('ul', { class: 'rod__list' }, (rod.filer || []).map((file) => {
+      const target = rodTarget(file);
+      return h('li', { class: 'rod__row' },
+        svgIcon(file.slags === 'video' ? 'video' : file.slags === 'lyd' ? 'audio' : file.slags === 'billede' ? 'image' : 'file'),
+        h('span', { class: 'rod__name', title: file.navn }, file.navn),
+        h('span', { class: `rod__to rod__to--${target.tone}` }, target.text));
+    })));
+    if (rod.mere > 0) box.append(h('div', { class: 'rod__more' }, `… og ${plural(rod.mere, 'fil', 'filer')} mere`));
+    box.append(h('div', { class: 'rod__foot' },
+      h('button', { type: 'button', class: 'btn btn--primary btn--sm', dataset: { resolve: 'rod-aabn' }, title: rod.mappe || '' },
+        svgIcon('open'), 'Åbn projektmappen'),
+      h('span', { class: 'rod__hint' },
+        `Projektsøg flytter aldrig selv filer – ${petName()} kommer i bad, når de ligger på plads.`)));
+    return box;
+  }
+
+  async function openRodFolder() {
+    try {
+      await api.post('/api/rod/aabn');
+      toast('Projektmappen er åbnet i Stifinder', 'ok', state.rod && state.rod.mappe);
+    } catch (err) {
+      toast(err.message, 'warn');
+    }
+  }
+
+  // §23.9 "I dag for N år siden": fetched once per day; the nearest memory joins the recent view.
+
+  /** GET /api/minder unless today's memories are here already (`force`: a setting changed). */
+  function loadMemory({ force = false } = {}) {
+    const m = state.memory;
+    if (state.settings && state.settings.search_minder === false) {
+      m.seq += 1;
+      m.pending = null;
+      if (m.list.length || m.day) {
+        Object.assign(m, { list: [], day: '' });
+        if (state.view.mode === 'recent') applyView(state.view, 'refresh');
+      }
+      return Promise.resolve();
+    }
+    const today = isoDate(new Date());
+    if (m.pending) return m.pending;
+    if (!force && m.day === today) return Promise.resolve();
+    const seq = ++m.seq;
+    m.pending = api.get('/api/minder').then((data) => {
+      if (seq !== m.seq) return;
+      const before = JSON.stringify(m.list);
+      m.list = Array.isArray(data && data.minder) ? data.minder : [];
+      m.day = today;
+      if (JSON.stringify(m.list) !== before && state.view.mode === 'recent') applyView(state.view, 'refresh');
+    }).catch(() => {
+      // An older server: no memories (asked again tomorrow, or after a reconnect).
+    }).finally(() => {
+      if (seq === m.seq) m.pending = null;
+    });
+    return m.pending;
+  }
+
+  /** Resolves when today's memory has arrived – or after `ms`, whichever is first; never rejects. */
+  function memoryReady(ms) {
+    const pending = state.memory.pending;
+    if (!pending) return Promise.resolve();
+    return Promise.race([pending, new Promise((resolve) => { setTimeout(resolve, ms); })]);
+  }
+
+  // §23.8 Easter eggs: kaffe, fredag, deadline … – Klippe acts them out, the window adds a little.
+
+  function scheduleEgg() {
+    clearTimeout(state.egg.timer);
+    state.egg.timer = 0;
+    if (state.settings && state.settings.search_paaskeaeg === false) return;
+    const egg = easterEgg(state.query, petName());
+    if (!egg) return;
+    state.egg.timer = setTimeout(() => {
+      state.egg.timer = 0;
+      if (easterEgg(state.query, petName()) === egg) fireEgg(egg);
+    }, EGG_DELAY_MS);
+  }
+
+  function fireEgg(egg) {
+    const now = Date.now();
+    if (now - (state.egg.fired.get(egg) ?? -Infinity) < EGG_REPEAT_MS) return;
+    state.egg.fired.set(egg, now);
+    api.post('/api/paaskeaeg', { ord: egg }).catch(() => {}); // Klippe's part; the window's goes on regardless
+    if (reducedMotion() && EGG_QUIET[egg]) {
+      toast(EGG_QUIET[egg], 'egg');
+    } else if (egg === 'fredag') {
+      particles('confetti', 2.6);
+    } else if (egg === 'sne') {
+      particles('snow', 4);
+    } else if (egg === 'festkat') {
+      catWalk();
+    } else if (egg === 'deadline') {
+      shakeSearch();
+    } else if (state.settings && state.settings.widget_enabled) {
+      toast(eggToast(egg, petName()), 'egg');
+    }
+  }
+
+  function shakeSearch() {
+    const box = el.input.closest('.search');
+    box.classList.remove('is-shaking');
+    void box.offsetWidth; // restart the animation
+    box.classList.add('is-shaking');
+    setTimeout(() => box.classList.remove('is-shaking'), 700);
+  }
+
+  /** Confetti (falls from the top) or snow (drifts down over the list) on a canvas over the whole
+   *  window, for `seconds`; the canvas removes itself. */
+  function particles(kind, seconds) {
+    const canvas = h('canvas', { class: 'egg-canvas', 'aria-hidden': 'true' });
+    document.body.append(canvas);
+    const ctx = canvas.getContext('2d');
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * ratio);
+    canvas.height = Math.round(height * ratio);
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    const light = document.documentElement.dataset.theme === 'light';
+    const colors = ['#f0a45b', '#ffcf4a', '#5fcf8f', '#7f9cff', '#ef7166', '#b59cff', light ? '#c4610c' : '#ffffff'];
+    const start = performance.now();
+    const until = start + seconds * 1000;
+    const parts = [];
+    const flake = (y) => ({ x: Math.random() * width, y, r: 1.4 + Math.random() * 3.2, vy: 0.5 + Math.random() * 1.3,
+      sway: Math.random() * Math.PI * 2, swing: 0.4 + Math.random() * 0.9, alpha: 0.55 + Math.random() * 0.4 });
+    if (kind === 'confetti') {
+      for (let i = 0; i < 150; i += 1) {
+        parts.push({ x: Math.random() * width, y: -20 - Math.random() * height * 0.5, vx: (Math.random() - 0.5) * 3,
+          vy: 2 + Math.random() * 3, size: 5 + Math.random() * 6, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 0.3,
+          color: colors[i % colors.length] });
+      }
+    } else {
+      for (let i = 0; i < 70; i += 1) parts.push(flake(Math.random() * height * 0.8 - height * 0.4));
+    }
+    let last = start;
+    const frame = (now) => {
+      const step = Math.min(3, (now - last) / 16.7);
+      last = now;
+      const fade = now > until ? Math.max(0, 1 - (now - until) / 700) : 1;
+      ctx.clearRect(0, 0, width, height);
+      if (kind === 'snow' && now < until && parts.length < 160 && Math.random() < 0.6) parts.push(flake(-8));
+      for (const p of parts) {
+        if (kind === 'confetti') {
+          p.x += p.vx * step;
+          p.y += p.vy * step;
+          p.vy = Math.min(p.vy + 0.04 * step, 6);
+          p.rot += p.vr * step;
+          ctx.save();
+          ctx.globalAlpha = fade;
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.rot);
+          ctx.fillStyle = p.color;
+          ctx.fillRect(-p.size / 2, -p.size / 3, p.size, p.size * 0.6);
+          ctx.restore();
+        } else {
+          p.sway += 0.03 * step;
+          p.x += Math.sin(p.sway) * p.swing * 0.6 * step + 0.15 * step;
+          p.y += p.vy * step;
+          ctx.globalAlpha = p.alpha * fade;
+          ctx.fillStyle = light ? '#8fa6c8' : '#ffffff';
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.globalAlpha = 1;
+      if (fade > 0) requestAnimationFrame(frame);
+      else canvas.remove();
+    };
+    requestAnimationFrame(frame);
+  }
+
+  /** The party cat's frames (GET /api/festkat, green screen keyed out), decoded once: {frames,
+   *  plan, w, h, bottom} – or null without the GIF or ImageDecoder (then the drawn cat walks). */
+  function festkat() {
+    if (!state.egg.festkat) {
+      state.egg.festkat = decodeFestkat().catch(() => null).then((cat) => {
+        if (!cat) state.egg.festkat = null; // tried again next time
+        return cat;
+      });
+    }
+    return state.egg.festkat;
+  }
+
+  async function decodeFestkat() {
+    if (typeof ImageDecoder === 'undefined') return null;
+    const response = await fetch('/api/festkat', { cache: 'no-store' });
+    if (!response.ok) return null;
+    const decoder = new ImageDecoder({ data: await response.arrayBuffer(), type: 'image/gif' });
+    try {
+      await decoder.tracks.ready;
+      await decoder.completed;
+      const count = decoder.tracks.selectedTrack.frameCount;
+      const plan = catFrames(count);
+      const work = document.createElement('canvas');
+      const ctx = work.getContext('2d', { willReadFrequently: true });
+      const frames = [];
+      let bottom = -1;
+      for (let i = 0; i < count; i += 1) {
+        const { image } = await decoder.decode({ frameIndex: i });
+        work.width = image.displayWidth;
+        work.height = image.displayHeight;
+        ctx.drawImage(image, 0, 0);
+        const pixels = ctx.getImageData(0, 0, work.width, work.height);
+        const low = keyGreen(pixels.data, work.width);
+        if (i >= plan.stand[0] && i <= plan.stand[1]) bottom = Math.max(bottom, low);
+        ctx.putImageData(pixels, 0, 0);
+        frames.push({ bitmap: await createImageBitmap(work), ms: Math.max(20, (image.duration || 1e5) / 1000) });
+        image.close();
+      }
+      return frames.length ? { frames, plan, w: work.width, h: work.height, bottom } : null;
+    } finally {
+      decoder.close();
+    }
+  }
+
+  // The drawn party cat (as in widget.html) for when its GIF cannot be had: 100×100 units.
+  const DRAWN_CAT = `<g stroke="#3a322a" stroke-width="2" stroke-linejoin="round">
+    <path d="M70 80 C 92 78 96 58 86 50 C 80 46 76 52 82 56 C 88 62 82 72 68 72 Z" fill="#6f6252"/>
+    <path d="M28 90 C 22 70 30 52 50 52 C 70 52 78 70 72 90 Z" fill="#8a7a66"/>
+    <ellipse cx="38" cy="91" rx="7" ry="4" fill="#8a7a66"/><ellipse cx="62" cy="91" rx="7" ry="4" fill="#8a7a66"/>
+    <path d="M27 30 L 30 8 L 44 22 Z M73 30 L 70 8 L 56 22 Z" fill="#8a7a66"/>
+    <ellipse cx="50" cy="35" rx="25" ry="21" fill="#8a7a66"/></g>
+    <path d="M38 60 q 4 4 0 8 M50 58 v 9 M62 60 q -4 4 0 8 M42 17 q 2 5 0 9 M50 15 v 9 M58 17 q -2 5 0 9" fill="none" stroke="#5a4c3e" stroke-width="2.3" stroke-linecap="round"/>
+    <ellipse cx="50" cy="78" rx="11" ry="10" fill="#d9ccb6"/><ellipse cx="50" cy="44" rx="12" ry="8" fill="#d9ccb6"/>
+    <path d="M31 25 L 32 15 L 39 22 Z M69 25 L 68 15 L 61 22 Z" fill="#e9a3a0"/>
+    <ellipse cx="40" cy="34" rx="4.6" ry="5.6" fill="#f2d24a" stroke="#2b241d" stroke-width="1.4"/>
+    <ellipse cx="60" cy="34" rx="4.6" ry="5.6" fill="#f2d24a" stroke="#2b241d" stroke-width="1.4"/>
+    <ellipse cx="40" cy="34.5" rx="1.6" ry="4.4" fill="#1d1b19"/><ellipse cx="60" cy="34.5" rx="1.6" ry="4.4" fill="#1d1b19"/>
+    <path d="M47 41 h 6 l -3 3 Z" fill="#e07a86"/>
+    <path d="M50 44 q -3 4 -7 2 M50 44 q 3 4 7 2" fill="none" stroke="#2b241d" stroke-width="1.4" stroke-linecap="round"/>
+    <path d="M36 43 l -14 -2 M36 46 l -13 3 M64 43 l 14 -2 M64 46 l 13 3" stroke="#f3efe6" stroke-width="1" stroke-linecap="round"/>`;
+
+  /** The party cat walks across the bottom of the window (right to left), hopping, and spins once
+   *  on the way – the GIF when it can be had (≤ 1.5 s to decode), else the drawn cat. */
+  async function catWalk() {
+    if (state.egg.cat) return; // one at a time
+    const box = h('div', { class: 'egg-cat', 'aria-hidden': 'true' });
+    state.egg.cat = box;
+    const cat = await Promise.race([festkat(), new Promise((resolve) => { setTimeout(resolve, 1500, null); })]);
+    let figure;
+    let width;
+    let timer = 0;
+    if (cat) {
+      figure = h('canvas', { class: 'egg-cat__figure' });
+      figure.width = cat.w;
+      figure.height = cat.h;
+      width = (CAT_PX * cat.w) / cat.h;
+      figure.style.height = `${CAT_PX}px`;
+      figure.style.width = `${width}px`;
+      // its feet on the window's floor: the lowest row the standing frames show
+      const feet = cat.bottom >= 0 ? (cat.bottom + 1) / cat.h : 1;
+      box.style.marginBottom = `${-Math.round(CAT_PX * (1 - feet))}px`;
+      const ctx = figure.getContext('2d');
+      const { frames, plan } = cat;
+      const spinAt = performance.now() + CAT_WALK_MS * 0.4;
+      let index = plan.stand[0];
+      let spinning = false;
+      let spun = false;
+      const show = () => {
+        if (state.egg.cat !== box) return;
+        ctx.clearRect(0, 0, figure.width, figure.height);
+        ctx.drawImage(frames[index].bitmap, 0, 0);
+        const wait = frames[index].ms;
+        if (spinning) {
+          if (index >= plan.spin[1]) {
+            spinning = false;
+            index = plan.stand[0];
+          } else {
+            index += 1;
+          }
+        } else if (!spun && performance.now() >= spinAt) {
+          spinning = spun = true;
+          index = plan.spin[0];
+        } else {
+          index = index >= plan.stand[1] ? plan.stand[0] : index + 1;
+        }
+        timer = setTimeout(show, wait);
+      };
+      show();
+    } else {
+      figure = document.createElementNS(SVG_NS, 'svg');
+      figure.setAttribute('viewBox', '0 0 100 100');
+      figure.setAttribute('class', 'egg-cat__figure egg-cat__figure--drawn');
+      figure.innerHTML = DRAWN_CAT;
+      width = CAT_PX * 0.7;
+      figure.style.width = figure.style.height = `${width}px`;
+    }
+    box.append(figure);
+    document.body.append(box);
+    const walk = box.animate([{ transform: `translateX(${window.innerWidth + 20}px)` }, { transform: `translateX(${-width - 20}px)` }],
+      { duration: CAT_WALK_MS, easing: 'linear', fill: 'forwards' });
+    const done = () => {
+      clearTimeout(timer);
+      box.remove();
+      if (state.egg.cat === box) state.egg.cat = null;
+    };
+    walk.finished.then(done, done);
   }
 
   // ------------------------------------------------------------------------------ cards
@@ -2931,6 +3456,8 @@
     const playIdle = Number(s.widget_play_idle_minutes) || 5;
     selectValue(el.petPlayIdle, playIdle, `${playIdle} min`);
     el.petPlayNow.disabled = !s.widget_enabled;
+    const fyraften = typeof s.widget_fyraften === 'string' ? s.widget_fyraften : '16:00';
+    selectValue(el.petFyraften, fyraften, fyraften || 'Fra');
     const hk = state.hotkey;
     const label = (hk && hk.label) || 'Shift+Mellemrum';
     setText(el.passthroughLabel, `Lad DaVinci Resolve beholde ${label} (tryk to gange hurtigt for Projektsøg)`);
@@ -3068,6 +3595,16 @@
     if (settings.resolve_hotkey_asked) removeCard('resolve-question');
     const offlineChanged = previous && previous.show_offline !== settings.show_offline;
     if (offlineChanged && (state.onlineOnly === null || !state.query.trim())) runView('refresh');
+    // §23: the memory comes and goes with its switch; the loose-file line with Klippe's bath and name.
+    if (!previous || previous.search_minder !== settings.search_minder) loadMemory({ force: Boolean(previous) });
+    if (previous && (previous.widget_bad !== settings.widget_bad || previous.widget_pet_name !== settings.widget_pet_name)) {
+      if (!rodShown()) state.rodOpen = false;
+      renderResolve();
+    }
+    if (settings.search_paaskeaeg === false) {
+      clearTimeout(state.egg.timer);
+      state.egg.timer = 0;
+    }
     if (previous && previous.time_tracking_enabled !== settings.time_tracking_enabled) {
       // The tracker acts on its next tick (≤ 5 s): show the switch at once, the new state soon after.
       if (timeTabOpen()) loadTimeReport();
@@ -3888,11 +4425,12 @@
     }
   }
 
-  /** Rows (not the Resolve primary) whose location is now more or less online than they show,
-   *  or mounted at another drive letter. */
+  /** Rows (not the Resolve primary, nor the memory) whose location is now more or less online
+   *  than they show, or mounted at another drive letter. */
   function rowsDisagreeWithSources() {
     return state.items.some((item) => {
-      if (!item.source || state.groupOf.get(keyOf(item)) === 'resolve') return false;
+      const group = state.groupOf.get(keyOf(item));
+      if (!item.source || group === 'resolve' || group === 'minde') return false;
       const live = liveSource(item.source.id);
       return Boolean(live) && (Boolean(live.online) !== itemOnline(item)
         || (live.drive || null) !== (item.source.drive || null));
@@ -3961,6 +4499,7 @@
     import: (data) => applyImportJob(data),
     pet: (data) => applyPetPlay(data),
     update: applyUpdate,
+    rod: applyRod,
   };
 
   function connectEvents() {
@@ -4016,6 +4555,8 @@
     loadTimeStatus();
     loadImport();
     loadUpdate();
+    loadRod();
+    loadMemory();
     runView('refresh');
   }
 
@@ -4047,6 +4588,7 @@
     if (timeTabOpen()) loadTimeReport();
     else loadTimeStatus();
     scheduleTimePoll();
+    loadMemory(); // a new day: a new memory
     const typed = typedSince(state.valueAtHide, el.input.value);
     if (hiddenFor >= QUERY_LIFETIME_MS || resolveProject() !== state.projectAtHide) {
       resetSession(typed || '');
@@ -4073,6 +4615,7 @@
     closeSettings({ focus: false });
     closeMenu();
     if (state.relink.open && state.relink.phase !== 'relinking') closeRelink(); // no stale relink plan
+    if (state.rodOpen) closeRod();
     renderFilters();
     renderFooter();
     runView('query');
@@ -4193,6 +4736,11 @@
       focusSearch(true);
       return;
     }
+    if (state.rodOpen && el.resolve.contains(document.activeElement)) {
+      closeRod();
+      focusSearch(true);
+      return;
+    }
     if (el.input.value) {
       setQuery('');
       renderFooter();
@@ -4247,6 +4795,7 @@
       closeSettings({ focus: false });
       renderFooter();
       scheduleQuery();
+      scheduleEgg();
     });
     el.clear.addEventListener('mousedown', (event) => event.preventDefault());
     el.clear.addEventListener('click', () => {
@@ -4348,6 +4897,12 @@
       } else if (op === 'relink-scan') scanRelink();
       else if (op === 'relink-close') closeRelink();
       else if (op === 'relink-go') runRelink();
+      else if (op === 'rod-open') {
+        state.rodOpen = !state.rodOpen;
+        state.rodAnimate = state.rodOpen;
+        renderResolve();
+      } else if (op === 'rod-close') closeRod();
+      else if (op === 'rod-aabn') openRodFolder();
     });
     el.resolve.addEventListener('change', (event) => {
       const match = /^relink-(pick|to)-(\d+)$/.exec(event.target.dataset.resolve || '');
@@ -4479,6 +5034,7 @@
     for (const list of SITE_LISTS) el[list.form].addEventListener('submit', (event) => submitTimeSites(list, event));
     el.petGoal.addEventListener('change', () => saveSettings({ widget_daily_goal_hours: Number(el.petGoal.value) || 6 }));
     el.petPlayIdle.addEventListener('change', () => saveSettings({ widget_play_idle_minutes: Number(el.petPlayIdle.value) || 5 }));
+    el.petFyraften.addEventListener('change', () => saveSettings({ widget_fyraften: el.petFyraften.value }));
     el.petPlayNow.addEventListener('click', playPetNow);
     el.updateButton.addEventListener('click', pressUpdate);
     el.petNameForm.addEventListener('submit', async (event) => {
@@ -4572,6 +5128,7 @@
     renderFooter();
     focusSearch(true);
     state.firstPaint = loadStatus();
+    loadMemory();
     runView('query');
     loadSettings();
     loadSources();
@@ -4579,6 +5136,7 @@
     scheduleTimePoll();
     loadImport();
     loadUpdate();
+    loadRod();
     connectEvents();
     if (launch.panel === 'settings') openSettings(launch.tab || 'placeringer');
   }

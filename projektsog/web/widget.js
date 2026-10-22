@@ -359,12 +359,14 @@
     return f && f.seq != null ? `${f.seq}|${f.udfald}|${f.sti || f.fil || ''}` : null;
   }
 
-  const SLOT_KEYS = ['farve', 'striber', 'hat', 'briller', 'mund', 'haand', 'aura'];
+  const SLOT_KEYS = ['farve', 'striber', 'hat', 'briller', 'mund', 'hals', 'haand', 'aura'];
   const OUTFITS = ['none', 'color', 'fusion', 'audio', 'deliver'];
+  const KOSTUMER = ['vampyr', 'spoegelse', 'skelet', 'heks'];      // achievements.KOSTUMER
 
   /** How a colleague's Klippe looks (SSE `besoeg`): only known stages and outfits, only the known
    *  wardrobe slots with plain item names – they only ever become data-* attributes that the CSS
-   *  matches. A guest from a delivery party wears the Deliver cap. */
+   *  matches. A guest from a delivery party wears the Deliver cap; a trick-or-treater its costume
+   *  (SPEC §23.3), a postman an envelope. */
   function guestLook(b) {
     const v = b && typeof b === 'object' ? b : {};
     const stage = STAGES.some((s) => s.key === v.stage) ? v.stage : 'baby';
@@ -376,7 +378,8 @@
         if (typeof item === 'string' && /^[a-z0-9-]{1,32}$/.test(item)) pynt[slot] = item;
       }
     }
-    return { stage, outfit, pynt };
+    const kostume = v.type === 'slik' && KOSTUMER.includes(v.kostume) ? v.kostume : null;
+    return { stage, outfit, pynt, kostume, post: v.type === 'post' };
   }
 
   /** What the guest says: "Hej fra STUDIO-PC! Jeg fik 🏆 Durumkongen". */
@@ -384,6 +387,9 @@
     const v = b || {};
     const from = `Hej fra ${shorten(v.pc, 15) || 'kontoret'}!`;
     if (v.type === 'fest') return `${from} Vi har leveret! 🎉`;
+    if (v.type === 'slik') return 'Slik eller ballade! 🎃';
+    if (v.type === 'post') return `${from} ✉️ Post til dig!`;
+    if (v.type === 'aar') return `${from} ${yearShareLine(v.aar)}`;
     const t = v.trofae;
     if (!t || !t.name) return `${from} Jeg har fået et nyt trofæ 🏆`;
     return t.kind === 'fund' ? `${from} Jeg fandt 🎁 ${shorten(t.name, 32)}` : `${from} Jeg fik 🏆 ${shorten(t.name, 32)}`;
@@ -392,7 +398,21 @@
   /** What Klippe answers its guest. */
   function visitReply(b) {
     const name = shorten(b && b.navn, 20) || 'du';
+    if (b && b.type === 'post') return `Tak for posten, ${name}! 📬`;
+    if (b && b.type === 'aar') return `Flot år, ${name}! 🎉`;
     return b && b.type === 'fest' ? `Hej ${name}! 👋 Tillykke med leveringen!` : `Hej ${name}! 👋 Flot klaret!`;
+  }
+
+  /** A colleague's year in one line (SSE `besoeg` type "aar", §23.7): "📊 Mit Klippet 2026: 312 timer ·
+   *  mest i Color · 31 durum!" – only numbers and a page, never a project. */
+  function yearShareLine(x) {
+    const v = x && typeof x === 'object' ? x : {};
+    const year = Number.isInteger(v.aar) ? v.aar : '';
+    const parts = [];
+    if (Number.isFinite(v.timer)) parts.push(`${Math.round(v.timer)} ${Math.round(v.timer) === 1 ? 'time' : 'timer'}`);
+    if (PAGE_NAMES[v.side]) parts.push(`mest i ${PAGE_NAMES[v.side]}`);
+    if (Number.isFinite(v.durum) && v.durum > 0) parts.push(`${Math.round(v.durum)} durum`);
+    return `📊 Mit Klippet ${year}${parts.length ? `: ${parts.join(' · ')}` : ''}!`;
   }
 
   /** The line of a delivery party (SSE `levering`): "Leveret: Portræt_v3.mp4 🎉". */
@@ -438,6 +458,441 @@
     return String(value).replace(/url\(#([^)]+)\)/g, (all, id) => (Object.hasOwn(map, id) ? `url(#${map[id]})` : all));
   }
 
+  // ---------------------------------------------------------------- fun in the office: the clock (SPEC §23)
+  const MORNING_MIN = 6 * 60;                // Natte-Klippe sleeps until 06:00
+  const pad2 = (n) => String(n).padStart(2, '0');
+
+  /** "16:00" → 960 (minutes of the day); null for "" or nonsense. */
+  function clockMinutes(text) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(text == null ? '' : text).trim());
+    if (!m) return null;
+    const hours = Number(m[1]);
+    const minutes = Number(m[2]);
+    return hours < 24 && minutes < 60 ? hours * 60 + minutes : null;
+  }
+
+  /** Natte-Klippe (SPEC §23.2): `gaber` for [F, F+20), `doeser` for [F+20, F+45), `sover` from F+45
+   *  until 06:00 (F = the fyraften); null in the day – and when fyraften is "" (off). */
+  function natFase(now, fyraften) {
+    const f = clockMinutes(fyraften);
+    if (f == null) return null;
+    const day = now instanceof Date ? now : new Date(now);
+    const t = day.getHours() * 60 + day.getMinutes();
+    if (t >= MORNING_MIN && t < f) return null;
+    const since = (t - f + 1440) % 1440;
+    if (since < 20) return 'gaber';
+    return since < 45 ? 'doeser' : 'sover';
+  }
+
+  /** How Klippe says the fyraften: "16" or "16.30". */
+  function fyraftenLabel(fyraften) {
+    const f = clockMinutes(fyraften);
+    if (f == null) return '16';
+    return f % 60 ? `${Math.floor(f / 60)}.${pad2(f % 60)}` : String(Math.floor(f / 60));
+  }
+
+  /** The line under the pet after fyraften (null: none) – only while nothing else has a say. */
+  function natLine(fase, mood, fyraften, name = 'Klippe') {
+    if (fase === 'sover') {
+      return mood === 'working' ? `💤 ${name} sover – fyraften var kl. ${fyraftenLabel(fyraften)}. Gå hjem! 🏠` : '💤 Godnat …';
+    }
+    if ((fase === 'gaber' || fase === 'doeser') && mood === 'working') return '🥱 Det er fyraften – snart godnat';
+    return null;
+  }
+
+  const YAWN_LINES = ['Gaaab … 🥱', 'Puha, det har været en lang dag', 'Skal vi ikke gå hjem? 🏠', 'Mine øjne bliver så tunge … 😴'];
+  const DANCE_LINES = ['🎧 Den her har groove!', 'Skru op! 🔊', 'Den skal med i filmen 🎶'];
+
+  /** Monday–Sunday of the ISO week that holds 31 October (achievements.halloween_week). */
+  function halloweenWeek(now) {
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const oct31 = new Date(day.getFullYear(), 9, 31);
+    const monday = new Date(oct31);
+    monday.setDate(oct31.getDate() - ((oct31.getDay() + 6) % 7));
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    return day >= monday && day <= sunday;
+  }
+
+  /** "halloween" (Halloween week), "jul" (December) or null. */
+  function seasonFor(now) {
+    if (halloweenWeek(now)) return 'halloween';
+    return now.getMonth() === 11 ? 'jul' : null;
+  }
+
+  /** The lunch bell is offered on weekdays 10:45–13:30 (SPEC §23.12). */
+  function lunchTime(now) {
+    const t = now.getHours() * 60 + now.getMinutes();
+    return now.getDay() >= 1 && now.getDay() <= 5 && t >= 10 * 60 + 45 && t < 13 * 60 + 30;
+  }
+
+  /** Klippet ‹år› in December (this year) and January (last year); null otherwise. */
+  function yearInReview(now) {
+    if (now.getMonth() === 11) return now.getFullYear();
+    return now.getMonth() === 0 ? now.getFullYear() - 1 : null;
+  }
+
+  /** "14:32" (local time) of an epoch in seconds. */
+  function clockLabel(epochS) {
+    const d = new Date(Number(epochS) * 1000);
+    return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+
+  // ---------------------------------------------------------------- render bets (SPEC §23.7, §23.12)
+  const GUESS_MINUTES = [5, 10, 20, 40];
+
+  /** The bet card's quick choices: now + 5, 10, 20, 40 min, rounded to 5 min (never before now + 1 min). */
+  function guessChoices(nowMs) {
+    return GUESS_MINUTES.map((min) => {
+      let at = Math.round((nowMs + min * 60e3) / 300e3) * 300e3;
+      if (at <= nowMs + 60e3) at += 300e3;
+      return { min, at: Math.round(at / 1000), label: clockLabel(at / 1000) };
+    });
+  }
+
+  /** "14:35" from the time field → epoch seconds: today, or tomorrow when that is not after now. */
+  function guessFromField(text, nowMs) {
+    const minutes = clockMinutes(text);
+    if (minutes == null) return null;
+    const day = new Date(nowMs);
+    day.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+    if (day.getTime() <= nowMs) day.setDate(day.getDate() + 1);
+    return Math.round(day.getTime() / 1000);
+  }
+
+  /** One bet: its PC, its number and when its render began – a PC restarted counts its bets from 0 again. */
+  function betKey(bet) {
+    return `${bet && bet.pc}:${bet && bet.vid}:${bet && bet.start}`;
+  }
+
+  const BET_STALE_S = 3 * 3600;              // a colleague's bet we never heard the end of
+
+  /** A colleague's bet that never ended (its PC went to sleep, the last word was lost): gone 3 h after it closed. */
+  function betStale(bet, nowS) {
+    return Boolean(bet) && !bet.egen && (bet.status === 'aaben' || bet.status === 'lukket')
+      && nowS - (Number(bet.lukker) || 0) >= BET_STALE_S;
+  }
+
+  /** The bet the card shows: an open one first (the newest), then one whose guesses are closed, then
+   *  one that ended less than 2 minutes ago (`endedAt`, epoch s, stamped by the page). */
+  function pickBet(bets, nowS) {
+    const list = (Array.isArray(bets) ? bets : []).filter((b) => b && typeof b === 'object' && !betStale(b, nowS));
+    const newest = (a, b) => (b.start || 0) - (a.start || 0);
+    const open = list.filter((b) => b.status === 'aaben').sort(newest);
+    if (open.length) return open[0];
+    const closed = list.filter((b) => b.status === 'lukket').sort(newest);
+    if (closed.length) return closed[0];
+    const ended = list.filter((b) => (b.status === 'slut' || b.status === 'aflyst')
+      && nowS - (b.endedAt || nowS) < 120).sort((a, b) => (b.endedAt || 0) - (a.endedAt || 0));
+    return ended[0] || null;
+  }
+
+  /** "🎲 GRAFIK-PC renderer Portræt_v3.mp4 (12 %) – hvornår er den færdig?" (own: "Du renderer …"). */
+  function betTitle(bet) {
+    const fil = shorten(bet && bet.fil, 32) || 'en film';
+    if (bet && bet.egen) return `🎲 Du renderer ${fil} – kollegerne gætter med!`;
+    const pct = Number.isFinite(bet && bet.pct) ? ` (${Math.round(bet.pct)} %)` : '';
+    return `🎲 ${shorten(bet && (bet.maskine || bet.pc), 15) || 'En kollega'} renderer ${fil}${pct} – hvornår er den færdig?`;
+  }
+
+  /** "🎲 Dit gæt: 14:32 · 3 har gættet · lukker om 2 min" (after a guess, or once guesses are closed). */
+  function betStatus(bet, nowS) {
+    const parts = [];
+    if (bet.mit_gaet) parts.push(`🎲 Dit gæt: ${clockLabel(bet.mit_gaet)}`);
+    else if (bet.status === 'lukket') parts.push('🎲 Gættene er lukket');
+    parts.push(`${Math.max(0, Math.round(Number(bet.antal_gaet) || 0))} har gættet`);
+    if (bet.status === 'aaben') {
+      const left = Math.max(0, (Number(bet.lukker) || 0) - nowS);
+      parts.push(left < 60 ? 'lukker om under 1 min' : `lukker om ${Math.round(left / 60)} min`);
+    } else if (bet.status === 'lukket') {
+      parts.push('venter på renderen …');
+    }
+    return parts.join(' · ');
+  }
+
+  /** How a bet ended – or null while it runs. */
+  function betResult(bet) {
+    if (!bet) return null;
+    if (bet.status === 'aflyst') return 'Renderen stoppede – væddemålet er aflyst';
+    const r = bet.resultat;
+    if (bet.status !== 'slut' || !r) return null;
+    if (r.mig) return `Du vandt render-væddemålet! 🔮 Gættede ${clockLabel(r.tid)} – færdig ${clockLabel(r.slut)}`;
+    if (!r.vinder_pc) return `🎲 Ingen gættede – renderen blev færdig ${clockLabel(r.slut)}`;
+    const who = r.vinder_navn ? `${shorten(r.vinder_navn, 20)} (${shorten(r.vinder_pc, 15)})` : shorten(r.vinder_pc, 15);
+    return `🏆 ${who} vandt! Gættede ${clockLabel(r.tid)} – færdig ${clockLabel(r.slut)}`;
+  }
+
+  // ---------------------------------------------------------------- lunch, post, trick or treat (SPEC §23.3, §23.12)
+  /** "🍽️ FROKOST! (Bobby ringede fra KLIPPER-PC)" – or "🔔 Du ringede til frokost!". */
+  function lunchLine(ev) {
+    if (ev && ev.selv) return '🔔 Du ringede til frokost!';
+    return `🍽️ FROKOST! (${shorten(ev && ev.navn, 20) || 'Klippe'} ringede fra ${shorten(ev && ev.pc, 15) || 'kontoret'})`;
+  }
+
+  const POST_NOTES = ['Kan du lige kigge på det her? 👀', 'Frokost? 🍔', 'Kaffe? ☕', 'Renderen er færdig ✅', 'Ring lige 📞',
+    'Godt gået! 🎉'];
+  const POST_MAX = 120;
+
+  /** "🎃 Bobby fra KLIPPER-PC vil have slik!" */
+  function slikLine(v) {
+    return `🎃 ${shorten(v && v.navn, 20) || 'Klippe'} fra ${shorten(v && v.pc, 15) || 'kontoret'} vil have slik!`;
+  }
+
+  /** The countdown under it: "… ellers bliver der ballade om 20 s". */
+  function slikCountdown(seconds) {
+    return `… ellers bliver der ballade om ${Math.max(0, Math.ceil(seconds))} s`;
+  }
+
+  const SLIK_SERVER_S = 55;                  // the server takes an answer 60 s after the guest came (kontor.py)
+  const SLIK_MIN_S = 8;                      // less left than this: the guest has gone on
+
+  /** How long a trick-or-treater waits for its Booster once it is in: its own 25 s, but never past what the
+   *  server still takes after `waitedMs` in the queue (another guest, a meal, a game) – < SLIK_MIN_S: it left. */
+  function slikSeconds(tilS, waitedMs = 0) {
+    return Math.min(Number(tilS) || 25, SLIK_SERVER_S - Math.max(0, Number(waitedMs) || 0) / 1000);
+  }
+
+  /** data-ballade: "hat", "toiletpapir" or "hat toiletpapir" (a second prank keeps the hat away), or "". */
+  function balladeTokens(prank) {
+    if (!prank) return '';
+    return [prank.hat ? 'hat' : null, prank.toiletpapir ? 'toiletpapir' : null].filter(Boolean).join(' ');
+  }
+
+  /** "Lars'" (a name ending in s, x or z), else "Lises". */
+  function possessive(name) {
+    const n = String(name || '').trim();
+    return /[sxz]$/i.test(n) ? `${n}'` : `${n}s`;
+  }
+
+  /** "dit" before a neuter thing (et gevir), "din" before the rest (en hat, en hue, en hjelm …). */
+  const NEUTER_ITEMS = new Set(['gevir']);
+
+  function yourItem(item) {
+    return NEUTER_ITEMS.has(item) ? 'dit' : 'din';
+  }
+
+  /** What Klippe says when a guest played a prank on it – the hat's name in lower case. */
+  function balladeLine(navn, prank, hatName) {
+    const who = shorten(navn, 20) || 'Gæsten';
+    if (prank && prank.hat) {
+      return `Ballade! 😈 ${who} stak af med ${yourItem(prank.hat)} ${String(hatName || prank.hat).toLowerCase()}!`;
+    }
+    return `Ballade! 😈 ${who} pakkede mig ind i toiletpapir! 🧻`;
+  }
+
+  /** What the trick-or-treater's Klippe says (SSE `slik_svar`). */
+  function slikSvarLine(d, hatName) {
+    const name = shorten(d && d.navn, 20) || 'Klippe';
+    const who = `${name} (${shorten(d && d.pc, 15) || 'kontoret'})`;
+    if (d && d.type === 'godbid') return `🍬 ${who} gav mig en Booster!`;
+    if (d && d.hat) return `😈 Hehe – jeg fik ${possessive(name)} ${String(hatName || d.hat).toLowerCase()}!`;
+    return `😈 Hehe – jeg pakkede ${name} ind i toiletpapir! 🧻`;
+  }
+
+  // ---------------------------------------------------------------- the Christmas calendar (SPEC §23.4)
+  const GIFT_ICONS = { halstoerklaede: '🧣', julesloejfe: '🎀', gevir: '🦌', glorie: '😇', nissehue: '🎅', julebriller: '🤓',
+    slikstok: '🍭', julegave: '🎁', snefnug: '❄️', julelys: '✨', julerod: '❤️', polkagris: '🍬', julestjerne: '⭐',
+    aebleskiver: '🥞', risalamande: '🍚', pebernoedder: '🍪', brunkager: '🍪', klejner: '🥨', julesodavand: '🥤',
+    sne1: '❄️', lucia: '🕯️' };
+  const GIFT_KIND_ICONS = { ting: '🎁', sne: '❄️', mad: '🍪', vits: '😂' };
+
+  function giftIcon(gave) {
+    if (!gave) return '🎁';
+    return GIFT_ICONS[gave.id] || GIFT_ICONS[gave.item] || GIFT_KIND_ICONS[gave.kind] || '🎁';
+  }
+
+  /** One door of the grid: `klasse` is-aaben (its gift), is-klar (can be opened) or is-laast ("Om 3 dage"). */
+  function doorView(door, dag, demo = false) {
+    const d = door || {};
+    if (d.aaben && d.gave) return { klasse: 'is-aaben', ikon: giftIcon(d.gave), tekst: shorten(d.gave.name, 18) };
+    if (demo || d.kan) return { klasse: 'is-klar', ikon: '', tekst: 'Åbn' };
+    const days = dag ? d.nr - dag : null;
+    const tekst = days == null || days < 1 ? `${d.nr}. dec.` : days === 1 ? 'I morgen' : `Om ${days} dage`;
+    return { klasse: 'is-laast', ikon: '', tekst };
+  }
+
+  /** What Klippe says when a door's gift comes out. */
+  function giftLine(gave, nr) {
+    if (!gave) return `🎁 Låge ${nr}!`;
+    if (gave.kind === 'ting') return `🎁 Låge ${nr}: ${gave.name}!`;
+    if (gave.kind === 'mad') return `${gave.name}! 😋`;
+    if (gave.kind === 'sne') return gave.tekst || '❄️ Det sner!';
+    return gave.tekst || gave.name || '🎁';
+  }
+
+  // ---------------------------------------------------------------- easter eggs, the bath, memories (SPEC §23.6, §23.8, §23.9)
+  const EGGS = {
+    kaffe: { line: 'Værsgo! ☕', haand: 'kaffe', ms: 8000 },
+    fredag: { celebrate: true },
+    deadline: { line: 'DEADLINE?! 😱', attr: 'panik', ms: 4000 },
+    klippe: { line: 'Det er mig! 👋', attr: 'vink', ms: 2500 },
+    durum: { line: 'Durum?! 🤤 Ja tak!', attr: 'savler', ms: 4000 },
+    booster: { line: '⚡ BOOSTER!', energi: 'booster', ms: 4000 },
+    festkat: { cat: true, ms: 6500 },
+    hjaelp: { line: 'Klippe til undsætning! 🦸', attr: 'helt', ms: 5000 },
+    fyraften: { line: 'Fyraften? Jaaa! 🏠', nat: true, ms: 5000 },
+    sne: { line: 'Sne! ❄️', attr: 'snestorm', ms: 6000 },
+  };
+
+  /** How Klippe reacts to an easter egg from the search field (null: not one). */
+  function eggPlan(ord, now = new Date()) {
+    if (!Object.hasOwn(EGGS, ord)) return null;
+    const plan = { ord, ...EGGS[ord] };
+    if (ord === 'fredag') plan.line = now.getDay() === 5 ? 'Det ER fredag! 🎉' : 'Fredag? Snart! 🎉';
+    return plan;
+  }
+
+  const DIRT_LEVELS = ['lidt', 'beskidt', 'meget'];
+
+  /** data-beskidt from the bath's state (null: clean, or the bath is switched off). */
+  function dirtLevel(rod, enabled = true) {
+    if (!enabled || !rod || !rod.aktiv || !(rod.antal > 0)) return null;
+    return DIRT_LEVELS.includes(rod.niveau) ? rod.niveau : null;
+  }
+
+  /** "Uh, der ligger 7 løse filer i roden af Rikke Lindholm – jeg bliver helt beskidt 🫣 Se forslagene i Projektsøg". */
+  function dirtLine(rod) {
+    const level = dirtLevel(rod);
+    if (!level) return null;
+    const files = rod.antal === 1 ? '1 løs fil' : `${rod.antal} løse filer`;
+    const how = { lidt: 'lidt beskidt', beskidt: 'beskidt', meget: 'helt beskidt' }[level];
+    const where = shorten(rod.projekt, 32) || 'projektmappen';
+    return `Uh, der ligger ${files} i roden af ${where} – jeg bliver ${how} 🫣 Se ${rod.antal === 1 ? 'forslaget' : 'forslagene'}`
+      + ' i Projektsøg';
+  }
+
+  const MEMORY_KINDS = { klip: 'klip', billeder: 'billeder', lydfiler: 'lydfiler', filer: 'filer' };
+
+  /** "📸 I dag for 3 år siden: 112 klip i Rikke Lindholm" (GET /api/minder; null: no memory). */
+  function memoryLine(item) {
+    const m = item && item.minde;
+    if (!m || !(m.antal > 0) || !(m.aar_siden > 0)) return null;
+    const ago = m.aar_siden === 1 ? 'et år' : `${m.aar_siden} år`;
+    return `📸 I dag for ${ago} siden: ${m.antal} ${MEMORY_KINDS[m.slags] || 'filer'} i ${shorten(item.name, 40) || 'et projekt'}`;
+  }
+
+  // ---------------------------------------------------------------- the render game (SPEC §23.10)
+  // An endless runner in units: the canvas is 160 units high (its width follows the canvas), the track's
+  // top at y 132; heights are measured up from the track. Klippe stands at x 44.
+  const GAME = { w: 210, h: 160, ground: 132, kx: 40, kw: 24, kh: 30, gravity: 1650, jump: 560, jump2: 470, speed0: 140,
+    speedMax: 360, ramp: 5, fallTo: -60 };
+
+  /** A small seeded random generator (mulberry32): the same seed, the same course. */
+  function seeded(seed) {
+    let a = (Number(seed) >>> 0) || 1;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /** A new round, `w` units wide. */
+  function gameNew(seed = 1, w = 320) {
+    return { w, t: 0, dist: 0, speed: GAME.speed0, y: 0, vy: 0, jumps: 0, ground: true, falling: false, over: false,
+      why: null, obstacles: [], frames: [], taken: 0, score: 0, next: w * 0.9, rng: seeded(seed) };
+  }
+
+  /** A jump – a second one in the air (once). False when it cannot. */
+  function gameJump(g) {
+    if (g.over || g.falling) return false;
+    if (g.ground) {
+      Object.assign(g, { vy: GAME.jump, ground: false, jumps: 1 });
+      return true;
+    }
+    if (g.jumps < 2) {
+      Object.assign(g, { vy: GAME.jump2, jumps: 2 });
+      return true;
+    }
+    return false;
+  }
+
+  /** Two boxes {x, w, b (bottom, up from the track), h} overlap. */
+  function gameHits(a, o) {
+    return a.x < o.x + o.w && a.x + a.w > o.x && a.b < o.b + o.h && a.b + a.h > o.b;
+  }
+
+  /** Klippe's box – a little smaller than its drawing, to be fair. */
+  function gameKlippe(g) {
+    return { x: GAME.kx + 4, w: GAME.kw - 8, b: g.y + 1, h: GAME.kh - 5 };
+  }
+
+  const GAME_KINDS = ['offline', 'sort', 'glitch', 'glimt', 'hul'];
+
+  /** The next klippefejl at the right edge, and maybe a film frame to catch. */
+  function gameSpawn(g) {
+    const r = g.rng;
+    const pick = r();
+    const kind = g.t < 6 ? (pick < 0.55 ? 'offline' : 'sort') : pick < 0.3 ? 'offline' : pick < 0.5 ? 'sort'
+      : pick < 0.7 ? 'glitch' : pick < 0.85 ? 'glimt' : 'hul';
+    const x = g.w + 10;
+    const sizes = { offline: [20 + r() * 8, 20 + r() * 8, 0], sort: [12 + r() * 6, 18 + r() * 14, 0],
+      glitch: [16 + r() * 8, 34 + r() * 10, 0], glimt: [26 + r() * 10, 14, 40 + r() * 8], hul: [30 + r() * 16, 0, 0] };
+    const [w, h, b] = sizes[kind];
+    g.obstacles.push({ kind, x, w, h, b });
+    if (r() < 0.6) g.frames.push({ x: x + w + 30 + r() * 40, b: [8, 30, 62][Math.floor(r() * 3)], w: 10, h: 9, taken: false });
+    // The faster it goes, the more room between them (0.85–1.6 s apart).
+    g.next = Math.max(110, g.speed * (0.85 + r() * 0.75)) + w;
+  }
+
+  /** One step of `dt` seconds; returns what happened: "frame" (a film frame caught), "crash", "fall". */
+  function gameStep(g, dt) {
+    const events = [];
+    if (g.over) return events;
+    const step = Math.max(0, Math.min(0.05, Number(dt) || 0));
+    g.t += step;
+    if (g.falling) {
+      g.vy -= GAME.gravity * step;
+      g.y += g.vy * step;
+      if (g.y <= GAME.fallTo) Object.assign(g, { over: true, why: 'hul' });
+      return events;
+    }
+    g.speed = Math.min(GAME.speedMax, GAME.speed0 + GAME.ramp * g.t);
+    const dx = g.speed * step;
+    g.dist += dx;
+    for (const o of g.obstacles) o.x -= dx;
+    for (const f of g.frames) f.x -= dx;
+    g.obstacles = g.obstacles.filter((o) => o.x + o.w > -20);
+    g.frames = g.frames.filter((f) => f.x + f.w > -20 && !f.taken);
+    g.next -= dx;
+    if (g.next <= 0) gameSpawn(g);
+    if (!g.ground) {
+      g.vy -= GAME.gravity * step;
+      g.y += g.vy * step;
+    }
+    const feet = GAME.kx + GAME.kw / 2;
+    const hole = g.obstacles.find((o) => o.kind === 'hul' && feet > o.x + 3 && feet < o.x + o.w - 3);
+    if (g.y <= 0) {
+      if (hole) {
+        Object.assign(g, { falling: true, ground: false, vy: Math.min(g.vy, 0) });
+        events.push('fall');
+        return events;
+      }
+      Object.assign(g, { y: 0, vy: 0, ground: true, jumps: 0 });
+    }
+    const me = gameKlippe(g);
+    if (g.obstacles.some((o) => o.kind !== 'hul' && gameHits(me, o))) {
+      Object.assign(g, { over: true, why: 'fejl' });
+      events.push('crash');
+    }
+    for (const f of g.frames) {
+      if (!f.taken && gameHits(me, f)) {
+        f.taken = true;
+        g.taken += 1;
+        events.push('frame');
+      }
+    }
+    g.score = gameScore(g);
+    return events;
+  }
+
+  /** distance/10 + 10 per film frame. */
+  function gameScore(g) {
+    return Math.floor(g.dist / 10) + g.taken * 10;
+  }
+
   const CHEERS = {
     hour: (n) => [`${n} ${n === 1 ? 'time' : 'timer'} i dag! 🎉`, `${n} t i kassen – godt klippet! 🎬`, `Time nr. ${n}! Du er on fire 🔥`],
     goal: () => ['Dagens mål er nået! 🏆', 'MÅL! Hele dagens mål er i hus 🎆'],
@@ -461,8 +916,14 @@
     moodLine, cheer, transferInfo, jobLine, messageOrder, quietLine, trophyProgress, progressLine, parsePynt,
     hungerLevel, foodLine, foodSay, foodHint, dropLeft, isCall, callerName, callLine, isRobotSheet, muzzle,
     directorLine, buildLine, doneLine, renderProgress, renderLine, renderDoneLine, renderKey, guestLook, visitLine,
-    visitReply, deliveryLine, catFrames, nextSpin, keyGreen, renameRefs, STAGES, FOCUS_STARS, BREAK_NUDGES,
-    ROBOT_POSES, ROBOT_COUNT, BODY_SCALE, DIRECTOR_LINES, SLOT_KEYS, OUTFITS, FESTKAT_FRAMES };
+    visitReply, yearShareLine, deliveryLine, catFrames, nextSpin, keyGreen, renameRefs, clockMinutes, natFase,
+    fyraftenLabel, natLine, halloweenWeek, seasonFor, lunchTime, yearInReview, clockLabel, guessChoices, guessFromField,
+    betKey, betStale, pickBet, betTitle, betStatus, betResult, lunchLine, slikLine, slikCountdown, slikSeconds,
+    balladeTokens, possessive, yourItem, balladeLine, slikSvarLine, BET_STALE_S, SLIK_MIN_S,
+    giftIcon, doorView, giftLine, eggPlan, dirtLevel, dirtLine, memoryLine, seeded, gameNew, gameJump, gameHits,
+    gameKlippe, gameSpawn, gameStep, gameScore, STAGES, FOCUS_STARS, BREAK_NUDGES, ROBOT_POSES, ROBOT_COUNT, BODY_SCALE,
+    DIRECTOR_LINES, SLOT_KEYS, OUTFITS, KOSTUMER, FESTKAT_FRAMES, POST_NOTES, POST_MAX, EGGS, GAME, GAME_KINDS,
+    YAWN_LINES, DANCE_LINES };
   if (typeof module === 'object' && module.exports) module.exports = helpers;
   if (typeof document === 'undefined') return;
 
@@ -565,6 +1026,17 @@
     eatBite: $('mad-bid'), eatThing: $('mad-ting'), phone: $('telefon'), phoneCount: $('telefon-antal'),
     demoRobots: $('demo-robots'), demoCall: $('demo-call'), demoParty: $('demo-party'), demoVisit: $('demo-visit'),
     renderStatus: $('render-status'), renderWhat: $('render-what'), renderTal: $('render-tal'), renderBar: $('render-bar'),
+    // fun in the office (SPEC §23)
+    panelProev: $('panel-proev'), frokostKnap: $('frokost-knap'), postKnap: $('post-knap'), julKnap: $('jul-knap'),
+    julAntal: $('jul-antal'), aarKnap: $('aar-knap'), frokostSkilt: $('frokost-skilt'),
+    postPanel: $('post-panel'), postTil: $('post-til'), postHurtig: $('post-hurtig'), postTekst: $('post-tekst'),
+    postSend: $('post-send'), postFejl: $('post-fejl'), postLuk: $('post-luk'),
+    slik: $('slik'), slikTekst: $('slik-tekst'), slikGiv: $('slik-giv'), slikTid: $('slik-tid'),
+    vm: $('vaeddemaal'), vmTitel: $('vm-titel'), vmValg: $('vm-valg'), vmTid: $('vm-tid'), vmGaet: $('vm-gaet'),
+    vmStatus: $('vm-status'),
+    spil: $('spil'), spilCanvas: $('spil-canvas'), spilPoint: $('spil-point'), spilBedste: $('spil-bedste'),
+    spilRekord: $('spil-rekord'), spilRender: $('spil-render'), spilStart: $('spil-start'), spilLuk: $('spil-luk'),
+    spilBesked: $('spil-besked'), spilKnap: $('spil-knap'),
   };
   el.box = el.pet.querySelector('.pakke');
 
@@ -579,8 +1051,56 @@
     build: null, directorTimer: 0, naughtyTimer: 0, naughty: null, aimTimer: 0,
     render: null, renderSeen: null, peers: [], visit: null, visitWaiting: null, fest: null, festWaiting: null,
     stageTimer: 0, festkat: null,
+    // fun in the office (SPEC §23)
+    settings: {}, wear: {}, tmpHaand: null, nat: null, natWakeUntil: 0, natDemo: null, natEggUntil: 0, yawnTimer: 0,
+    nodTimer: 0, dans: false, dansDemoUntil: 0, dansLineAt: 0, season: null, halloweenDemoUntil: 0, saeson: null,
+    balladeLocal: null, jul: null, julDemo: false, julDemoOpen: {}, julOpening: false, julPeek: false, rod: null,
+    bathWaiting: null, bath: null, lunch: null, postTil: null, postOut: null, bets: new Map(), betsCelebrated: new Set(),
+    betChoice: null, slik: null, eggWaiting: null, egg: null, cameo: null, attrTimers: {}, game: null, spil: null,
+    snowTimer: 0, betEdit: null, ready: false,       // ready: the hello is said – the fun things may speak now
+    sseSeq: {}, day: null, visitWaitingAt: 0, postSvarTil: null,
     tempo: 1,                                // tests speed up the visits and the party (their timelines × tempo)
   };
+
+  // ---------------------------------------------------------------- the clock (SPEC §23)
+  // Time-of-day things (Natte-Klippe, the seasons, the lunch bell) follow clock(); `?nu=2026-10-12T16:05`
+  // starts it at another moment (the tests' fixed day), from where it runs on.
+  const CLOCK_OFFSET = (() => {
+    const fixed = Date.parse(query.get('nu') || '');
+    return Number.isFinite(fixed) ? fixed - Date.now() : 0;
+  })();
+
+  function clock() {
+    return new Date(Date.now() + CLOCK_OFFSET);
+  }
+
+  /** `fn` after `ms` × tempo. */
+  function after(ms, fn) {
+    return setTimeout(fn, ms * state.tempo);
+  }
+
+  function show(node, on) {
+    if (node) node.hidden = !on;
+  }
+
+  function on(node, type, fn) {
+    if (node) node.addEventListener(type, fn);
+  }
+
+  /** A data-* attribute on #app for `ms` (a pose that comes and goes). */
+  function tempAttr(name, ms, value = '') {
+    clearTimeout(state.attrTimers[name]);
+    el.app.dataset[name] = value;
+    state.attrTimers[name] = after(ms, () => {
+      delete el.app.dataset[name];
+      delete state.attrTimers[name];
+    });
+  }
+
+  function setting(key, fallback = true) {
+    const value = state.settings[key];
+    return value === undefined ? fallback : value;
+  }
 
   // ---------------------------------------------------------------- memory (per day)
   const MEMORY_KEY = 'klippe.memory';
@@ -618,6 +1138,14 @@
     return response.json();
   }
 
+  /** A GET that a newer SSE event of `type` wins over (on load and whenever the stream (re)opens): its
+   *  answer, or null when such an event came while it was on its way – that event is newer. */
+  async function fresh(type, path) {
+    const seq = state.sseSeq[type] || 0;
+    const data = await get(path);
+    return (state.sseSeq[type] || 0) === seq ? data : null;
+  }
+
   async function loadSettings() {
     try {
       applySettings((await get('/api/settings')).settings);
@@ -626,6 +1154,7 @@
 
   function applySettings(settings) {
     if (!settings) return;
+    state.settings = { ...state.settings, ...settings };
     state.name = settings.widget_pet_name || 'Klippe';
     state.goalH = Number(settings.widget_daily_goal_hours) || 6;
     el.name.textContent = state.name;
@@ -635,6 +1164,9 @@
       state.hatched = hatched;
       if (state.stage) applyStage();
     }
+    funTick();                                 // a switch for the fun things (SPEC §23.0) takes effect at once
+    if (state.rod) applyRod(state.rod, true);
+    renderBetCard();
   }
 
   async function pollStatus() {
@@ -674,6 +1206,8 @@
     state.focusMin = state.focusStart == null ? 0 : (Date.now() - state.focusStart) / 60000;
     el.app.dataset.mood = mood;
     el.app.dataset.outfit = outfitFor(status);
+    updateDance();
+    lunchCheck(mood);
     renderMoodLine();
     if (status.project && state.project && status.project !== state.project && mood === 'working') {
       say(`Nyt projekt: ${status.project} 👋`);
@@ -761,14 +1295,19 @@
       el.mood.textContent = state.fest.stamped ? `🎉 ${state.name} fejrer ${file}` : `📦 ${state.name} pakker ${file} …`;
       return;
     }
+    if (state.lunch && state.lunch.phase === 'ude') {
+      el.mood.textContent = `🍽️ ${state.name} er til frokost – klik på skiltet, så kommer ${state.name} hjem`;
+      return;
+    }
     const rendering = renderLine(state.render, state.name);
     const building = buildLine(state.build, state.name);
     const job = jobLine(transferInfo(state.job), state.job);
     const mood = moodFor(state.status);
+    const night = natLine(state.nat, mood, setting('widget_fyraften', '16:00'), state.name);
     const food = hatchedFood();
     const hungry = foodLine(food, mood, state.name, state.craving);
     const rush = food && food.energi && mood === 'working' ? '⚡ ' : '';   // turbo editing
-    el.mood.textContent = rendering || building || job || hungry || `${rush}${moodLine(state.status, state.name)}`;
+    el.mood.textContent = rendering || building || job || night || hungry || `${rush}${moodLine(state.status, state.name)}`;
   }
 
   // ---------------------------------------------------------------- the games (petplay.py)
@@ -865,6 +1404,7 @@
     }
     el.messages.hidden = !messages.length;
     renderPhone(messages);
+    if (messages.some((m) => isCall(m) && m.ringer)) comeHome();      // a call brings Klippe back from lunch
     // No jump and clap for a call: the phone is the alarm.
     if (loud && loud.lyd !== false && !shownAsCall(loud) && !answered.includes(loud) && state.messagesLoaded) {
       jump();
@@ -1199,11 +1739,13 @@
     }
   }
 
-  /** "🎉 Prøv leveringsfesten" / "👋 Prøv et besøg" in the 🏆 panel: the panel closes, so it is seen. */
+  /** "🎉 Prøv leveringsfesten" / "👋 Prøv et besøg" in the 🏆 panel: the panel closes, so it is seen. A
+   *  demo that cannot run now (`{ok: false, grund}` – no snow while something is full screen) says why. */
   async function demoNow(path) {
     el.panel.hidden = true;
     try {
-      await send('POST', path, {});
+      const answer = await send('POST', path, {});
+      if (answer && answer.ok === false) say(`Øv – ${answer.grund || 'det kan ikke lige nu'}`, 5000);
     } catch (err) {
       say(`Øv – ${err.message}`, 5000);
     }
@@ -1239,6 +1781,8 @@
       delete el.app.dataset.render;
     }
     el.renderStatus.hidden = !info;
+    show(el.spilKnap, Boolean(info) && setting('widget_renderspil'));     // the render game (SPEC §23.10)
+    gameRender(info);
     const key = renderKey(data.faerdig);
     if (key && key !== state.renderSeen) {
       state.renderSeen = key;
@@ -1252,6 +1796,7 @@
   function renderEnded(f) {
     const line = renderDoneLine(f);
     if (!line) return;
+    comeHome();                                  // back from lunch for it (SPEC §23.12)
     if (f.udfald === 'done') {
       celebrate(line, 'fireworks', 4);
     } else if (f.udfald === 'failed') {
@@ -1278,35 +1823,62 @@
     } catch {
       return;                                // the office has not started
     }
-    state.peers = Array.isArray(data.peers) ? data.peers.filter((p) => p && typeof p === 'object') : [];
+    state.peers = Array.isArray(data.peers) ? data.peers.filter((p) => p && typeof p === 'object'
+      && typeof p.pc === 'string') : [];
     const names = state.peers.map((p) => `${shorten(p.navn, 20) || 'Klippe'} (${shorten(p.pc, 15)})`);
     el.demoVisit.title = names.length ? `Kollegernes Klipper lige nu: ${names.join(', ')}`
       : 'En kollegas Klippe kigger forbi – som når den har fået et trofæ';
+    renderHeaderIcons();
+    if (el.postPanel && !el.postPanel.hidden) renderPost();
   }
 
-  /** SSE `besoeg`: a colleague's Klippe comes by (the newest waits – one at most). */
+  /** SSE `besoeg`: a colleague's Klippe comes by (the newest waits – one at most; when it came counts for
+   *  a trick-or-treater: the server takes its answer only so long). */
   function visit(data) {
     if (!data || typeof data !== 'object') return;
     state.visitWaiting = data;
+    state.visitWaitingAt = Date.now();
     nextOnStage();
   }
 
+  /** Klippe is not free for a guest, a party, a bath or an easter egg: it eats, plays out of the box,
+   *  rings the lunch bell or runs to (or from) lunch. */
+  function stageBusy() {
+    return Boolean(state.eating) || el.app.dataset.play === 'out'
+      || Boolean(state.lunch && state.lunch.phase !== 'ude') || Boolean(state.bath);
+  }
+
   /** The next party or guest once the stage is free – never while Klippe eats or plays out of the
-   *  box, a guest not while a card is transferred either; a party goes first. */
+   *  box, a guest not while a card is transferred or the render game covers the box either; a party
+   *  goes first. Klippe at lunch comes home for it first; then a bath and an easter egg (SPEC §23.6,
+   *  §23.8) get their turn – an egg not while Klippe is out at lunch. */
   function nextOnStage() {
     clearTimeout(state.stageTimer);
     state.stageTimer = 0;
-    if (state.visit || state.fest || (!state.visitWaiting && !state.festWaiting)) return;
-    const busy = Boolean(state.eating) || el.app.dataset.play === 'out';
+    const waiting = state.visitWaiting || state.festWaiting || state.bathWaiting || state.eggWaiting;
+    if (state.visit || state.fest || !waiting) return;
+    if (state.lunch && state.lunch.phase === 'ude' && (state.visitWaiting || state.festWaiting)) comeHome();
+    const busy = stageBusy() || Boolean(state.lunch);
     if (state.festWaiting && !busy) {
       const data = state.festWaiting;
       state.festWaiting = null;
       startParty(data);
-    } else if (state.visitWaiting && !busy && !el.app.dataset.transfer) {
+    } else if (state.visitWaiting && !busy && !el.app.dataset.transfer && !state.game) {
       const data = state.visitWaiting;
+      const waited = Date.now() - (state.visitWaitingAt || Date.now());
       state.visitWaiting = null;
-      startVisit(data);
+      startVisit(data, waited);
+    } else if (state.bathWaiting && !busy) {
+      const data = state.bathWaiting;
+      state.bathWaiting = null;
+      startBath(data);
+    } else if (state.eggWaiting && !stageBusy() && !state.lunch && !state.game) {
+      const egg = state.eggWaiting;
+      state.eggWaiting = null;
+      if (Date.now() - egg.at < 20e3) runEgg(egg.ord);
+      nextOnStage();
     } else {
+      if (state.eggWaiting && Date.now() - state.eggWaiting.at >= 20e3) state.eggWaiting = null;   // waited too long
       state.stageTimer = setTimeout(nextOnStage, 1000);
     }
   }
@@ -1339,9 +1911,12 @@
 
   const GUEST_PX = 110;
   const GUEST_IDS = { stripes: 'stripes-gaest', glow: 'glow-gaest' };
-  // What a guest does not bring along: Klippe's own jobs, its phone, its food and its hole.
+  // What a guest does not bring along: Klippe's own jobs, its phone, its food and its hole – nor its
+  // pumpkin, bathtub, lunch bell and door, dirt, toilet paper, music notes and cape (SPEC §23). Its
+  // costume and an envelope it carries stay.
   const GUEST_LEAVE_OUT = '.crew, .luge, .render, .pakke, .telefon, .carry, .hole, .zzz, .drop, .drop__tape, .megafon,'
-    + ' .drom, .knurr, .savl, .mad';
+    + ' .drom, .knurr, .savl, .mad, .graeskar-lygte, .badekar, .frokostklokke, #frokost-doer, .frokost-doer, .snavs,'
+    + ' .fluer, .stank, .toiletpapir, .noder, .kappe, .sne-lag, .flagermus, .panik-draaber';
 
   /** A copy of the pet's drawing for a guest: its own stripes and glow (renamed – the colours come
    *  from the guest's data-*, where the copy sits), no other ids, none of Klippe's jobs. */
@@ -1369,25 +1944,51 @@
     return svg;
   }
 
-  /** The guest walks in from the left, says its line, both jump and clap (twice), and after ~6 s it
-   *  walks out again. Everything from the packet goes into textContent or data-* only. */
-  function startVisit(data) {
+  /** A guest by the left edge of the page, its bubble hidden: a copy of the pet in the guest's look. */
+  function makeGuest(data) {
     const look = guestLook(data);
     const guest = node('div', 'gaest');
     Object.assign(guest.dataset, { stage: look.stage, outfit: look.outfit, mood: 'chill', ...look.pynt });
+    if (look.kostume) guest.dataset.kostume = look.kostume;
+    if (look.post) guest.dataset.post = '';
     const bubble = node('p', 'gaest__boble', visitLine(data));
     bubble.setAttribute('role', 'status');
     bubble.hidden = true;
     guest.append(bubble, guestDrawing());
     guest.style.left = '-6px';
-    guest.style.top = `${Math.round(floor().y - GUEST_PX * 0.9)}px`;
     document.body.append(guest);
+    fitGuest(guest);
+    return { guest, bubble };
+  }
+
+  /** The guest stands on Klippe's floor – never bigger than Klippe's own drawing (a card under the pet,
+   *  like the trick-or-treat card, leaves less room for the stage). */
+  function fitGuest(guest) {
+    const size = Math.round(Math.min(GUEST_PX, el.pet.getBoundingClientRect().height || GUEST_PX));
+    const svg = guest.querySelector('svg');
+    if (svg && size < GUEST_PX) {
+      svg.style.width = `${size}px`;
+      svg.style.height = `${size}px`;
+    }
+    guest.style.top = `${Math.round(floor().y - size * 0.9)}px`;
+  }
+
+  /** The guest walks in from the left, says its line, both jump and clap (twice), and after ~6 s it
+   *  walks out again. Everything from the packet goes into textContent or data-* only. A
+   *  trick-or-treater (SPEC §23.3) has its own visit. */
+  function startVisit(data, waited = 0) {
+    if (data.type === 'slik') {
+      startSlik(data, waited);
+      return;
+    }
+    const { guest, bubble } = makeGuest(data);
     const run = { data, guest, timers: [] };
     state.visit = run;
     walk(guest, -GUEST_PX - 20, 0, 1400);
     later(run, 1400, () => {
       bubble.hidden = false;
     });
+    if (data.type === 'post') later(run, 2200, () => delete guest.dataset.post);   // the letter is handed over
     later(run, 1700, () => {
       cheerTogether(guest);
       if (data.trofae && data.trofae.rarity === 'legendarisk') floatEmoji('⭐', 4);
@@ -1522,10 +2123,11 @@
   const DRAWN_CAT_PX = 74;                   // the drawn cat's 100 units
 
   /** The cat walks in from the right and stands beside Klippe (its feet on Klippe's floor) – the
-   *  GIF once it is decoded (≤ 2 s more), else the drawn cat. */
-  async function catEnters(run, frames) {
+   *  GIF once it is decoded (≤ 2 s more), else the drawn cat. `run` is a party – or the easter egg's
+   *  short visit (`state.cameo`, its first spin soon: `firstSpin` ms). */
+  async function catEnters(run, frames, firstSpin = null) {
     const cat = await Promise.race([frames, new Promise((resolve) => setTimeout(resolve, 2000, null))]);
-    if (state.fest !== run || run.cat) return;
+    if ((state.fest !== run && state.cameo !== run) || run.cat) return;
     const box = node('div', 'festkat');
     box.setAttribute('aria-hidden', 'true');
     let figure;
@@ -1559,21 +2161,21 @@
     run.cat = { box, figure, cat, width, timer: 0, spins: 0 };
     walk(box, width + 20, 0, 1500);
     if (cat) {
-      playCat(run);
+      playCat(run, firstSpin);
     } else if (!REDUCED) {
-      run.cat.timer = setTimeout(() => spinDrawnCat(run), 1800 * state.tempo);
+      run.cat.timer = setTimeout(() => spinDrawnCat(run), (firstSpin == null ? 1800 : firstSpin) * state.tempo);
     }
   }
 
   /** The GIF: it stands and hops (the stand frames over and over), and every 2.5–6 s it spins once
    *  (the spin frames, no hop meanwhile). Reduced motion: one standing frame. */
-  function playCat(run) {
+  function playCat(run, firstSpin = null) {
     const c = run.cat;
     const { frames, plan } = c.cat;
     const ctx = c.figure.getContext('2d');
     let index = plan.stand[0];
     let spinning = false;
-    let spinAt = performance.now() + nextSpin() * state.tempo;
+    let spinAt = performance.now() + (firstSpin == null ? nextSpin() : firstSpin) * state.tempo;
     const show = () => {
       if (run.cat !== c) return;
       ctx.clearRect(0, 0, c.figure.width, c.figure.height);
@@ -1629,7 +2231,24 @@
   /** What Klippe wears: data-farve, data-hat … on the page (the CSS draws it). */
   function applyWardrobe(equipped) {
     for (const slot of SLOT_KEYS) {
-      if (equipped && equipped[slot]) el.app.dataset[slot] = equipped[slot];
+      if (equipped && equipped[slot]) state.wear[slot] = equipped[slot];
+    }
+    applyLook();
+  }
+
+  /** The wardrobe plus what is borrowed for a while: a hat won at Halloween (`bytte`, SPEC §23.3) and
+   *  the coffee cup of an easter egg. */
+  function applyLook() {
+    const wear = { ...state.wear };
+    const bytte = state.saeson && state.saeson.bytte;
+    if (bytte && bytte.hat && !(bytte.til && bytte.til * 1000 <= Date.now())) wear.hat = bytte.hat;
+    if (state.tmpHaand && state.tmpHaand.until > Date.now()) wear.haand = state.tmpHaand.item;
+    for (const slot of SLOT_KEYS) {
+      if (wear[slot]) {
+        el.app.dataset[slot] = wear[slot];
+      } else {
+        delete el.app.dataset[slot];
+      }
     }
   }
 
@@ -1707,8 +2326,21 @@
   }
 
   function renderPanel() {
+    if (state.panelTab === 'jul' && !julTabShown()) state.panelTab = 'trophies';
     for (const tab of el.panel.querySelectorAll('[data-panel-tab]')) {
       tab.setAttribute('aria-selected', String(tab.dataset.panelTab === state.panelTab));
+      if (tab.dataset.panelTab === 'jul') tab.hidden = !julTabShown();
+    }
+    // The Prøv tab is static markup (every demo button with its hint); the others are built here.
+    const trying = state.panelTab === 'proev' && Boolean(el.panelProev);
+    show(el.panelProev, trying);
+    el.panelBody.hidden = trying;
+    if (trying) return;
+    if (state.panelTab === 'jul') {
+      const top = el.panelBody.scrollTop;
+      el.panelBody.replaceChildren(...calendarNodes());
+      el.panelBody.scrollTop = top;
+      return;
     }
     if (!state.pet) {
       el.panelBody.replaceChildren(node('p', 'panel__summary', 'Henter …'));
@@ -1739,8 +2371,15 @@
   }
 
   function celebrateProgress(data) {
-    const news = (data && data.nye) || [];
-    if (!news.length) return;
+    const all = (data && data.nye) || [];
+    if (!all.length) return;
+    // A gift from the Christmas calendar is celebrated by its door (SPEC §23.4) – only the wardrobe learns it.
+    const news = all.filter((n) => n && n.kind !== 'jul');
+    if (!news.length) {
+      if (data.unlocked != null) el.trophyCount.textContent = String(data.unlocked);
+      loadPet();
+      return;
+    }
     if (state.eating) {                 // a food trophy arrives while it eats: party after the meal
       state.laterProgress.push(data);
       return;
@@ -1759,6 +2398,7 @@
 
   el.trophies.addEventListener('click', () => {
     closeTray();
+    closePost();
     if (el.panel.hidden) {
       openPanel();
     } else {
@@ -1783,6 +2423,44 @@
   el.demoCall.addEventListener('click', () => demo(true));
   el.demoParty.addEventListener('click', () => demoNow('/api/levering/demo'));
   el.demoVisit.addEventListener('click', () => demoNow('/api/kontor/demo'));
+  // The fun in the office (SPEC §23.12): every demo sits in the Prøv tab too.
+  on($('demo-halloween'), 'click', () => {
+    state.halloweenDemoUntil = Date.now() + 60e3;
+    funTick();
+    demoNow('/api/kontor/slik/demo');
+  });
+  on($('demo-jul'), 'click', () => {
+    state.julDemo = true;
+    state.julPeek = false;
+    openPanel('jul');
+  });
+  on($('demo-sne'), 'click', () => demoNow('/api/sne/demo'));
+  on($('demo-frokost'), 'click', () => demoNow('/api/kontor/frokost/demo'));
+  on($('demo-vaeddemaal'), 'click', () => demoNow('/api/kontor/vaeddemaal/demo'));
+  on($('demo-spil'), 'click', () => {
+    el.panel.hidden = true;
+    openGame(true);
+  });
+  on($('demo-bad'), 'click', () => demoNow('/api/rod/demo'));
+  on($('demo-nat'), 'click', () => {
+    el.panel.hidden = true;
+    natDemo();
+  });
+  on($('demo-dans'), 'click', () => {
+    el.panel.hidden = true;
+    state.dansDemoUntil = Date.now() + 10e3;
+    updateNat();                                   // awake for the demo, even after fyraften
+    updateDance();
+    setTimeout(() => {
+      updateNat();
+      updateDance();
+    }, 10.2e3);
+  });
+  on($('demo-aar'), 'click', () => {
+    el.panel.hidden = true;
+    openYear(clock().getFullYear());
+  });
+  on($('demo-post'), 'click', () => demoNow('/api/kontor/post/demo'));
   for (const tab of el.panel.querySelectorAll('[data-panel-tab]')) {
     tab.addEventListener('click', () => {
       state.panelTab = tab.dataset.panelTab;
@@ -1790,9 +2468,12 @@
     });
   }
   window.addEventListener('keydown', (event) => {
+    if (state.game && !el.spil.hidden && gameKey(event)) return;
     if (event.key !== 'Escape') return;
     el.panel.hidden = true;
     closeTray();
+    closePost();
+    if (state.game) closeGame();
   });
 
   // ---------------------------------------------------------------- food and hunger (SPEC §18.6)
@@ -1907,6 +2588,7 @@
 
   function openTray() {
     el.panel.hidden = true;
+    closePost();
     renderTray();
     el.tray.hidden = false;
     loadFood().then(() => {
@@ -1942,6 +2624,7 @@
         delete el.app.dataset.spiser;
         delete el.app.dataset.spiseArt;
         state.eating = null;
+        renderHunger();                       // the 🍔 button works again – whoever gave the food
         resolve();
       }, { drik: 5400, drop: 2800 }[food.kind] || 5200);
     });
@@ -2126,6 +2809,13 @@
   }
 
   el.pet.addEventListener('click', () => {
+    if (state.nat === 'sover' && !state.natDemo) {          // woken after fyraften: 30 s, then asleep again
+      state.natWakeUntil = Date.now() + 30e3;
+      updateNat();
+      jump();
+      say('Hva\'? 😴 … Er det ikke fyraften?', 4000);
+      return;
+    }
     jump();
     floatEmoji('💕', 3);
     const today = state.todayS || 0;
@@ -2136,6 +2826,22 @@
       lines.splice(0, lines.length, dream ? `Jeg kunne godt spise ${dream}` : foodSay(state.hunger));
     }
     say(lines[Math.floor(Math.random() * lines.length)], 3500);
+  });
+
+  /** What the right hand holds turns with the arm: .figur__haand gets every animation .arm--right gets
+   *  (widget.css), from the same change – yet the browser may start the two a frame apart (one on the
+   *  compositor, the other not), and the thing would trail the hand. So whenever one of them starts,
+   *  the hand's animation is set to start exactly when the arm's did. */
+  const armRight = el.pet.querySelector('.arm--right');
+  const handGroup = el.pet.querySelector('.figur__haand');
+  function handInStep() {
+    const [arm] = armRight.getAnimations();
+    const [hand] = handGroup.getAnimations();
+    if (arm && hand && arm.animationName === hand.animationName && arm.startTime != null
+        && hand.startTime !== arm.startTime) hand.startTime = arm.startTime;
+  }
+  el.pet.addEventListener('animationstart', (event) => {
+    if (event.target === armRight || event.target === handGroup) handInStep();
   });
 
   // ---------------------------------------------------------------- effects (canvas)
@@ -2238,9 +2944,1435 @@
     window.addEventListener('resize', resize);
     return { start, count: () => parts.length };
   })();
+
+  // ===========================================================================================
+  // Fun in the office (SPEC §23)
+  // ===========================================================================================
+
+  /** Every 15 s, and whenever the settings change: what follows the clock. */
+  function funTick() {
+    newDay();
+    updateNat();
+    updateSeason();
+    updateDance();
+    renderBallade();
+    applyLook();
+    renderHeaderIcons();
+    renderBetCard();
+    renderGameSwitch();
+    greetJul();
+  }
+
+  /** A new day by the widget's clock (a PC left on overnight): the calendar has a new door – or, in
+   *  January, is over. */
+  function newDay() {
+    const day = isoDate(clock());
+    if (state.day === day) return;
+    const first = state.day == null;
+    state.day = day;
+    if (!first && (clock().getMonth() === 11 || state.jul)) loadJul();
+  }
+
+  /** `widget_renderspil` off: no 🎮, and a game that is open closes at once. */
+  function renderGameSwitch() {
+    const on = setting('widget_renderspil');
+    show(el.spilKnap, on && Boolean(renderProgress(state.render)));
+    if (!on && state.game && !state.game.demo) closeGame();
+  }
+
+  function itemName(id) {
+    const item = id && state.pet && Array.isArray(state.pet.items) ? state.pet.items.find((i) => i.id === id) : null;
+    return item ? item.name : id;
+  }
+
+  async function demoAnswer(promise) {
+    try {
+      return await promise;
+    } catch (err) {
+      say(`Øv – ${err.message}`, 5000);
+      return null;
+    }
+  }
+
+  // ---------------------------------------------------------------- Natte-Klippe and the dance (SPEC §23.2)
+  /** data-nat: gaber → doeser → sover after fyraften (the nightcap, yawns, nodding, sleep). A click
+   *  wakes it from its sleep for 30 s; the demo runs through the three. */
+  function updateNat() {
+    const before = state.nat;
+    const fyraften = setting('widget_fyraften', '16:00');
+    const real = natFase(clock(), fyraften);
+    const phase = state.natDemo ? state.natDemo.phase
+      : state.dansDemoUntil > Date.now() ? null                        // the dance demo is awake, whatever the hour
+        : real === 'sover' && state.natWakeUntil > Date.now() ? 'gaber' : real;
+    state.nat = phase;
+    const shown = phase || (state.natEggUntil > Date.now() ? 'gaber' : null);
+    if (shown) {
+      el.app.dataset.nat = shown;
+    } else {
+      delete el.app.dataset.nat;
+    }
+    // Once a day, when it gets tired (also when the widget starts then) – never for a nap that was woken.
+    if ((real === 'gaber' || real === 'doeser') && !state.natDemo && state.ready && firstToday('fyraften')) {
+      pulse('gaab', 1600);
+      say(`Klokken er ${fyraftenLabel(fyraften)} – fyraften! 🏠🥱`, 6000);
+    }
+    if (phase === before) return;
+    scheduleYawn();
+    scheduleNod();
+    updateDance();
+    renderMoodLine();
+  }
+
+  /** A yawn every 4–6 min while it gets tired – with a line when it is not saying something else. */
+  function scheduleYawn() {
+    clearTimeout(state.yawnTimer);
+    state.yawnTimer = 0;
+    if (state.nat !== 'gaber' && state.nat !== 'doeser') return;
+    state.yawnTimer = setTimeout(() => {
+      state.yawnTimer = 0;
+      if ((state.nat === 'gaber' || state.nat === 'doeser') && !state.eating && el.app.dataset.play !== 'out') {
+        pulse('gaab', 1600);
+        if (!state.bubbleTimer) say(YAWN_LINES[Math.floor(Math.random() * YAWN_LINES.length)], 4000);
+      }
+      scheduleYawn();
+    }, (4 + Math.random() * 2) * 60e3);
+  }
+
+  /** Dozing: it nods off and jerks awake every 40–90 s. */
+  function scheduleNod() {
+    clearTimeout(state.nodTimer);
+    state.nodTimer = 0;
+    if (state.nat !== 'doeser') return;
+    state.nodTimer = setTimeout(() => {
+      state.nodTimer = 0;
+      if (state.nat === 'doeser' && !state.eating) pulse('nikker', 1200);
+      scheduleNod();
+    }, (40 + Math.random() * 50) * 1000);
+  }
+
+  /** "😴 Prøv Natte-Klippe": a yawn, dozing and sleep in 13 s. */
+  function natDemo() {
+    if (state.natDemo) clearTimeout(state.natDemo.timer);
+    const steps = [['gaber', 4000], ['doeser', 4000], ['sover', 5000]];
+    let i = 0;
+    const next = () => {
+      if (i >= steps.length) {
+        state.natDemo = null;
+        updateNat();
+        return;
+      }
+      const [phase, ms] = steps[i];
+      i += 1;
+      state.natDemo = { phase, timer: after(ms, next) };
+      updateNat();
+      if (phase === 'gaber') {
+        pulse('gaab', 1600);
+        say(`Gaaab … sådan bliver jeg efter fyraften kl. ${fyraftenLabel(setting('widget_fyraften', '16:00'))} 🥱`, 3800);
+      } else if (phase === 'doeser') {
+        pulse('nikker', 1200);
+      } else {
+        say('💤 … og så sover jeg. Godnat!', 4500);
+      }
+    };
+    next();
+  }
+
+  /** data-dans while you look for music (the bucket "musik"), to 120 BPM – not asleep, except in the demo. */
+  function updateDance() {
+    const s = state.status || {};
+    const real = setting('widget_dans') && s.state === 'recording' && s.bucket === 'musik' && state.nat !== 'sover';
+    const dancing = (real || state.dansDemoUntil > Date.now()) && !state.eating;
+    if (dancing === state.dans) return;
+    state.dans = dancing;
+    if (!dancing) {
+      delete el.app.dataset.dans;
+      return;
+    }
+    el.app.dataset.dans = '';
+    if (Date.now() - state.dansLineAt > 10 * 60e3) {
+      state.dansLineAt = Date.now();
+      say(DANCE_LINES[Math.floor(Math.random() * DANCE_LINES.length)], 4000);
+    }
+  }
+
+  // ---------------------------------------------------------------- Halloween (SPEC §23.3)
+  function currentSeason() {
+    if (state.halloweenDemoUntil > Date.now()) return 'halloween';
+    return setting('widget_saeson') ? seasonFor(clock()) : null;
+  }
+
+  /** data-saeson and – in Halloween week – data-kostume (this PC's costume this year). */
+  function updateSeason() {
+    const season = currentSeason();
+    const before = state.season;
+    state.season = season;
+    if (season) {
+      el.app.dataset.saeson = season;
+    } else {
+      delete el.app.dataset.saeson;
+    }
+    const s = state.saeson || {};
+    const kostume = season !== 'halloween' ? null : KOSTUMER.includes(s.kostume) ? s.kostume
+      : KOSTUMER.includes(s.kostume_aar) ? s.kostume_aar : null;
+    if (kostume) {
+      el.app.dataset.kostume = kostume;
+    } else {
+      delete el.app.dataset.kostume;
+    }
+    if (season === 'halloween' && state.ready && !(state.halloweenDemoUntil > Date.now()) && firstToday('halloween')) {
+      say('Bøh! 🎃 Glædelig Halloween', 5000);
+    }
+    if (season === before) return;
+    if (season === 'jul') loadJul();
+    renderHeaderIcons();
+    reportLook();
+  }
+
+  /** data-ballade: "hat" (the hat is stolen), "toiletpapir", or both after a second prank – till midnight
+   *  (pet_saeson), or a prank just played (a demo's 10 s) until the server's word is here. */
+  function balladeNow() {
+    const now = Date.now();
+    const local = state.balladeLocal && state.balladeLocal.until > now ? state.balladeLocal : null;
+    const b = state.saeson && state.saeson.ballade;
+    const server = b && !(b.til && b.til * 1000 <= now) ? b : null;
+    return balladeTokens({ hat: Boolean((local && local.hat) || (server && server.hat)),
+      toiletpapir: Boolean((local && local.toiletpapir) || (server && server.toiletpapir)) }) || null;
+  }
+
+  function renderBallade() {
+    const kind = balladeNow();
+    if (kind) {
+      el.app.dataset.ballade = kind;
+    } else {
+      delete el.app.dataset.ballade;
+    }
+  }
+
+  /** GET /api/pet/saeson and SSE `pet_saeson`: the costume, a prank played on Klippe, a hat it won. */
+  function applySaeson(data) {
+    if (!data || typeof data !== 'object') return;
+    state.saeson = data;
+    updateSeason();
+    renderBallade();
+    applyLook();
+  }
+
+  async function loadSaeson() {
+    try {
+      const data = await fresh('pet_saeson', '/api/pet/saeson');
+      if (data) applySaeson(data);
+    } catch { /* not there (yet) */ }
+  }
+
+  function userHere() {
+    const mood = moodFor(state.status);
+    return mood === 'working' || mood === 'waiting';
+  }
+
+  /** Trick or treat: the guest in its costume asks for a Booster; 25 s to give it one – else a prank
+   *  (when you are here at all, or in the demo). A guest that had to wait in the queue (another guest,
+   *  a meal, the render game) has less time left – the server takes the answer 60 s after it came;
+   *  with under 8 s left it has gone on and only Klippe tells. */
+  function startSlik(data, waited = 0) {
+    const total = slikSeconds(data.til_s, waited);
+    if (total < SLIK_MIN_S) {
+      say(`🎃 ${shorten(data.navn, 20) || 'Klippe'} fra ${shorten(data.pc, 15) || 'kontoret'} var forbi efter slik, mens du havde travlt`,
+        6000);
+      nextOnStage();
+      return;
+    }
+    el.panel.hidden = true;                        // nothing may cover the guest and its card
+    closeTray();
+    closePost();
+    const { guest, bubble } = makeGuest(data);
+    const run = { data, guest, bubble, timers: [], answered: false, countdown: 0, deadline: 0, total };
+    state.visit = run;
+    state.slik = run;
+    walk(guest, -GUEST_PX - 20, 0, 1400);
+    later(run, 1400, () => {
+      bubble.hidden = false;
+      jump();
+    });
+    if (!(data.demo || userHere()) || !el.slik) {
+      later(run, 3200, () => {
+        bubble.textContent = 'Her er ingen hjemme … 👻';
+      });
+      later(run, 5600, () => leaveSlik(run));
+      return;
+    }
+    later(run, 1700, () => showSlikCard(run));
+  }
+
+  function showSlikCard(run) {
+    const total = Math.max(5, run.total || 25);
+    run.deadline = Date.now() + total * 1000 * state.tempo;
+    el.slikTekst.textContent = slikLine(run.data);
+    el.slikGiv.disabled = false;
+    el.slik.hidden = false;
+    requestAnimationFrame(() => fitGuest(run.guest));   // the card took room from the stage: stay on the floor
+    tickSlik(run);
+  }
+
+  function tickSlik(run) {
+    if (state.slik !== run || run.answered) return;
+    const left = (run.deadline - Date.now()) / 1000 / state.tempo;
+    if (el.slikTid) el.slikTid.textContent = slikCountdown(left);
+    if (left <= 0) {
+      if (run.data.demo || userHere()) {
+        answerSlik(run, 'ballade');
+      } else {
+        run.answered = true;
+        show(el.slik, false);
+        run.bubble.textContent = 'Her er ingen hjemme … 👻';
+        leaveSlik(run, 2200);
+      }
+      return;
+    }
+    run.countdown = setTimeout(() => tickSlik(run), 250);
+  }
+
+  /** "slik": a Booster for the guest. "ballade": no Booster in time – it steals the hat (or wraps
+   *  Klippe in toilet paper). */
+  async function answerSlik(run, svar) {
+    if (!run || run.answered) return;
+    run.answered = true;
+    clearTimeout(run.countdown);
+    show(el.slik, false);
+    requestAnimationFrame(() => fitGuest(run.guest));
+    let answer;
+    try {
+      answer = await send('POST', '/api/kontor/slik', { id: run.data.id, svar });
+    } catch (err) {
+      say(`Øv – ${err.message}`, 5000);
+      leaveSlik(run, 300);
+      return;
+    }
+    if (state.visit !== run) return;
+    run.bubble.hidden = false;
+    if (svar === 'slik') {
+      run.bubble.textContent = 'Tak! 🍬';
+      cheerGuest(run.guest);
+      floatEmoji('🍬', 4);
+      say('Glædelig Halloween! 🎃', 4000);
+      leaveSlik(run, 2600);
+      return;
+    }
+    const prank = (answer && answer.ballade) || { hat: null, toiletpapir: true };
+    const demo = Boolean(answer && answer.demo);
+    run.bubble.textContent = 'Ballade! 😈';
+    if (prank.hat) run.guest.dataset.hat = prank.hat;          // it leaves wearing Klippe's hat
+    const ms = demo ? 10e3 : 60e3;                              // a real prank: pet_saeson keeps it till midnight
+    state.balladeLocal = { hat: Boolean(prank.hat), toiletpapir: Boolean(prank.toiletpapir || !prank.hat),
+      until: Date.now() + ms };
+    renderBallade();
+    setTimeout(renderBallade, ms + 100);
+    cheerGuest(run.guest);
+    pulse('nej', 700);
+    say(balladeLine(run.data.navn, prank, itemName(prank.hat)), 6000, true);
+    leaveSlik(run, 3000);
+  }
+
+  function cheerGuest(guest) {
+    const svg = guest.querySelector('svg');
+    if (!svg) return;
+    svg.classList.remove('jump', 'clap');
+    void svg.getBoundingClientRect();
+    svg.classList.add('jump', 'clap');
+    guest.classList.add('party');
+    setTimeout(() => {
+      svg.classList.remove('jump', 'clap');
+      guest.classList.remove('party');
+    }, 1000);
+  }
+
+  function leaveSlik(run, delay = 0) {
+    clearTimeout(run.countdown);
+    if (state.slik === run) show(el.slik, false);
+    run.timers.push(setTimeout(() => {
+      if (state.visit !== run) return;
+      run.bubble.hidden = true;
+      walk(run.guest, 0, -GUEST_PX - 20, 1400);
+      run.timers.push(setTimeout(() => {
+        if (state.slik === run) state.slik = null;
+        endVisit(run);
+      }, 1500 * state.tempo));
+    }, delay * state.tempo));
+  }
+
+  /** SSE `slik_svar`: what a colleague gave our trick-or-treating Klippe – a Booster (it drinks it) or
+   *  its hat (pet_saeson puts it on). */
+  function slikAnswered(d) {
+    if (!d || typeof d !== 'object') return;
+    say(slikSvarLine(d, itemName(d.hat)), 6000);
+    // (not in the middle of a meal you are giving it – then only the words)
+    const drinks = d.type === 'godbid' && hatchedFood() && !state.eating && !state.feeding && !REDUCED
+      && el.app.dataset.play !== 'out';
+    if (drinks) {
+      const booster = state.menu.find((m) => m.id === 'booster') || { id: 'booster', name: 'Faxe Kondi Booster', kind: 'drik' };
+      eat(booster).then(() => {
+        jump();
+        floatEmoji('🍬', 3);
+      });
+    } else {
+      jump();
+      floatEmoji(d.type === 'godbid' ? '🍬' : '😈', 3);
+    }
+  }
+
+  // ---------------------------------------------------------------- Christmas (SPEC §23.4)
+  /** December by the widget's clock and the server's word (a calendar loaded on 31 Dec is not open in January). */
+  function julActive() {
+    return Boolean(state.jul && state.jul.aktiv) && clock().getMonth() === 11;
+  }
+
+  /** The calendar shows as a demo ("Smugkig") outside December, after "Prøv julekalenderen". */
+  function calendarDemo() {
+    return state.julDemo && !julActive();
+  }
+
+  function julTabShown() {
+    return state.julDemo || (setting('widget_saeson') && clock().getMonth() === 11);
+  }
+
+  /** GET /api/pet/jul, SSE `pet_jul` and an opened door: the 24 doors, the header's count. */
+  function applyJul(data) {
+    if (!data || typeof data !== 'object' || !Array.isArray(data.laager)) return;
+    state.jul = data;
+    renderHeaderIcons();
+    if (!el.panel.hidden && state.panelTab === 'jul') renderPanel();
+    greetJul();
+  }
+
+  /** Once a day in December, when a door is ready. */
+  function greetJul() {
+    const jul = state.jul;
+    if (julActive() && jul.uaabnede > 0 && setting('widget_saeson') && state.ready && firstToday('jul-laage')) {
+      say('🎄 Dagens låge i julekalenderen venter – tryk på 🎄 øverst', 6000);
+    }
+  }
+
+  async function loadJul() {
+    try {
+      const data = await fresh('pet_jul', '/api/pet/jul');
+      if (data) applyJul(data);
+    } catch { /* not there (yet) */ }
+  }
+
+  function calendarNodes() {
+    const demo = calendarDemo();
+    const jul = state.jul || {};
+    let summary;
+    if (demo) {
+      summary = 'Smugkig – i december åbner du én låge om dagen. Intet bliver gemt.';
+    } else if (!jul.aktiv) {
+      summary = 'Julekalenderen åbner den 1. december 🎄';
+    } else {
+      const ready = jul.uaabnede || 0;
+      summary = `🎄 Julekalender ${jul.aar || ''} · ${ready ? `${ready} ${ready === 1 ? 'låge er klar' : 'låger er klar'}` : 'Ny låge i morgen'}`;
+    }
+    const grid = node('div', 'kalender');
+    for (let nr = 1; nr <= 24; nr += 1) {
+      const door = demo ? { nr, aaben: Boolean(state.julDemoOpen[nr]), kan: true, gave: state.julDemoOpen[nr] || null }
+        : (Array.isArray(jul.laager) && jul.laager.find((d) => d && d.nr === nr)) || { nr, aaben: false, kan: false, gave: null };
+      const view = doorView(door, jul.dag, demo);
+      const button = node('button', `laage ${view.klasse}`);
+      button.type = 'button';
+      button.dataset.nr = String(nr);
+      button.append(node('span', 'laage__nr', String(nr)));
+      if (view.ikon) button.append(node('span', 'laage__gave', view.ikon));
+      button.append(node('span', 'laage__tekst', view.tekst));
+      button.disabled = view.klasse === 'is-laast';
+      button.title = door.aaben && door.gave ? `${door.gave.name}${door.gave.tekst ? ` – ${door.gave.tekst}` : ''}`
+        : view.klasse === 'is-klar' ? `Åbn låge ${nr}` : view.tekst;
+      button.addEventListener('click', () => openDoor(nr, button));
+      grid.append(button);
+    }
+    return [node('p', 'panel__summary', summary), grid];
+  }
+
+  /** A ready door swings open (POST /api/pet/jul, or the demo's), shows its gift a moment – then the
+   *  panel closes so Klippe can be seen with it. An opened door says its gift again. */
+  async function openDoor(nr, button) {
+    if (state.julOpening) return;
+    const demo = calendarDemo();
+    const known = demo ? state.julDemoOpen[nr]
+      : ((state.jul && state.jul.laager.find((d) => d.nr === nr && d.aaben)) || {}).gave;
+    if (known) {
+      el.panel.hidden = true;
+      say(giftLine(known, nr), known.kind === 'vits' ? 9000 : 4500);
+      return;
+    }
+    state.julOpening = true;
+    button.classList.add('is-aabner');
+    let answer;
+    try {
+      answer = await send('POST', demo ? '/api/pet/jul/demo' : '/api/pet/jul', { nr });
+    } catch (err) {
+      state.julOpening = false;
+      button.classList.remove('is-aabner');
+      el.panel.hidden = true;
+      say(`Øv – ${err.message}`, 5000);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 900 * state.tempo));
+    state.julOpening = false;
+    const gave = answer && answer.gave;
+    if (demo) {
+      state.julDemoOpen[nr] = gave;
+    } else if (answer && answer.jul) {
+      applyJul(answer.jul);
+    }
+    if (!el.panel.hidden && state.panelTab === 'jul') renderPanel();
+    setTimeout(() => {
+      el.panel.hidden = true;
+      revealGift(gave, nr, demo);
+    }, 1100 * state.tempo);
+  }
+
+  function revealGift(gave, nr, demo) {
+    if (!gave) return;
+    if (demo && !state.julPeek) {
+      state.julPeek = true;
+      say('Smugkig – i december åbner du én låge om dagen 🎄', 4500);
+    }
+    if (nr === 24 || gave.id === 'julestjerne') {
+      celebrate(giftLine(gave, nr), 'fireworks', 4);
+      say('Glædelig jul! 🎄', 5000);
+    } else if (gave.kind === 'ting') {
+      celebrate(giftLine(gave, nr), 'confetti', 3);
+    } else if (gave.kind === 'mad') {
+      jump();
+      floatEmoji(giftIcon(gave), 3);
+      say(giftLine(gave, nr), 4500);
+    } else if (gave.kind === 'sne') {
+      floatEmoji('❄️', 4);
+      say(giftLine(gave, nr), 5000);
+    } else {
+      jump();
+      say(giftLine(gave, nr), 9000);                  // a Christmas joke
+    }
+  }
+
+  /** SSE `sne`: snow on the monitor – and a snowstorm in the box meanwhile. */
+  function snowStorm(seconds) {
+    clearTimeout(state.snowTimer);
+    el.app.dataset.snestorm = '';
+    state.snowTimer = setTimeout(() => {
+      delete el.app.dataset.snestorm;
+      state.snowTimer = 0;
+    }, Math.max(1, Math.min(180, Number(seconds) || 20)) * 1000);
+  }
+
+  // ---------------------------------------------------------------- the bath (SPEC §23.6)
+  /** GET /api/rod and SSE `rod`: loose files in the project folder's root make Klippe dirty; the
+   *  event that ends the mess (`bad`) gives it a foam bath. */
+  function applyRod(rod, loaded = false) {
+    if (!rod || typeof rod !== 'object') return;
+    state.rod = rod;
+    const enabled = setting('widget_bad');
+    if (rod.bad && !loaded && enabled) {
+      state.bathWaiting = rod;
+      nextOnStage();
+      return;                                    // the bath washes the dirt off
+    }
+    if (!state.bath) renderDirt();
+    const line = enabled && !loaded ? dirtLine(rod) : null;
+    if (line && firstToday(`rod:${String(rod.mappe || rod.projekt || '').toLowerCase()}`)) say(line, 8000);
+  }
+
+  function renderDirt() {
+    const level = dirtLevel(state.rod, setting('widget_bad'));
+    if (level) {
+      el.app.dataset.beskidt = level;
+    } else {
+      delete el.app.dataset.beskidt;
+    }
+  }
+
+  async function loadRod() {
+    let rod;
+    try {
+      rod = await fresh('rod', '/api/rod');
+    } catch {
+      return;
+    }
+    if (!rod) return;                          // a newer `rod` event came meanwhile
+    applyRod(rod, true);
+    const line = setting('widget_bad') ? dirtLine(rod) : null;      // said once per project and day
+    if (line && firstToday(`rod:${String(rod.mappe || rod.projekt || '').toLowerCase()}`)) say(line, 8000);
+  }
+
+  /** ~8 s: the tub slides in, Klippe scrubs in the foam, the dirt is gone – sparkles. */
+  function startBath() {
+    const run = { timers: [] };
+    state.bath = run;
+    el.app.dataset.bad = '';
+    say('🛁 Endelig – skumbad!', 3500);
+    run.timers.push(after(4000, renderDirt));
+    run.timers.push(after(6800, () => {
+      floatEmoji('✨', 4);
+      say('Ahh … rent! ✨ Tak, fordi du ryddede op', 5000);
+    }));
+    run.timers.push(after(8200, () => {
+      delete el.app.dataset.bad;
+      if (state.bath === run) state.bath = null;
+      renderDirt();
+      nextOnStage();
+    }));
+  }
+
+  // ---------------------------------------------------------------- lunch (SPEC §23.12)
+  /** SSE `frokost`: Klippe rings the bell, runs out through the door and is at lunch till you are back. */
+  function startLunch(ev) {
+    if (!ev || typeof ev !== 'object') return;
+    const line = lunchLine(ev);
+    if (state.lunch || el.app.dataset.play === 'out' || state.eating || state.fest || state.visit || state.bath) {
+      say(line, 5000);                         // busy: only the words
+      return;
+    }
+    const run = { ev, timers: [], phase: null, ude: 0 };
+    state.lunch = run;
+    const step = (ms, fn) => run.timers.push(after(ms, () => {
+      if (state.lunch === run) fn();
+    }));
+    lunchPhase(run, 'ringer');
+    say(line, 4500, true);
+    if (hatchedFood() && (state.hunger === 'sulten' || state.hunger === 'skrubsulten')) step(1500, () => say('Endelig! 🌯', 3000));
+    step(2500, () => lunchPhase(run, 'loeber'));
+    step(4000, () => {
+      run.ude = Date.now();
+      lunchPhase(run, 'ude');
+      run.timers.push(setTimeout(comeHome, ev.demo ? 8000 * state.tempo : 45 * 60e3));
+    });
+  }
+
+  function lunchPhase(run, phase) {
+    run.phase = phase;
+    el.app.dataset.frokost = phase;
+    show(el.frokostSkilt, phase === 'ude');
+    renderMoodLine();
+  }
+
+  /** Back from lunch – if Klippe is out. */
+  function comeHome() {
+    const run = state.lunch;
+    if (!run || run.phase !== 'ude') return;
+    run.timers.forEach(clearTimeout);
+    run.timers = [];
+    lunchPhase(run, 'tilbage');
+    say('Mæt og glad! 😋', 3500);
+    run.timers.push(after(1500, () => endLunch(run)));
+  }
+
+  function endLunch(run) {
+    run.timers.forEach(clearTimeout);
+    if (state.lunch !== run) return;
+    state.lunch = null;
+    delete el.app.dataset.frokost;
+    show(el.frokostSkilt, false);
+    renderMoodLine();
+    nextOnStage();
+  }
+
+  /** You work again (≥ 3 min after Klippe left): it comes back. */
+  function lunchCheck(mood) {
+    const run = state.lunch;
+    if (run && run.phase === 'ude' && mood === 'working' && Date.now() - run.ude >= 3 * 60e3) comeHome();
+  }
+
+  async function ringLunch() {
+    try {
+      await send('POST', '/api/kontor/frokost', {});
+    } catch (err) {
+      say(`Øv – ${err.message}`, 5000);
+    }
+  }
+
+  // ---------------------------------------------------------------- Klippe-post (SPEC §23.12)
+  /** The colleagues seen now – and the one whose post is being answered ("Svar"), even when it is not
+   *  about (the demo's DEMO-PC); only while that answer is being written. */
+  function postPeers() {
+    const peers = state.peers.map((p) => ({ pc: p.pc, navn: p.navn }));
+    const answering = state.postSvarTil;
+    if (answering && !peers.some((p) => p.pc === answering)) peers.push({ pc: answering, navn: null });
+    return peers;
+  }
+
+  function openPost(til = null) {
+    if (!el.postPanel) return;
+    el.panel.hidden = true;
+    closeTray();
+    state.postSvarTil = til || null;
+    if (til) state.postTil = til;
+    setPostError('');
+    renderPost();
+    el.postPanel.hidden = false;
+    loadKontor();
+  }
+
+  /** The panel closes: an answer's recipient who is not about is not kept (never DEMO-PC by mistake). */
+  function closePost() {
+    show(el.postPanel, false);
+    state.postSvarTil = null;
+    if (state.postTil && !state.peers.some((p) => p.pc === state.postTil)) state.postTil = null;
+  }
+
+  function setPostError(text) {
+    if (!el.postFejl) return;
+    el.postFejl.textContent = text;
+    el.postFejl.hidden = !text;
+  }
+
+  function renderPost() {
+    if (!el.postPanel) return;
+    const peers = postPeers();
+    if (!peers.some((p) => p.pc === state.postTil)) state.postTil = peers.length ? peers[0].pc : null;
+    if (el.postTil) {
+      el.postTil.replaceChildren(...(peers.length ? peers.map((p) => {
+        const label = p.navn ? `${shorten(p.navn, 20)} (${shorten(p.pc, 15)})` : shorten(p.pc, 15);
+        const button = node('button', 'post__modtager', label);
+        button.type = 'button';
+        button.dataset.pc = p.pc;
+        button.setAttribute('aria-pressed', String(p.pc === state.postTil));
+        button.addEventListener('click', () => {
+          state.postTil = p.pc;
+          renderPost();
+        });
+        return button;
+      }) : [node('p', 'post__ingen', 'Ingen kolleger er på lige nu')]));
+    }
+    if (el.postHurtig && !el.postHurtig.childElementCount) {
+      el.postHurtig.replaceChildren(...POST_NOTES.map((text) => {
+        const button = node('button', 'post__hurtig', text);
+        button.type = 'button';
+        button.addEventListener('click', () => {
+          if (el.postTekst) el.postTekst.value = text;
+          setPostError('');
+        });
+        return button;
+      }));
+    }
+    if (el.postSend) el.postSend.disabled = !state.postTil;
+  }
+
+  async function sendPost() {
+    const tekst = (el.postTekst ? el.postTekst.value : '').trim();
+    if (!state.postTil) {
+      setPostError('Vælg en kollega');
+      return;
+    }
+    if (!tekst) {
+      setPostError('Skriv en besked');
+      return;
+    }
+    if (tekst.length > POST_MAX) {
+      setPostError(`Beskeden er for lang (højst ${POST_MAX} tegn)`);
+      return;
+    }
+    setPostError('');
+    el.postSend.disabled = true;
+    try {
+      await send('POST', '/api/kontor/post', { til: state.postTil, tekst });
+      if (el.postTekst) el.postTekst.value = '';
+      closePost();
+    } catch (err) {
+      setPostError(err.message);
+    } finally {
+      el.postSend.disabled = !state.postTil;
+    }
+  }
+
+  /** SSE `post_sendt`: Klippe walks out with the envelope and comes back. */
+  function postSent(d) {
+    const name = shorten(d && (d.navn_til || d.til), 20) || 'kollegaen';
+    if (stageBusy() || state.visit || state.fest || state.lunch || el.app.dataset.post) {
+      say(`✉️ Posten er sendt til ${name}!`, 4000);
+      return;
+    }
+    say(`✉️ Jeg løber over til ${name} med posten!`, 4000);
+    tempAttr('post', 6000, 'ud');
+    after(6200, () => say('Posten er afleveret! 📬', 3500));
+  }
+
+  // ---------------------------------------------------------------- render bets (SPEC §23.12)
+  /** SSE `vaeddemaal` (and GET /api/kontor/vaeddemaal with `loaded`): one bet's state. `previous`: the
+   *  bets known before (a reload builds a new map from what the server still lists). */
+  function applyBet(bet, loaded = false, previous = state.bets) {
+    if (!bet || typeof bet !== 'object' || bet.pc == null || bet.vid == null) return;
+    const key = betKey(bet);
+    const old = previous.get(key);
+    const nowS = Date.now() / 1000;
+    const ended = bet.status === 'slut' || bet.status === 'aflyst';
+    const next = { ...bet, endedAt: ended ? (old && old.endedAt) || nowS : null };
+    if (old && old.mit_gaet && !next.mit_gaet) next.mit_gaet = old.mit_gaet;
+    state.bets.set(key, next);
+    if (ended && !state.betsCelebrated.has(key)) {
+      state.betsCelebrated.add(key);
+      const line = betResult(next);
+      if (!loaded && line) {
+        if (next.resultat && next.resultat.mig) {
+          celebrate(line, 'fireworks', 4);
+        } else {
+          say(line, 7000);
+        }
+      }
+    }
+    if (!old && !loaded && next.status === 'aaben' && !next.egen && setting('widget_vaeddemaal')) {
+      jump();
+      say('🎲 Render-væddemål! Hvornår er den færdig?', 4000);
+    }
+    renderBetCard();
+  }
+
+  /** What the server lists now replaces what this page knew (a bet whose end was lost goes); what was
+   *  ended or guessed here is kept for the bets still listed. */
+  async function loadBets() {
+    let data;
+    try {
+      data = await fresh('vaeddemaal', '/api/kontor/vaeddemaal');
+    } catch {
+      return;                                  // the office has not started
+    }
+    if (!data) return;                         // a newer bet event came meanwhile
+    const previous = state.bets;
+    state.bets = new Map();
+    for (const bet of data.vaeddemaal || []) applyBet(bet, true, previous);
+    renderBetCard();
+  }
+
+  /** The card: the newest open bet (quick choices, a time field, "Gæt"), what you guessed, the result. */
+  function renderBetCard() {
+    if (!el.vm) return;
+    const nowS = Date.now() / 1000;
+    for (const [key, b] of state.bets) {
+      if ((b.endedAt && nowS - b.endedAt >= 120) || betStale(b, nowS)) state.bets.delete(key);
+    }
+    const bet = setting('widget_vaeddemaal') ? pickBet([...state.bets.values()], nowS) : null;
+    el.vm.hidden = !bet;
+    if (!bet) return;
+    const key = betKey(bet);
+    el.vm.dataset.status = bet.status;
+    el.vm.dataset.bet = key;
+    const result = betResult(bet);
+    const guessing = bet.status === 'aaben' && (!bet.mit_gaet || state.betEdit === key);
+    if (el.vmTitel) el.vmTitel.textContent = result || betTitle(bet);
+    show(el.vmValg, guessing);
+    show(el.vmTid && el.vmTid.parentElement !== el.vm ? el.vmTid.parentElement : el.vmTid, guessing);   // "Eller kl. [tid] Gæt"
+    show(el.vmGaet, guessing);
+    if (guessing && el.vmValg) {
+      const choices = guessChoices(Date.now());
+      if (!state.betChoice || state.betChoice.key !== key || state.betChoice.at <= nowS) {
+        state.betChoice = { key, at: choices[1].at };
+      }
+      el.vmValg.replaceChildren(...choices.map((c) => {
+        const button = node('button', 'vm__valg', c.label);
+        button.type = 'button';
+        button.dataset.at = String(c.at);
+        button.title = `Om ca. ${c.min} min`;
+        button.setAttribute('aria-pressed', String(c.at === state.betChoice.at));
+        button.addEventListener('click', () => {
+          state.betChoice = { key, at: c.at };
+          if (el.vmTid) el.vmTid.value = c.label;
+          renderBetCard();
+        });
+        return button;
+      }));
+      if (el.vmTid && document.activeElement !== el.vmTid) el.vmTid.value = clockLabel(state.betChoice.at);
+    }
+    const status = result ? '' : bet.mit_gaet || bet.status !== 'aaben' ? betStatus(bet, nowS) : '';
+    if (el.vmStatus) {
+      el.vmStatus.textContent = status;
+      el.vmStatus.hidden = !status;
+      el.vmStatus.title = bet.status === 'aaben' && bet.mit_gaet ? 'Klik for at skifte dit gæt' : '';
+    }
+  }
+
+  async function placeGuess() {
+    const bet = state.bets.get(el.vm.dataset.bet);
+    if (!bet) return;
+    const at = guessFromField(el.vmTid ? el.vmTid.value : '', Date.now()) || (state.betChoice && state.betChoice.at);
+    if (!at) return;
+    el.vmGaet.disabled = true;
+    try {
+      await send('POST', '/api/kontor/gaet', { pc: bet.pc, vid: bet.vid, tid: at });
+      const now = state.bets.get(betKey(bet));
+      if (now) now.mit_gaet = at;
+      state.betEdit = null;
+      jump();
+      say(`🎲 Dit gæt: ${clockLabel(at)} – held og lykke!`, 4000);
+    } catch (err) {
+      say(`Øv – ${err.message}`, 5000);
+    } finally {
+      el.vmGaet.disabled = false;
+      renderBetCard();
+    }
+  }
+
+  // ---------------------------------------------------------------- easter eggs (SPEC §23.8)
+  /** SSE `paaskeaeg`: one waits while Klippe is busy (≤ 20 s). */
+  function easterEgg(data) {
+    const ord = data && data.ord;
+    if (!eggPlan(ord)) return;
+    state.eggWaiting = { ord, at: Date.now() };
+    nextOnStage();
+  }
+
+  function runEgg(ord) {
+    const plan = eggPlan(ord, clock());
+    if (!plan) return;
+    if (plan.celebrate) {
+      celebrate(plan.line, 'confetti', 2.5);
+      return;
+    }
+    if (plan.cat) {
+      catCameo();
+      return;
+    }
+    if (plan.haand) {
+      state.tmpHaand = { item: plan.haand, until: Date.now() + plan.ms };
+      applyLook();
+      setTimeout(applyLook, plan.ms + 50);
+    }
+    if (plan.attr === 'snestorm') {
+      snowStorm(plan.ms / 1000);
+    } else if (plan.attr) {
+      tempAttr(plan.attr, plan.ms);
+    }
+    if (plan.energi) {
+      el.app.dataset.energi = plan.energi;
+      setTimeout(renderHunger, plan.ms);
+    }
+    if (plan.nat) {
+      state.natEggUntil = Date.now() + plan.ms;
+      pulse('gaab', 1600);
+      updateNat();
+      setTimeout(updateNat, plan.ms + 50);
+    }
+    jump();
+    say(plan.line, Math.max(3000, Math.min(plan.ms, 6000)), true);      // with the pose, not after the queue
+  }
+
+  /** "festkat": the party cat comes in, spins once and goes. */
+  function catCameo() {
+    if (state.cameo || state.fest) return;
+    const run = { timers: [], cat: null };
+    state.cameo = run;
+    catEnters(run, festkat(), 1700);
+    say('Mjav! 🐱', 3000);
+    run.timers.push(after(5200, () => catLeaves(run)));
+    run.timers.push(after(6700, () => {
+      stopCat(run);
+      if (state.cameo === run) state.cameo = null;
+    }));
+  }
+
+  // ---------------------------------------------------------------- the header, memories, the year (SPEC §23.9, §23.11)
+  function renderHeaderIcons() {
+    const now = clock();
+    show(el.frokostKnap, setting('widget_frokost') && setting('widget_kontor') && lunchTime(now));
+    show(el.postKnap, setting('widget_post') && setting('widget_kontor') && state.peers.length > 0);
+    show(el.julKnap, setting('widget_saeson') && now.getMonth() === 11);
+    if (el.julAntal) {
+      const ready = (julActive() && state.jul.uaabnede) || 0;
+      el.julAntal.textContent = String(ready);
+      el.julAntal.hidden = !ready;
+    }
+    const year = yearInReview(now);
+    const yearOn = setting('widget_aarsrapport') && year != null;
+    show(el.aarKnap, yearOn);
+    if (el.aarKnap && year != null) el.aarKnap.title = `Klippet ${year} – din årsoversigt`;
+    if (yearOn && state.ready) {
+      const data = memory();
+      if (data.aarSagt !== year) {
+        data.aarSagt = year;
+        remember(data);
+        say(`🎬 Dit Klippet ${year} er klar! Tryk på 🎬 øverst`, 7000);
+      }
+    }
+  }
+
+  async function openYear(year) {
+    try {
+      await send('POST', '/api/aar/aabn', { aar: year });
+      say(`🎬 Klippet ${year} åbner i din browser`, 4500);
+    } catch (err) {
+      say(`Øv – ${err.message}`, 5000);
+    }
+  }
+
+  /** Once a day: a memory from the projects (GET /api/minder). */
+  async function showMemory() {
+    if (!setting('search_minder') || clock().getHours() < 6) return;
+    let data;
+    try {
+      data = await get('/api/minder');
+    } catch {
+      return;
+    }
+    const line = memoryLine(data && Array.isArray(data.minder) ? data.minder[0] : null);
+    if (line && firstToday('minde')) say(line, 9000);
+  }
+
+  // ---------------------------------------------------------------- the render game (SPEC §23.10)
+  /** The overlay: a round starts on a click (or Space); a demo is one round. */
+  function openGame(demo = false) {
+    if (!el.spil || !el.spilCanvas) return;
+    if (!demo && !state.render) {
+      say('Render-spillet kan kun spilles, mens Resolve renderer 🎬', 4500);
+      return;
+    }
+    if (state.game) closeGame();
+    el.panel.hidden = true;
+    closeTray();
+    closePost();
+    const css = getComputedStyle(el.app);
+    const colour = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
+    state.game = { demo, g: null, raf: 0, last: 0, running: false, ended: false, rounds: 0, closeTimer: 0, pops: [],
+      submitted: false, unit: 1, ratio: 1, wUnits: 320,
+      look: { body: colour('--body', '#2c3440'), edge: colour('--body-edge', '#46536a'),
+        dark: colour('--stripe-dark', '#1b1b1d'), light: colour('--stripe-light', '#f3efe6') } };
+    el.spil.hidden = false;
+    if (demo) {
+      el.spil.dataset.demo = '';
+    } else {
+      delete el.spil.dataset.demo;
+    }
+    gameMessage(demo ? 'Prøverunde! Hop over klippefejlene og saml filmruder – klik eller tryk Mellemrum'
+      : 'Hop over klippefejlene og saml filmruder – klik eller tryk Mellemrum');
+    if (el.spilStart) {
+      el.spilStart.textContent = '▶ Start';
+      el.spilStart.hidden = false;
+    }
+    sizeGame();
+    gameRender(state.render ? renderProgress(state.render) : null);
+    renderGameStats();
+    loadGameState();
+    drawGame();
+  }
+
+  function closeGame() {
+    const G = state.game;
+    if (!G) return;
+    clearTimeout(G.closeTimer);
+    cancelAnimationFrame(G.raf);
+    if (G.running && G.g && !G.demo) submitScore(G, G.g.score);
+    G.running = false;
+    state.game = null;
+    show(el.spil, false);
+    nextOnStage();
+  }
+
+  /** Units to pixels: the course is at least GAME.w units wide (time to see a klippefejl coming) and
+   *  GAME.h high; a taller canvas gets more sky – the track stays at the bottom. */
+  function sizeGame() {
+    const G = state.game;
+    const canvas = el.spilCanvas;
+    const ratio = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth || canvas.width || 300;
+    const h = canvas.clientHeight || canvas.height || 150;
+    canvas.width = Math.max(1, Math.round(w * ratio));
+    canvas.height = Math.max(1, Math.round(h * ratio));
+    G.ratio = ratio;
+    G.unit = Math.min(h / GAME.h, w / GAME.w);
+    G.wUnits = w / G.unit;
+    G.hUnits = h / G.unit;
+  }
+
+  async function loadGameState() {
+    try {
+      state.spil = await get('/api/pet/spil');
+      renderGameStats();
+    } catch { /* no records (yet) */ }
+  }
+
+  function gameMessage(text) {
+    if (!el.spilBesked) return;
+    el.spilBesked.textContent = text;
+    el.spilBesked.hidden = !text;
+  }
+
+  function renderGameStats() {
+    const G = state.game;
+    const score = G && G.g ? G.g.score : 0;
+    if (el.spilPoint) el.spilPoint.textContent = String(score);
+    const spil = state.spil || {};
+    if (el.spilBedste) el.spilBedste.textContent = G && G.demo ? 'Prøverunde' : `Din bedste: ${spil.bedste || 0}`;
+    if (el.spilRekord) {
+      const top = Array.isArray(spil.kontor) && spil.kontor.length ? spil.kontor[0] : null;
+      el.spilRekord.textContent = !top ? '' : top.egen ? `Kontorets rekord: ${top.score} – din! 🏆`
+        : `Kontorets rekord: ${top.score} – ${shorten(top.navn, 20) || 'Klippe'} (${shorten(top.pc, 15)})`;
+      el.spilRekord.hidden = !top;
+    }
+  }
+
+  /** The render's bar in the game – and the round ends when the render does. */
+  function gameRender(info) {
+    const G = state.game;
+    if (el.spilRender) {
+      el.spilRender.style.width = `${G && G.demo ? 100 : (info && info.pct) || 0}%`;
+      el.spilRender.title = info ? info.text : '';
+    }
+    if (!G || G.demo || G.ended || info) return;
+    G.ended = true;
+    const score = G.g ? G.g.score : 0;
+    if (G.running) {
+      G.running = false;
+      cancelAnimationFrame(G.raf);
+      drawGame();
+    }
+    gameMessage(score > 0 ? `Renderen er færdig! 🎬 Din score: ${score}` : 'Renderen er færdig! 🎬');
+    show(el.spilStart, false);
+    if (score > 0) submitScore(G, score);
+    G.closeTimer = setTimeout(() => {
+      if (state.game === G) closeGame();
+    }, 5000);
+  }
+
+  function startRound() {
+    const G = state.game;
+    if (!G || G.running || G.ended) return;
+    if (G.demo && G.rounds >= 1) {
+      closeGame();
+      return;
+    }
+    sizeGame();
+    G.g = gameNew((Date.now() % 2147483647) + 1, G.wUnits);
+    G.rounds += 1;
+    G.running = true;
+    G.submitted = false;
+    G.last = 0;
+    G.pops = [];
+    show(el.spilStart, false);
+    gameMessage('');
+    cancelAnimationFrame(G.raf);
+    G.raf = requestAnimationFrame(gameFrame);
+  }
+
+  function gameFrame(ts) {
+    const G = state.game;
+    if (!G || !G.running) return;
+    const dt = G.last ? (ts - G.last) / 1000 : 0;
+    G.last = ts;
+    for (const event of gameStep(G.g, dt)) {
+      if (event === 'frame' && !REDUCED) G.pops.push({ x: GAME.kx + 6, y: G.g.y + GAME.kh + 4, t: 0 });
+    }
+    for (const pop of G.pops) pop.t += Math.min(0.05, dt);
+    G.pops = G.pops.filter((p) => p.t < 0.8);
+    drawGame();
+    renderGameStats();
+    if (G.g.over) {
+      roundOver(G);
+      return;
+    }
+    G.raf = requestAnimationFrame(gameFrame);
+  }
+
+  function roundOver(G) {
+    G.running = false;
+    cancelAnimationFrame(G.raf);
+    const score = G.g.score;
+    const why = G.g.why === 'hul' ? 'Du faldt i et jump cut! 🕳️' : 'Av – en klippefejl! 💥';
+    gameMessage(G.demo ? `${why} ${score} point · Prøverunden er slut – i Resolve kan du spille, mens den renderer`
+      : `${why} ${score} point`);
+    if (el.spilStart) {
+      el.spilStart.textContent = G.demo ? 'Luk' : '▶ Prøv igen';
+      el.spilStart.hidden = false;
+    }
+    submitScore(G, score);
+  }
+
+  async function submitScore(G, score) {
+    if (G.submitted || !(score > 0)) return;
+    G.submitted = true;
+    let answer;
+    try {
+      answer = await send('POST', '/api/pet/spil', { score: Math.round(score), demo: G.demo });
+    } catch {
+      return;                                  // a round that cannot be kept (the render ended long ago)
+    }
+    if (answer && answer.spil) state.spil = answer.spil;
+    if (state.game === G) {
+      renderGameStats();
+      if (answer && answer.kontor_rekord) {
+        gameMessage(`🏆 Ny kontorrekord: ${score} point!`);
+      } else if (answer && answer.ny_rekord) {
+        gameMessage(`🎉 Ny rekord: ${score} point!`);
+      }
+    } else if (answer && (answer.kontor_rekord || answer.ny_rekord)) {
+      say(answer.kontor_rekord ? `🏆 Ny kontorrekord i render-spillet: ${score} point!` : `🎮 Ny rekord: ${score} point!`, 6000);
+    }
+  }
+
+  /** A click on the canvas, Space or ↑: start a round, or jump. */
+  function gameInput() {
+    const G = state.game;
+    if (!G) return;
+    if (!G.running) {
+      startRound();
+      return;
+    }
+    gameJump(G.g);
+  }
+
+  function gameKey(event) {
+    if (event.key === ' ' || event.code === 'Space' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      gameInput();
+      return true;
+    }
+    return false;
+  }
+
+  /** The course in units: a sky, the timeline (V1 blue, A1 green, its gaps), the klippefejl, the
+   *  film frames and Klippe – drawn with its own colours. */
+  function drawGame() {
+    const G = state.game;
+    const canvas = el.spilCanvas;
+    if (!G || !canvas) return;
+    const ctx = canvas.getContext('2d');
+    const k = G.unit * G.ratio;
+    const w = G.wUnits;
+    const extra = Math.max(0, (G.hUnits || GAME.h) - GAME.h);  // more sky above a tall canvas
+    ctx.setTransform(k, 0, 0, k, 0, 0);
+    const sky = ctx.createLinearGradient(0, 0, 0, GAME.h + extra);
+    sky.addColorStop(0, '#11141f');
+    sky.addColorStop(1, '#2b2233');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, w, GAME.h + extra);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';            // stars over a tall course
+    for (let i = 0; i < Math.round(extra / 6); i += 1) {
+      ctx.fillRect((i * 67.3) % w, (i * 29.7) % Math.max(1, extra), 0.9, 0.9);
+    }
+    ctx.setTransform(k, 0, 0, k, 0, extra * k);
+    const g = G.g;
+    const dist = g ? g.dist : 0;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';            // monitors far away
+    for (let i = 0; i < 7; i += 1) {
+      const span = w + 80;
+      const x = ((((i * 113) - dist * 0.25) % span) + span) % span - 40;
+      ctx.fillRect(x, 18 + ((i * 41) % 64), 30, 17);
+    }
+    if (g && g.falling) drawKlippe(ctx, G);
+    drawTrack(ctx, w, dist, g);
+    if (g) {
+      for (const o of g.obstacles) drawObstacle(ctx, o);
+      for (const f of g.frames) drawFrame(ctx, f);
+    }
+    if (!g || !g.falling) drawKlippe(ctx, G);
+    ctx.font = '700 9px "Segoe UI", sans-serif';
+    ctx.fillStyle = '#ffcf4a';
+    for (const pop of G.pops) {
+      ctx.globalAlpha = Math.max(0, 1 - pop.t / 0.8);
+      ctx.fillText('+10', pop.x, GAME.ground - pop.y - pop.t * 30);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawTrack(ctx, w, dist, g) {
+    const top = GAME.ground;
+    ctx.fillStyle = '#121418';
+    ctx.fillRect(0, top, w, GAME.h - top);
+    const lanes = [[top + 3, '#4f7bd9', '#7f9cff'], [top + 15, '#3c9e6b', '#5fcf8f']];
+    const blocks = [[0, 44], [48, 112], [116, 150], [154, 214]];
+    for (const [y, fill, edge] of lanes) {
+      for (let n = -1; n * 220 < w + 220; n += 1) {
+        for (const [a, b] of blocks) {
+          const x = a + n * 220 - (dist % 220);
+          if (x > w || x + (b - a) < 0) continue;
+          ctx.fillStyle = fill;
+          ctx.fillRect(x, y, b - a, 9);
+          ctx.fillStyle = edge;
+          ctx.fillRect(x, y, b - a, 1.5);
+        }
+      }
+    }
+    if (!g) return;
+    for (const o of g.obstacles) {
+      if (o.kind !== 'hul') continue;
+      ctx.fillStyle = '#05060a';
+      ctx.fillRect(o.x, top - 1, o.w, GAME.h - top + 1);
+      ctx.fillStyle = '#ef7166';
+      ctx.fillRect(o.x, top - 1, 1.5, 6);
+      ctx.fillRect(o.x + o.w - 1.5, top - 1, 1.5, 6);
+    }
+  }
+
+  function drawObstacle(ctx, o) {
+    if (o.kind === 'hul') return;
+    const y = GAME.ground - o.b - o.h;
+    if (o.kind === 'offline') {
+      ctx.fillStyle = '#c93434';
+      ctx.fillRect(o.x, y, o.w, o.h);
+      ctx.fillStyle = '#ffd6d2';
+      ctx.font = '700 5px "Segoe UI", sans-serif';
+      ctx.fillText('MEDIA', o.x + 2, y + o.h / 2 - 1);
+      ctx.fillText('OFFLINE', o.x + 1, y + o.h / 2 + 5);
+    } else if (o.kind === 'sort') {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(o.x, y, o.w, o.h);
+      ctx.strokeStyle = '#e8e4dc';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(o.x + 0.5, y + 0.5, o.w - 1, o.h - 1);
+    } else {
+      const colours = ['#ff4fd8', '#33e1ff', '#ffe14a', '#7cff6b'];
+      const rows = Math.max(3, Math.round(o.h / 5));
+      for (let i = 0; i < rows; i += 1) {
+        const shift = ((i * 7 + Math.floor(o.x / 6)) % 5) - 2;
+        ctx.fillStyle = colours[(i + Math.floor(o.x / 9)) % colours.length];
+        ctx.fillRect(o.x + shift, y + (i * o.h) / rows, o.w, o.h / rows + 0.5);
+      }
+    }
+  }
+
+  function drawFrame(ctx, f) {
+    if (f.taken) return;
+    const y = GAME.ground - f.b - f.h;
+    ctx.fillStyle = '#f0a45b';
+    ctx.fillRect(f.x, y, f.w, f.h);
+    ctx.fillStyle = '#3a2513';
+    for (const dx of [1.5, 4.5, 7.5]) {
+      ctx.fillRect(f.x + dx, y + 1, 1.2, 1.4);
+      ctx.fillRect(f.x + dx, y + f.h - 2.4, 1.2, 1.4);
+    }
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.fillRect(f.x + 2, y + 3.2, f.w - 4, f.h - 6.4);
+  }
+
+  /** Klippe, a little clapper board on two feet: its clapper opens while it is in the air. */
+  function drawKlippe(ctx, G) {
+    const g = G.g;
+    const look = G.look;
+    const x = GAME.kx;
+    const bottom = GAME.ground - (g ? g.y : 0);
+    const w = GAME.kw;
+    const h = GAME.kh - 8;
+    const top = bottom - 4 - h;
+    const step = G.running && g && g.ground ? Math.floor(g.t * 10) % 2 : 0;
+    ctx.fillStyle = '#222a34';                                 // feet
+    ctx.fillRect(x + 4, bottom - 4 - (step ? 1 : 0), 6, 4);
+    ctx.fillRect(x + w - 10, bottom - 4 - (step ? 0 : 1), 6, 4);
+    ctx.fillStyle = look.body;                                 // the slate
+    ctx.strokeStyle = look.edge;
+    ctx.lineWidth = 1.2;
+    roundRect(ctx, x, top, w, h, 3);
+    ctx.fill();
+    ctx.stroke();
+    const open = g && !g.ground ? -0.45 : 0;                   // the clapper
+    ctx.save();
+    ctx.translate(x, top + 1);
+    ctx.rotate(open);
+    for (let i = 0; i < 6; i += 1) {
+      ctx.fillStyle = i % 2 ? look.light : look.dark;
+      ctx.fillRect((i * w) / 6, -5, w / 6 + 0.3, 4);
+    }
+    ctx.restore();
+    const crashed = g && g.over && g.why === 'fejl';
+    ctx.fillStyle = '#fbfaf7';
+    for (const ex of [x + 7, x + w - 7]) {
+      if (crashed) {
+        ctx.strokeStyle = '#fbfaf7';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(ex - 2, top + 7);
+        ctx.lineTo(ex + 2, top + 11);
+        ctx.moveTo(ex + 2, top + 7);
+        ctx.lineTo(ex - 2, top + 11);
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.ellipse(ex, top + 9, 2.6, 3.1, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    if (!crashed) {
+      ctx.fillStyle = '#1d1b19';
+      for (const ex of [x + 7.6, x + w - 6.4]) {
+        ctx.beginPath();
+        ctx.arc(ex, top + 9.5, 1.3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.strokeStyle = '#f3efe6';                               // the mouth: a smile (an O in the air)
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    if (g && !g.ground) {
+      ctx.arc(x + w / 2, top + h - 5, 1.6, 0, Math.PI * 2);
+    } else {
+      ctx.arc(x + w / 2, top + h - 7, 3, 0.2 * Math.PI, 0.8 * Math.PI);
+    }
+    ctx.stroke();
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  // ---------------------------------------------------------------- their buttons
+  show(el.frokostSkilt, false);                // only while Klippe is at lunch
+  on(el.frokostKnap, 'click', ringLunch);
+  on(el.frokostSkilt, 'click', comeHome);
+  on(el.postKnap, 'click', () => (el.postPanel && el.postPanel.hidden ? openPost() : closePost()));
+  on(el.postLuk, 'click', closePost);
+  on(el.postSend, 'click', sendPost);
+  on(el.postTekst, 'keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      sendPost();
+    }
+  });
+  on(el.julKnap, 'click', () => {
+    closeTray();
+    closePost();
+    openPanel('jul');
+  });
+  on(el.aarKnap, 'click', () => openYear(yearInReview(clock()) || clock().getFullYear()));
+  on(el.slikGiv, 'click', () => answerSlik(state.slik, 'slik'));
+  on(el.vmGaet, 'click', placeGuess);
+  on(el.vmTid, 'change', () => {
+    const at = guessFromField(el.vmTid.value, Date.now());
+    if (at && el.vm.dataset.bet) state.betChoice = { key: el.vm.dataset.bet, at };
+    for (const b of (el.vmValg ? el.vmValg.querySelectorAll('.vm__valg') : [])) {
+      b.setAttribute('aria-pressed', String(Number(b.dataset.at) === at));
+    }
+  });
+  on(el.vmStatus, 'click', () => {
+    const bet = state.bets.get(el.vm.dataset.bet);
+    if (bet && bet.status === 'aaben' && bet.mit_gaet) {
+      state.betEdit = betKey(bet);
+      renderBetCard();
+    }
+  });
+  on(el.spilKnap, 'click', () => openGame(false));
+  on(el.spilLuk, 'click', closeGame);
+  on(el.spilStart, 'click', (event) => {
+    event.stopPropagation();
+    if (state.game && state.game.demo && state.game.rounds >= 1 && !state.game.running) {
+      closeGame();
+    } else {
+      startRound();
+    }
+  });
+  on(el.spilCanvas, 'pointerdown', (event) => {
+    event.preventDefault();
+    gameInput();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (state.game) state.game.last = 0;      // no jump forward after a pause
+  });
+
   window.__klippe = { celebrate, fx, state, applyStatus, applyStage, applyJob, applyPlay, lookReport,
     renderMessages, applySettings, celebrateProgress, openPanel, applyFood, feed, openTray, answerCall,
-    applyBuild, applyRobot, aim, naughtyRobot, applyRender, visit, deliver, festkat, floor };   // for tests
+    applyBuild, applyRobot, aim, naughtyRobot, applyRender, visit, deliver, festkat, floor,
+    // fun in the office (SPEC §23)
+    clock, funTick, updateNat, natDemo, applySaeson, applyJul, applyRod, startLunch, comeHome, applyBet, renderBetCard,
+    easterEgg, snowStorm, openPost, openGame, closeGame, gameInput, startRound, loadRod, loadBets, loadSaeson,
+    loadJul, eat };   // for tests
 
   // ---------------------------------------------------------------- events
   function connectEvents() {
@@ -2345,14 +4477,36 @@
         visit(JSON.parse(event.data));
       } catch { /* ignore */ }
     });
+    // The fun in the office (SPEC §23.13).
+    const handlers = { pet_saeson: applySaeson, pet_jul: applyJul, rod: (d) => applyRod(d),
+      sne: (d) => snowStorm(d && d.sekunder), frokost: startLunch, post_sendt: postSent,
+      post_svar: (d) => openPost(d && typeof d.til === 'string' ? d.til : null), slik_svar: slikAnswered,
+      vaeddemaal: (d) => applyBet(d), paaskeaeg: easterEgg };
+    for (const [type, handle] of Object.entries(handlers)) {
+      source.addEventListener(type, (event) => {
+        let data;
+        try {
+          data = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        state.sseSeq[type] = (state.sseSeq[type] || 0) + 1;      // newer than any GET on its way (fresh())
+        handle(data);
+      });
+    }
     // Events are not replayed: when the stream is (back) up, what it may have missed is asked for –
     // a build that ended, a call that stopped ringing or a render that finished in a gap – and, on
-    // load too, which colleagues' Klippes are about (visits are never replayed).
+    // load too, which colleagues' Klippes are about (visits are never replayed); so is the season's
+    // state, the project folder's mess and the bets that are on.
     source.onopen = () => {
       loadBuild();
       loadMessages();
       loadRender();
       loadKontor();
+      loadSaeson();
+      loadBets();
+      if (state.ready) loadRod();
+      if (clock().getMonth() === 11 || state.julDemo) loadJul();
     };
     source.onerror = () => {
       source.close();
@@ -2387,6 +4541,15 @@
       const hungry = state.hunger === 'sulten' || state.hunger === 'skrubsulten';
       if (hatchedFood() && hungry && firstToday('sult-hej')) say(`${foodSay(state.hunger)} Tryk på 🍔 Mad`, 7000);
     }, 3000);
+    // The fun in the office (SPEC §23): after the hello it may speak (fyraften, Halloween, a mess).
+    setTimeout(() => {
+      state.ready = true;
+      funTick();
+      loadRod();
+    }, 1500);
+    setTimeout(showMemory, 6600);
+    setInterval(funTick, 15e3);
+    setInterval(loadKontor, 60e3);           // colleagues come and go: the ✉️ follows them
   }
 
   init();

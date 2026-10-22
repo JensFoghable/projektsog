@@ -1118,14 +1118,15 @@ These override earlier sections where they conflict. Finding ids refer to
 (5 s) it reads: the foreground window (`winui`), seconds since the last input
 (`GetLastInputInfo`) and `bridge.activity()` — `{project, database, uid, page, timecode,
 rendering, folder}` from the Resolve helper's poll (`GetCurrentPage`, the current timeline's
-`GetCurrentTimecode`, `IsRenderingInProgress`; `None` when older than 15 s).
+`GetCurrentTimecode`, `IsRenderingInProgress`; `None` when older than `max_age`; `busy`, `age`).
 
 * **Counts** when `Resolve.exe` is in front with a project open (bucket = page), or a browser
   whose title contains one of `time_music_sites` (bucket `musik`) or `time_ai_sites` (bucket
   `ai`, AI video/images such as Higgsfield) while a project is open.
   Never for `Untitled Project…` or without a project.
-* **Activity** = input, or a playhead that moved since the last tick (not while rendering) — the
-  latter only while the last input is ≤ `PLAYBACK_MAX_S` (1 h) old.
+* **Activity** = input, or a playhead that moved since the last tick, or a Resolve that does not
+  answer at all (`busy` — it answers no scripts while it plays back) (neither while rendering) —
+  the latter two only while the last input is ≤ `PLAYBACK_MAX_S` (1 h) old.
 * A pause ≤ `time_idle_minutes` counts fully; a longer one is cut back to the last activity
   + `GRACE_S`. Another program in front while a project is open is the same kind of pause
   (state `away`, `away_since` = the segment's end when Resolve was left, `away_until`): back in
@@ -1135,7 +1136,10 @@ rendering, folder}` from the Resolve helper's poll (`GetCurrentPage`, the curren
 * Resolve answers scripts slowly while busy, so the tracker accepts its last answer for
   `STALE_OK_S` (120 s; `activity(max_age)`, `age` in the answer). The bridge waits up to
   `CHILD_CALL_TIMEOUT_S` (60 s) for a poll before it restarts the helper, and forgets the
-  activity when Resolve's process is gone.
+  activity when Resolve's process is gone. Once a call got no answer in time (`ChildTimeout`;
+  not a crashed helper), Resolve is *silent*: `activity()` keeps its last answer with `busy:
+  true` whatever its age, until a poll succeeds, Resolve answers a connect with a refusal, its
+  process is gone or the integration is turned off.
 * Storage: `time.db` (local SQLite, WAL) table `segments(project, database, uid, folder, bucket,
   start, end, host)`, epoch seconds; the running segment's end is saved every 30 s.
 * `report(first, last, minimum_s=None)`: per (project, database), sorted by total desc:
@@ -1653,3 +1657,474 @@ cancelled and its temp file removed).
   (`g − max(r, b)` > 60 → transparent, 20–60 → soft edge, green removed) and plays them; another
   GIF (not 103 frames) spins all its frames. Without the GIF: a drawn cat that spins (CSS).
 * Settings: `widget_levering` (bool, default true) "Leveringsfest, når en fil lander i Final".
+
+## 23. Fun in the office (2026-10-12)
+
+The user asked for twelve fun things at once ("lav dem alle!!!!!") – Halloween, a Christmas
+calendar, Klippe dancing, Natte-Klippe **from 16:00** ("det er der vi har fri"), a bath when a
+project folder is tidied, a lunch bell, render bets, Klippe-post, easter eggs in the search field,
+"I dag for N år siden", a game while Resolve renders and a year review "Klippet <år>". Every one
+can be switched off. They reward tidiness, breaks and going home on time – never overtime. All
+LAN features also need `widget_enabled` and `widget_kontor` (§22.3). Ground rule 1 holds: nothing
+here moves, renames or deletes a file – Klippe only suggests.
+
+### 23.0 Settings (`config.py`) and the "Klippes sjov" box
+
+| key | default | Danish row text (Indstillinger ▸ Generelt ▸ box "Klippes sjov") |
+|---|---|---|
+| `widget_saeson` | true | Halloween og julekalender – kostume, græskar, slik eller ballade, 24 låger og sne på skærm 2 |
+| `widget_dans` | true | Klippe danser, når du finder musik (Artlist og de andre musiksider) |
+| `widget_fyraften` | `"16:00"` | Natte-Klippe – fra fyraften gaber Klippe, tager nathue på og falder i søvn (select `#pet-fyraften`: Fra / 15:00 / 15:30 / 16:00 / 16:30 / 17:00 / 17:30 / 18:00; "" = Fra) |
+| `widget_bad` | true | Klippe bliver beskidt af løse filer i projektmappens rod – og får skumbad, når du rydder op |
+| `widget_frokost` | true | Frokostklokken – ring alle kontorets Klipper til frokost |
+| `widget_post` | true | Klippe-post – send Klippe over til en kollega med en lille besked |
+| `widget_vaeddemaal` | true | Render-væddemål – gæt, hvornår en lang render er færdig |
+| `widget_renderspil` | true | Render-spillet – et lille spil, der kun kan spilles, mens Resolve renderer |
+| `widget_aarsrapport` | true | Klippet <år> – din årsoversigt i december |
+| `search_paaskeaeg` | true | Påskeæg i søgefeltet (prøv „kaffe“, „fredag“ eller „deadline“) |
+| `search_minder` | true | „I dag for N år siden“ – et minde fra dine projekter, når søgefeltet er tomt |
+
+`widget_fyraften` is "" or `HH:MM` between 12:00 and 23:59, else ValueError "Fyraften skal være
+et klokkeslæt mellem 12:00 og 23:59". The others are plain booleans (switches with `data-setting`).
+
+### 23.1 Seasons, costumes, the calendar, counters and new things (`achievements.py`)
+
+* `halloween_week(day) -> bool`: Monday–Sunday of the ISO week that holds 31 October of
+  `day.year` (2026: 26 Oct – 1 Nov = "uge 44"). `season(day) -> "halloween" | "jul" | None`
+  ("jul" = all of December). `KOSTUMER = ("vampyr", "spoegelse", "skelet", "heks")`;
+  `costume(secret, year)` = `int(sha256(f"{secret}|{year}|kostume").hexdigest(), 16) % 4` –
+  colleagues' Klippes dress differently.
+* **Slot "hals"** joins the wardrobe: `SLOTS = ("farve", "striber", "hat", "briller", "mund",
+  "hals", "haand", "aura")`, `SLOT_NAMES["hals"] = "Om halsen"`, default `ingen-hals` ("Ingen").
+* **New items** (id, slot, name, rarity): `heksehat` hat "Heksehat" sjælden · `nathue` hat
+  "Nathue" · `racerhjelm` hat "Racerhjelm" sjælden · `gevir` hat "Rensdyrgevir" · `glorie` hat
+  "Engleglorie" · `julestjerne` hat "Julestjerne" legendarisk · `racerbriller` briller
+  "Racerbriller" · `julebriller` briller "Julebriller" · `vampyrtaender` mund "Vampyrtænder"
+  sjælden · `halstoerklaede` hals "Halstørklæde" · `julesloejfe` hals "Julesløjfe" · `graeskar`
+  haand "Græskarlygte" sjælden · `klokke` haand "Frokostklokke" · `brev` haand "Brev" ·
+  `krystalkugle` haand "Krystalkugle" sjælden · `badeand` haand "Badeand" · `slikstok` haand
+  "Slikstok" · `julegave` haand "Julegave" · `bobler` aura "Sæbebobler" · `snefnug` aura
+  "Snefnug" · `julelys` aura "Julelys" · `julerod` farve "Julerød" · `polkagris` striber
+  "Polkagris". Items only in the calendar show `how` "Fra julekalenderen".
+* **Counters** – `PetProgress.note(name, n=1)` (thread-safe, saved, wakes the refresh) adds to
+  `counters[name]` and to `aar["<YYYY>"][name]` (the year review): `slik_givet`, `slik_faaet`,
+  `hatte_stjaalet`, `frokost_ringet`, `post_sendt`, `post_faaet`, `vaeddemaal_vundet`,
+  `vaeddemaal_gaet`, `bade`, `leveringer`, `renders`, `sne`, `spil` (rounds played). `Stats`
+  gets `counters` (all of them plus `spil_bedste` = the game's best and `jul_laager` = most doors
+  opened in one year) and `fyraften` (hours, from `widget_fyraften`; 16.0 when "" or invalid).
+* **New trophies** (id, group, name, text, goal → reward): `halloween` Sæson "Uhyggelig klipper"
+  "Arbejd mindst en time i Halloween-ugen" 1 → heksehat · `slikmutter` Sæson "Slikmutter" "Giv 5
+  Boostere til kollegernes Klipper til Halloween" 5 (`slik_givet`, unit "Boostere") → graeskar ·
+  `ballademager` Hemmelig (secret) "Ballademager" "Stjal en hat til Halloween" 1 → vampyrtaender ·
+  `julekalender` Sæson "Alle låger" "Åbn alle 24 låger i julekalenderen" 24 (unit "låger") ·
+  `hjemtid` Mål "Hjem til tiden" "Stop senest et kvarter efter fyraften på 10 hverdage" 10 (weekdays
+  with ≥ 1 h whose `day_last ≤ fyraften + 0.25`, unit "dage") → nathue · `frokost10` Kontoret
+  "Frokostklokken" "Ring til frokost 10 gange" 10 → klokke · `postbud` Kontoret "Postbud" "Send
+  Klippe med post 10 gange" 10 (unit "breve") → brev · `spaamand` Kontoret "Spåmand" "Vind 3
+  render-væddemål" 3 (unit "sejre") → krystalkugle · `racer` Klippe "Render-racer" "Få 1000 point i
+  render-spillet" 1000 (unit "point") → racerbriller · `fejlfri` Hemmelig (secret) "Fejlfri" "3000
+  point i render-spillet" 3000 → racerhjelm · `bad1` Klippe "Skrubbet ren" "Ryd op i et projekt, så
+  Klippe kan komme i bad" 1 → badeand · `bad10` Klippe "Skumbad" "Giv Klippe 10 skumbade" 10 (unit
+  "bade") → bobler. 59 trophies in all; group order unchanged with "Kontoret" after "Mad".
+* `PetProgress.treat(points, name) -> food state`: satiety + points (≤ 100), no menu meal is
+  logged; publishes `pet_mad`.
+* **Halloween state** (pet.json `halloween: {ballade, bytte}`): `season_state(today=None) ->
+  {saeson, kostume (this year's, during Halloween else null), kostume_aar (this PC's costume this
+  year, always), ballade: {hat: item | null, toiletpapir: bool, af_pc, af_navn, til} | null, bytte:
+  {hat, fra_pc, fra_navn, til} | null}` (`til` = the next local midnight; expired ones are
+  dropped). `prank_received(af_pc, af_navn) -> {hat, toiletpapir}`: the equipped hat (not "ingen")
+  is "stolen" until midnight (the widget hides it); without a hat Klippe is wrapped in toilet paper
+  (`toiletpapir: true`). `prank_won(hat, fra_pc, fra_navn)`: the thief wears that hat (a known hat
+  id; else nothing) until midnight as a display override (it does not become owned) and
+  `note("hatte_stjaalet")`. Both publish `pet_saeson` (= `season_state()`).
+* **The Christmas calendar** (`JULEKALENDER`, 24 gifts `{id, kind: "ting"|"sne"|"mad"|"vits",
+  name, tekst, item?, points?, sne_s?}`): door 1 `sne1` (sne 45 s, "Første sne! ❄️"), door 13
+  `lucia` (sne 45 s, "Luciadag – sne og lys ✨"), door 24 `julestjerne` (ting: the legendary hat,
+  plus 60 s of snow, "Glædelig jul! 🎄"); the other 21 are shuffled per PC and year
+  (`random.Random(sha256(f"{secret}|{year}|jul"))`): ting `halstoerklaede`, `julesloejfe`, `gevir`,
+  `glorie`, `nissehue`, `julebriller`, `slikstok`, `julegave`, `snefnug`, `julelys`, `julerod`,
+  `polkagris`; mad `aebleskiver` "Æbleskiver" +25, `risalamande` "Risalamande" +30, `pebernoedder`
+  "Pebernødder" +10, `brunkager` "Brunkager" +10, `klejner` "Klejner" +10, `julesodavand`
+  "Julesodavand" +10; vits ×3 (Danish Christmas jokes Klippe tells). pet.json: `jul: {"2026":
+  {"1": ts, …}}` and `julegaver: [item, …]` (owned for good).
+  `calendar(today=None) -> {aar, aktiv (December), dag (1–31 | null), uaabnede, laager: [{nr,
+  aaben, kan, gave | null}]}` – `gave` only for opened doors, `kan` = December and `nr ≤ dag` and
+  not open (missed doors can be opened until 31 Dec). `open_door(nr)` → `{ok, gave, jul}`; 400
+  "Julekalenderen er kun åben i december" / "Låge {nr} kan først åbnes den {nr}. december" /
+  "Lågen er allerede åbnet". ting → `julegaver` + `pet_progress {nye: [{kind: "jul", id, name,
+  text: "Fra julekalenderen, låge N", reward, rarity}], foerste: false, unlocked, total}`; mad →
+  `treat`; sne (and door 24) → `self.on_snow(seconds)` (set by the app to `Sne.start`) and
+  `note("sne")`. Publishes `pet_jul` (= `calendar()`). `calendar_demo(nr)` → the gift that door
+  holds this year, nothing kept (a sne gift: `on_snow(20)`).
+* **The render game's records** (pet.json `spil: {bedste, bedste_ved, spillet, kontor: {pc: {navn,
+  score, ved}}}`): `game_result(score, demo)` → `{ok, bedste, ny_rekord, kontor_rekord, spil}`
+  (score int 0–10 000 000; demo: nothing kept; else `spillet` + 1, `note("spil")`, best kept;
+  `ny_rekord` = beats the own best and ≥ 100; `kontor_rekord` = beats every colleague's record
+  too). `office_record(pc, navn, score) -> bool` keeps each colleague's best (≤ 32 PCs; True when
+  it beats everyone, this PC included). `game_state() -> {bedste, spillet, kontor: [{pc, navn,
+  score, ved, egen}]}` (best first, ≤ 10, this PC as `egen: true`).
+* `year_review(year) -> dict` gathers the data for `aar.year_review` (§23.11).
+
+### 23.2 Natte-Klippe and the dance (`web/widget.*`)
+
+* `natFase(now, fyraften)` (pure, minutes of the local day; F = fyraften): `gaber` for [F, F+20),
+  `doeser` for [F+20, F+45), `sover` from F+45 until 06:00; null otherwise or when fyraften is "".
+  Set as `data-nat`. Every day of the week (time of day only).
+* gaber: the nightcap (`.hat--nathue`, also the wardrobe item) replaces hats and head outfits; once
+  per day "Klokken er 16 – fyraften! 🏠🥱" (the setting's time); a yawn (`pulse('gaab')`, big
+  O-mouth, a stretch) every 4–6 min with a line ("Gaaab … 🥱", "Puha, det har været en lang dag",
+  "Skal vi ikke gå hjem? 🏠"). doeser: heavy lids, it nods off and jerks awake now and then. sover:
+  eyes closed, zzz, slow breathing. Mood line (when no render/build/transfer/meal/party says
+  something else): working + sover "💤 Klippe sover – fyraften var kl. 16. Gå hjem! 🏠"; sover
+  otherwise "💤 Godnat …"; working + gaber/doeser "🥱 Det er fyraften – snart godnat".
+* A click while asleep wakes it for 30 s (`data-nat="gaber"`): "Hva'? 😴 … Er det ikke fyraften?".
+  Celebrations, visits, messages and parties still happen.
+* **Dance**: `data-dans` while `widget_dans`, the tracker records (`state` recording) and the
+  bucket is `musik`, not while eating/asleep. To 120 BPM: the body bobs, the arms wave in turn, the
+  head tilts, music notes (`.noder`, ♪ ♫ ♬) float up from the headphones. At most every 10 min a
+  line ("🎧 Den her har groove!", "Skru op! 🔊", "Den skal med i filmen 🎶").
+
+### 23.3 Halloween in the widget
+
+* `data-saeson="halloween"` during `halloween_week` (with `widget_saeson`) and `data-kostume` =
+  `season_state().kostume`: `.kostume--vampyr` (cape with a red lining, a high collar, fangs),
+  `.kostume--spoegelse` (a sheet over the body with eye holes where the eyes are and a wavy hem),
+  `.kostume--skelet` (white bones on the slate, skull paint), `.kostume--heks` (a pointed witch hat
+  with a buckle; it hides the hat – the other costumes keep it, §23.14). A jack-o'-lantern (`.graeskar-lygte`, a flickering
+  candle inside) stands on the floor left of Klippe – hidden while `data-bygger`, `data-render`,
+  `data-fest`, `data-transfer` or Klippe is at lunch. Once a day "Bøh! 🎃 Glædelig Halloween".
+* `data-ballade="hat"` hides the hat; `data-ballade="toiletpapir"` wraps Klippe in toilet paper
+  (`.toiletpapir`, a roll on the floor). A hat won by `prank_won` overrides `data-hat` until it
+  expires.
+* **Trick or treat** (SSE `besoeg` type "slik", §23.7): the guest walks in wearing its costume
+  (`data-kostume` on the guest), says "Slik eller ballade! 🎃", and the card `#slik` shows "🎃
+  ‹navn› fra ‹PC› vil have slik!" with `#slik-giv` "🍬 Giv en Booster" and a countdown `#slik-tid`
+  ("… ellers bliver der ballade om 20 s"); the guest waits `til_s` (25 s).
+  * Click → `POST /api/kontor/slik {id, svar: "slik"}`: the guest jumps, "Tak! 🍬", 🍬 float up,
+    it leaves; Klippe: "Glædelig Halloween! 🎃".
+  * No click while the user is here (mood working or waiting) → `POST /api/kontor/slik {id, svar:
+    "ballade"}` → `{ballade: {hat, toiletpapir}}`: the hat flies over to the grinning guest, who
+    leaves wearing it ("Ballade! 😈 ‹navn› stak af med din ‹hat›!"), or it throws toilet paper ("…
+    pakkede mig ind i toiletpapir! 🧻").
+  * Nobody here → no request: "Her er ingen hjemme … 👻", the guest leaves.
+* SSE `slik_svar` (to the trick-or-treater): godbid "🍬 ‹navn› (‹PC›) gav mig en Booster!" (Klippe
+  drinks; the server already added the satiety), ballade "😈 Hehe – jeg fik ‹navn›s ‹hat-navn›!".
+
+### 23.4 Christmas in the widget
+
+* `data-saeson="jul"` in December: a gentle snowfall in the box (`.sne-lag`, behind Klippe),
+  heavier while `data-snestorm`. The header shows `#jul-knap` "🎄" with `#jul-antal` (unopened
+  doors, hidden at 0).
+* The 🏆 panel gets the tab "🎄 Jul" (`data-panel-tab="jul"`, December or after "Prøv
+  julekalenderen"): a 6×4 grid `.kalender` of `button.laage[data-nr]` (`is-aaben` shows the gift's
+  icon and name, `is-klar` can be opened and glows, `is-laast` says "Om N dage"). A ready door →
+  `POST /api/pet/jul {nr}` → `is-aabner` (the door swings open), then: ting – celebrated like a
+  find ("🎁 Låge 5: Rensdyrgevir!"); mad – Klippe eats it ("Æbleskiver! 😋"); sne – "❄️ Det sner!"
+  (and the server's snow on the monitor); vits – the joke in a 9-s bubble. Door 24: fireworks and
+  "Glædelig jul! 🎄". In demo mode (`POST /api/pet/jul/demo {nr}`) every door can be opened and
+  nothing is kept ("Smugkig – i december åbner du én låge om dagen").
+* SSE `sne {sekunder, demo}` → `data-snestorm` for those seconds.
+
+### 23.5 Snow on monitor 2 (`sne.py`, `sne_child.py`)
+
+* `Sne(cfg, bus, *, widget, spawn=None, quiet=None)`: `start(seconds, demo=False) -> {ok}` –
+  400 "Slå Klippe til først" while `widget_enabled` is off; while snow already falls the running
+  snow is simply kept (ok). Refuses quietly (logged, `{ok: false, grund}`) on a locked screen or
+  while something is full screen. Starts `pythonw -m projektsog.sne_child --widget <hwnd>
+  --seconds S --seed N --log-file F` (stdin pipe, like the robots) and publishes SSE `sne
+  {sekunder, demo}`. `close()` tells it `quit`. `POST /api/sne/demo` → `start(20, demo=True)`.
+* `sne_child`: per-monitor DPI aware; one layered window (`WS_EX_LAYERED|TRANSPARENT|TOPMOST|
+  TOOLWINDOW|NOACTIVATE`, `HTTRANSPARENT`) over the work area of the widget's monitor; ≤ 20 fps;
+  `min(260, 90 + area/25 000)` flakes, radius 1.5–4.5 px × DPI scale, white with alpha 0.55–0.95
+  and a soft rim, falling 30–90 px/s × scale with a sideways sway and a slow wind. Flakes respawn at
+  the top until the last 3 s; then they fall out. Ends after `seconds` (≤ 120), on `quit`/stdin
+  EOF or a locked screen; stdout `{"event":"done","reason":…}`, then `os._exit`. It reuses
+  `petplay_child`'s GDI+ canvas, overlay and monitor helpers. Never takes the focus, never moves the
+  pointer, never clicks.
+
+### 23.6 Klippe i bad (`rod.py`)
+
+* `Rod(cfg, bus, *, bridge, on_bath=None, lister=levering.list_dir, call_with_timeout=None)`
+  (a daemon thread): while `widget_enabled` and `widget_bad`, every `POLL_S` (60 s) and within 2 s
+  of a `resolve` bus event it looks at the root of the current Resolve project's folder (the
+  bridge's online `primary.path`, §22.4 `_project`) through `call_with_timeout` (5 s), at most 400
+  entries. **Loose** = files there (not folders), except `levering.ignored` ones and `.lnk`,
+  `.url`, `desktop.ini`, `thumbs.db`, `.ds_store`, `*.projektsog-tmp`.
+* Each loose file gets a suggestion by its type (folded name hints):
+  video (mov mp4 mxf braw r3d crm mts m2ts avi mkv m4v insv lrv mpg mpeg webm 3gp): name with
+  final/export/master/levering → Final, else Klip · audio (wav mp3 aif aiff m4a flac bwf ogg aac):
+  speak/voice/vo/speaker → Speak, sfx/effekt → SFX (then Musik), else Musik (then Music) · image
+  (png jpg jpeg tif tiff gif webp heic bmp exr dpx tga) and graphics (psd ai eps svg afdesign
+  afphoto): logo → Logo, else Grafik (then Stills) · font (ttf otf woff woff2) → Font (then Grafik)
+  · text (txt doc docx rtf pdf pages odt srt vtt sbv xlsx xls csv md) → Tekst · project (drp drt
+  dra drx prproj aep fcpxml xml edl aaf otio cube) → Project (then Projekt) · anything else → no
+  suggestion. The first candidate folder that exists in the project (casefold) wins; none →
+  the first candidate with `ny: true` ("findes ikke endnu").
+* State (`GET /api/rod`, SSE `rod` on change): `{aktiv, projekt, mappe, antal, niveau: "ren" |
+  "lidt" (1–3) | "beskidt" (4–9) | "meget" (≥ 10), filer: [{navn, forslag | null, ny, slags}] (≤ 50,
+  folders' order), mere (left out), bad: false}`. When the same folder (casefold) had loose files at
+  the last good look and now has none, that one event has `bad: true` and `on_bath()` runs
+  (`PetProgress.note("bade")`) – once per folder and day. A failed look keeps the last state.
+* `POST /api/rod/aabn` opens the project folder in Explorer (the app's own folder opener, user
+  click only). `POST /api/rod/demo` → a made-up `rod` (meget, 12 files) and 8 s later its `bad`.
+* Widget: `data-beskidt` = lidt | beskidt | meget: mud spots (`.snavs`; more and darker by level),
+  at meget flies (`.fluer`) and stink lines (`.stank`). Once per project and day: "Uh, der ligger 7
+  løse filer i roden af ‹projekt› – jeg bliver helt beskidt 🫣 Se forslagene i Projektsøg". `bad`
+  → `data-bad` (~8 s): a bathtub slides in (`.badekar`, foam `.skum`, a rubber duck, shower drops),
+  Klippe sits in the foam and scrubs, sparkles – "Ahh … rent! ✨ Tak, fordi du ryddede op".
+* Search window: the Resolve bar gets "🧽 7 løse filer i roden af ‹projekt› – Klippe er beskidt"
+  with [Vis forslag] (only while `widget_bad` and `antal > 0`) → a panel "Ryd op i ‹projekt›": one
+  row per file "‹navn› → Klip" (or "→ Musik (findes ikke endnu)", "Ingen forslag"), [Åbn
+  projektmappen] (`POST /api/rod/aabn`) and the note "Projektsøg flytter aldrig selv filer –
+  Klippe kommer i bad, når de ligger på plads."
+
+### 23.7 The office: lunch, post, trick or treat, bets, records, the year (`kontor.py`)
+
+* The protocol stays `v: 1`; `hej` is unchanged (old versions still see us). New `type`s:
+  `slik`, `godbid`, `ballade`, `frokost`, `post`, `vaeddemaal`, `gaet`, `vinder`, `rekord`, `aar`,
+  with one more optional key `x` (an object with exactly the type's keys, every value checked):
+  slik `{kostume}` · godbid `{til}` · ballade `{til, hat}` (a known hat id or null) · frokost (no
+  `x`) · post `{til, tekst}` (1–120 printable) · vaeddemaal `{vid, fil, pct, start, lukker}` · gaet
+  `{til, vid, tid}` · vinder `{vid, status: "slut"|"aflyst", vinder_pc, vinder_navn, tid, slut}`
+  (the last four may be null) · rekord `{score}` · aar `{aar, timer, side, projekter, durum, kort,
+  leveringer, trofaeer}`. `til` matches the `pc` pattern and must be this PC (else ignored); ints
+  are real ints in range (`vid` 0–2³¹, `pct` 0–100, `score` 0–10⁷, the year's numbers 0–10⁶, `aar`
+  2026–2100); epochs within a day of our clock; `fil` ≤ 40 printable; `side` a time bucket key.
+  Old receivers reject the new types (unknown type) – harmless.
+* Rate limits per sender address and type: slik 10 min (and one per sender and day is shown),
+  godbid/ballade 5 s, frokost 5 min, post 15 s (≤ 30 posts an hour in all), vaeddemaal 30 s,
+  gaet 2 s, vinder 10 s, rekord 30 s, aar 10 min. slik and aar also use the visits' budget (≤ 6 an
+  hour with besoeg and fest).
+* **Lunch**: `lunch()` (`POST /api/kontor/frokost`) – 400 "Slå Klippe til først", "Frokostklokken
+  er slået fra", "Kontor-Klipperne er slået fra" (no socket), "Du har lige ringet – vent lidt 🔔"
+  (own gap 5 min); broadcasts `frokost`, `note("frokost_ringet")`, SSE `frokost {pc, navn, selv:
+  true}` and the bell once (Klippe shown). Received: SSE `frokost {pc, navn, selv: false}` + the
+  bell. `lunch_demo()` (`POST /api/kontor/frokost/demo`): only the local event `{pc: "DEMO-PC",
+  navn: "Klippe", selv: false, demo: true}` + the bell.
+* **Post**: `send_post(til, tekst)` (`POST /api/kontor/post`) – 400 "Klippe-post er slået fra",
+  "Skriv en besked", "Beskeden er for lang (højst 120 tegn)", "‹PC› er ikke på lige nu" (not seen
+  within 3 min), "Klippe er stadig ude med posten – vent lidt ✉️" (own gap 15 s); unicast to that
+  colleague's address; `note("post_sendt")`; SSE `post_sendt {til, navn_til}`. Received (`til` =
+  us): a message (`MessageBoard.post(internal=True)`: tag `post:<pc>:<seq>`, titel "✉️ Post fra
+  ‹navn› (‹PC›)", tekst, button "Svar" → `projektsog:post/<PC>`, `opkald: false`, udloeber 8 h) +
+  `note("post_faaet")` + SSE `besoeg {type: "post", pc, navn, stage, outfit, pynt}` (the guest
+  brings an envelope). The "Svar" button → SSE `post_svar {til}` → the widget's post panel opens
+  with that colleague chosen.
+* **Trick or treat** (Halloween week, weekdays, `widget_saeson`): each day a moment between 10:00
+  and 15:30 is drawn; from then on, as soon as the tracker records and Klippe is shown, this Klippe
+  broadcasts `slik` once (x `kostume`); kontor.json remembers the day. Received → SSE `besoeg
+  {type: "slik", id: "<pc>:<seq>", pc, navn, stage, outfit, pynt, kostume, til_s: 25}`; pending for
+  60 s. `treat_or_trick(id, svar)` (`POST /api/kontor/slik`): "slik" → unicast `godbid`,
+  `note("slik_givet")`; "ballade" → `progress.prank_received(pc, navn)`, unicast `ballade {til, hat}`
+  → `{ok, ballade: {hat, toiletpapir}}`; unknown/answered id → 400 "Gæsten er gået igen". Received
+  godbid → `progress.treat(10, "Booster")`, `note("slik_faaet")`, SSE `slik_svar {type: "godbid", pc,
+  navn}`; ballade → `progress.prank_won(hat, pc, navn)`, SSE `slik_svar {type: "ballade", pc, navn,
+  hat}`. `slik_demo()` (`POST /api/kontor/slik/demo`): a made-up guest (`id` "demo:N", a random
+  costume, `demo: true`); answering a demo id changes nothing (`{ok, demo: true, ballade: {hat: the
+  equipped hat or null, toiletpapir}}`).
+* **Render bets** (`widget_vaeddemaal`): from the bus `render` – a render active ≥ 20 s with `eta_s ≥
+  180` opens one bet: `vid` (counter), `fil` (output name), `pct`, `start` (its rising edge, epoch),
+  `lukker` = now + 180; broadcast `vaeddemaal`. Guesses close at `lukker` or at 50 %. On `faerdig`:
+  done → `slut` = now, the winner is the guess nearest `slut` (ties: the earlier guess), broadcast
+  `vinder {status: "slut"}` (`vinder_*` null without guesses); failed/cancelled/gone → `vinder
+  {status: "aflyst"}`. The winner's PC `note("vaeddemaal_vundet")`. `guess(pc, vid, tid)` (`POST
+  /api/kontor/gaet`): own bet recorded here, else unicast `gaet`; 400 "Væddemålet er lukket", "Gæt et
+  tidspunkt efter nu" (tid in (now, now + 24 h]); `note("vaeddemaal_gaet")`. One guess per PC (a new
+  one replaces it until the close); ≤ 16 guesses. Bet state (SSE `vaeddemaal`, `GET
+  /api/kontor/vaeddemaal` → `{vaeddemaal: [...]}` – open ones and those ended < 2 min ago): `{pc,
+  vid, navn, maskine, fil, pct, start, lukker, status: "aaben"|"lukket"|"slut"|"aflyst", egen,
+  mit_gaet, antal_gaet, resultat: {vinder_pc, vinder_navn, tid, slut, mig} | null}`.
+  `bet_demo()` (`POST /api/kontor/vaeddemaal/demo`): a local made-up bet from DEMO-PC that closes
+  after 60 s and ends after 90 s with the user's guess winning when there is one.
+* **Records**: after `POST /api/pet/spil` gives `ny_rekord`, `record(score)` broadcasts `rekord`.
+  Received → `progress.office_record(pc, navn, score)`; a new office record → SSE `say {tekst: "🎮
+  ‹navn› (‹PC›) har ny kontorrekord i render-spillet: 2310!"}`.
+* **The year**: `share_year(summary)` (`POST /api/aar/del {aar}`) broadcasts `aar` (own gap 10 min
+  → 400 "Du har lige delt den – vent lidt"). Received → SSE `besoeg {type: "aar", pc, navn, stage,
+  outfit, pynt, aar: x}` + a plain card "📊 Klippet ‹år› fra ‹navn› (‹PC›)" with a one-line summary
+  (no buttons, `prioritet` normal, `lyd` false, udloeber 2 days). The year carries numbers only – no
+  project names; a bet does show the render's file name (it may hold the client's name – an office
+  LAN, said in the README).
+* **Messages** (`messages.py`): internal posts may carry `opkald: false` – such a message never
+  counts as a call (no phone, no ring). `bell_sound()`: Klippe's quiet hand bell
+  (`klippe-frokost-1.wav`, "ding-ding-ding" ≈ 1.1 s, peak 0.2), made like the ring.
+
+### 23.8 Easter eggs in the search field
+
+* `easterEgg(query, petName)` (app.js, pure): folded, trimmed, trailing `!?.` removed, exact match
+  → `kaffe`; `fredag`; `deadline`; `klippe` (or the pet's name); `durum`; `booster` ("faxe kondi
+  booster" too); `festkat` ("kat" too); `hjaelp` ("hjælp", "help"); `fyraften`; `sne` ("snow") –
+  else null. Real search results are never affected.
+* The search window, once the query has stayed an egg 700 ms and that egg did not fire in the last
+  60 s (`search_paaskeaeg` on): `POST /api/paaskeaeg {ord}` (errors ignored) and, in the window:
+  fredag – confetti; sne – snowflakes over the list for 4 s; festkat – the party cat walks across
+  the bottom (GIF from `/api/festkat`, else drawn); deadline – the search box shakes; the others
+  a small toast ("☕ Klippe kommer med kaffe!", "🌯 Klippe savler …", …) while Klippe is on.
+* Server: `POST /api/paaskeaeg {ord}` – 400 "Påskeæggene er slået fra" / "Ukendt påskeæg"; the
+  same egg within 3 s → `{ok: true, ignoreret: true}`; else SSE `paaskeaeg {ord}`.
+* Widget (`paaskeaeg`): kaffe – the coffee cup in its hand 8 s, "Værsgo! ☕"; fredag – celebrate
+  ("Det ER fredag! 🎉" on Fridays, else "Fredag? Snart! 🎉"); deadline – `data-panik` 4 s (runs to
+  and fro, sweating) "DEADLINE?! 😱"; klippe – `data-vink` 2.5 s "Det er mig! 👋"; durum –
+  `data-savler` 4 s "Durum?! 🤤 Ja tak!"; booster – a 4-s rush look "⚡ BOOSTER!"; festkat – the
+  party cat comes in and spins once; hjaelp – `data-helt` 5 s (a red cape) "Klippe til
+  undsætning! 🦸"; fyraften – a yawn and the nightcap 5 s "Fyraften? Jaaa! 🏠"; sne –
+  `data-snestorm` 6 s "Sne! ❄️". Not while it eats, a party, a visit or a game is on (one waits,
+  ≤ 20 s).
+
+### 23.9 "I dag for N år siden" (`search.py`, `indexer.py`, search window, widget)
+
+* `search.memories(conn, sources, today, *, years=15, minimum=5, online_only=False)`: for each
+  year back y = 1…15 the same calendar day (29 Feb → 28 Feb), local midnight to midnight: files
+  (kind 0) with `mtime` in it, grouped by (source, `project_rel`) (projects only, not under a
+  template), ≥ `minimum` files; per year the project with the most files that day (ties: more media
+  files, then the name). Returns the 3 nearest years: the project's Item (§7.1) + `minde:
+  {aar_siden, dato, antal, slags: "klip"|"billeder"|"lydfiler"|"filer"}` (the majority among
+  video/image/audio extensions). `Indexer.memories(today=None)` caches it 10 min per day.
+* `GET /api/minder` → `{dato, minder: [...]}` (`minder` [] while `search_minder` is off).
+* Search window, recent view (empty query): the group `minde` "📸 I dag for 3 år siden" with the
+  nearest memory only, after the Resolve group and before "Seneste projekter"; never the default
+  selection; its second line "112 klip fra 12. oktober 2023". Fetched once per day.
+* Widget: once per day, 6 s after the hello: "📸 I dag for 3 år siden: 112 klip i ‹projekt›" (9 s).
+
+### 23.10 The render game (widget, `achievements.py`, `kontor.py`)
+
+* Only while the bridge's render state is `aktiv` (and `widget_renderspil`): the render line gets
+  `#spil-knap` "🎮 Spil" → the overlay `#spil` (canvas `#spil-canvas`, `#spil-point`,
+  `#spil-bedste`, `#spil-rekord`, the render's bar `#spil-render`, `#spil-start`, `#spil-luk`,
+  `#spil-besked`). An endless runner on a timeline: Klippe jumps (click, Space, ↑; one double jump)
+  over "klippefejl" – red "Media Offline" blocks, black frames, glitch blocks, gaps (jump cuts) –
+  and collects film frames (+10); speed grows; score = distance/10 + frames. When the render ends
+  the round ends: "Renderen er færdig! 🎬 Din score: N", the overlay closes after 5 s.
+* `POST /api/pet/spil {score, demo}` → `game_result`; a non-demo score while no render was active in
+  the last 5 min → 400 "Render-spillet kan kun spilles, mens Resolve renderer". `GET /api/pet/spil`
+  → `game_state()`. The Prøv tab's "🎮 Prøv render-spillet" plays one round with `demo: true`.
+
+### 23.11 Klippet ‹år› (`aar.py`, `web/aar.html|js|css`)
+
+* `aar.year_review(year, *, segments, imports, counters, eaten, meals, unlocked, found, name,
+  stage, level, today)` (pure) →
+  `{aar, fra, til, siden (first logged day | null), dage, timer, projekter, top: [{navn, timer}] (≤ 5),
+  sider: [{side, navn, timer}], bedste_dag: {dato, timer} | null, ugedag | null, tidligst ("07:42" |
+  null), fokus_90, pauser, kort: {antal, tb, filer, kamera | null}, leveringer, renders, mad: {i_alt,
+  spist, yndlings: {id, navn, antal} | null}, klippe: {navn, stage, level, trofaeer, fund}, kontor:
+  {frokost_ringet, post_sendt, post_faaet, slik_givet, vaeddemaal_vundet, spil_bedste, sne}}` – only
+  that year; nothing about late nights.
+* `GET /api/aar?aar=YYYY` (default this year; 2026 … this year, else 400 "Det år findes ikke i
+  Klippet") → the review. `POST /api/aar/aabn {aar?}` opens
+  `http://127.0.0.1:<port>/aar.html?aar=YYYY` in the default browser (user click only). `POST
+  /api/aar/del {aar}` → `share_year` with `{aar, timer, side (top), projekter, durum, kort,
+  leveringer, trofaeer}`.
+* `aar.html` – a story in the style of a year-in-review: full-window slides, big numbers that count
+  up, a colour per slide, segment bars on top (auto 6 s, pause while held), ← → Space and click:
+  intro "Klippet 2026" with Klippe (an `<iframe>` of `widget.html?sprites=cheer&stage=…&pynt=…`) ·
+  the hours · the top project · top 5 · Resolve's pages · music and AI · the best day and weekday ·
+  cards, TB and camera · deliveries and renders · what Klippe ate · trophies · the office (lunch,
+  post, Halloween, bets, game) · outro "Tak for et godt år" with [Del med kontoret] and [Se igen].
+  Since Klippe only arrived on 30 Sep 2026 the intro says "Siden 30. september". Reduced motion: no
+  count-ups or auto-advance.
+* Widget: December–January (`widget_aarsrapport`) the header's `#aar-knap` 🎬 (→ `/api/aar/aabn`);
+  the first such day once: "🎬 Dit Klippet 2026 er klar! Tryk på 🎬 øverst".
+
+### 23.12 The widget's header, "Prøv" tab, lunch and post
+
+* Header icons (`.head__icon`, left of 🏆, all `hidden` by default): `#frokost-knap` 🔔 (weekdays
+  10:45–13:30 with `widget_frokost`), `#post-knap` ✉️ (`widget_post` and a colleague seen),
+  `#jul-knap` 🎄 + `#jul-antal` (December), `#aar-knap` 🎬.
+* The 🏆 panel: tabs 🏆 Trofæer · 👕 Garderobe · 🎄 Jul (December / demo) · 🎛️ Prøv. The footer
+  keeps "🎮 Lad Klippe lege nu"; every demo button sits in `#panel-proev` (shown for the Prøv tab)
+  with a one-line hint: the old `#demo-robots`, `#demo-call`, `#demo-party`, `#demo-visit` and
+  `#demo-halloween`, `#demo-jul`, `#demo-sne`, `#demo-frokost`, `#demo-vaeddemaal`, `#demo-spil`,
+  `#demo-bad`, `#demo-nat`, `#demo-dans`, `#demo-aar`, `#demo-post` (a post from DEMO-PC to
+  yourself, local only).
+* **Lunch** (SSE `frokost`): Klippe rings the bell (`data-frokost="ringer"`, 2.5 s, "DING DING!"):
+  "🍽️ FROKOST! (‹navn› ringede fra ‹PC›)" or "🔔 Du ringede til frokost!"; hungry: "Endelig! 🌯";
+  then it runs out through a door at the right edge (`loeber`, 1.5 s) and is gone (`ude`): the
+  sign `#frokost-skilt` "🍽️ Til frokost – klik for at kalde Klippe hjem". It comes back
+  (`tilbage`, 1.5 s, "Mæt og glad! 😋") when the user records again after ≥ 3 min, after 45 min,
+  or on a click on the sign. A party, visit, call or render end brings it back first.
+* **Post**: `#post-knap` opens `#post-panel` (like the food tray): the colleagues seen now
+  (`#post-til`, one button each, from `GET /api/kontor`), quick notes `.post__hurtig` ("Kan du lige
+  kigge på det her? 👀", "Frokost? 🍔", "Kaffe? ☕", "Renderen er færdig ✅", "Ring lige 📞", "Godt
+  gået! 🎉"), `<textarea id="post-tekst" maxlength="120">`, `#post-send` "Send ✉️", `#post-fejl`,
+  `#post-luk`. Sent (`post_sendt`): Klippe walks out with an envelope (`data-post="ud"`, ≈ 6 s)
+  and back. A post arriving: the guest carries an envelope (`data-post` on the guest) and the card
+  shows; "Svar" opens the panel with the sender chosen.
+* **Bets** (SSE `vaeddemaal`): the card `#vaeddemaal` – "🎲 ‹PC› renderer ‹fil› (12 %) – hvornår er
+  den færdig?" (own: "🎲 Du renderer ‹fil› – kollegerne gætter med!"), quick choices `#vm-valg` (now
+  +5, +10, +20, +40 min, rounded to 5 min), `<input type="time" id="vm-tid">`, `#vm-gaet`; after a
+  guess one line `#vm-status` "🎲 Dit gæt: 14:32 · 3 har gættet · lukker om 2 min"; the result
+  "🏆 ‹vinder› vandt! Gættede 14:32 – færdig 14:31" (you: fireworks "Du vandt render-væddemålet!
+  🔮") shows 2 min; "aflyst": "Renderen stoppede – væddemålet er aflyst".
+
+### 23.13 New events and routes
+
+SSE: `pet_saeson`, `pet_jul`, `sne`, `rod`, `frokost`, `post_sendt`, `post_svar`, `slik_svar`,
+`vaeddemaal`, `paaskeaeg`, and `besoeg` types "slik", "post", "aar".
+
+Routes: `GET /api/pet/saeson` · `GET /api/pet/jul` · `POST /api/pet/jul {nr}` · `POST
+/api/pet/jul/demo {nr}` · `GET /api/pet/spil` · `POST /api/pet/spil {score, demo}` · `POST
+/api/sne/demo` · `GET /api/rod` · `POST /api/rod/aabn` · `POST /api/rod/demo` · `POST
+/api/kontor/frokost` · `POST /api/kontor/frokost/demo` · `POST /api/kontor/post {til, tekst}` ·
+`POST /api/kontor/post/demo` (a local post from DEMO-PC) · `POST /api/kontor/slik {id, svar}` ·
+`POST /api/kontor/slik/demo` · `GET /api/kontor/vaeddemaal` · `POST /api/kontor/gaet {pc, vid,
+tid}` · `POST /api/kontor/vaeddemaal/demo` · `GET /api/minder` · `POST /api/paaskeaeg {ord}` · `GET
+/api/aar?aar=` · `POST /api/aar/aabn {aar?}` · `POST /api/aar/del {aar}`. Errors are 400 `{"error"}`
+in Danish; a component that is not running → 400 like the other Klippe routes.
+
+App: `Rod` and `Sne` are created with the widget and closed with it; `progress.on_snow =
+sne.start`; the office gets the progress, the message board, `working()` (the tracker records) and
+the bell; a small bus tap counts `leveringer` (a `levering`, not a demo) and `renders` (a new
+`faerdig` with `udfald` done) via `progress.note`; `projektsog:post/<PC>` → SSE `post_svar`.
+
+### 23.14 Decisions made while building (2026-10-12)
+
+* **Costumes and hats** (§23.3): only `heks` hides the hat (it is one); the other costumes keep
+  it, so a hat won in a prank can be seen on the thief – everyone is in costume that week. A
+  delivery party's Deliver cap wins over the nightcap.
+* **The lunch door** is drawn in the pet's SVG right of Klippe (it scales with Klippe and stands on
+  its floor), not at the stage's edge. The header bell also needs `widget_kontor`.
+* **The widget's clock**: `widget.html?nu=<ISO time>` fixes it (tests: fyraften, Halloween,
+  December, the lunch window). Greetings (fyraften, Halloween, a ready door, Klippet) wait for the
+  hello. Opened doors show their gift again when clicked; `#demo-jul` opens the real calendar in
+  December. The bet's status line can be clicked to change the guess until it closes.
+* **Klippe in `aar.html`**: the server sends `frame-ancestors 'none'`, so a framed `widget.html`
+  is refused; `aar.js` fetches `/widget.html`, lifts out `#pet` and shows it in a `srcdoc` frame
+  with `/widget.css`, cheering, in the wardrobe of `GET /api/pet`.
+* **Snow helper**: `sne_child` ends with `{"event":"home","reason":…}` like the other helpers;
+  `Sne.start` returns `{ok: false, grund}` when the desktop is not free and `{ok: true, sner: true}`
+  while it already snows; `on_snow(seconds, demo=…)`.
+* **Bath**: `Rod.demo()` → `{ok, rod}` (its state has `mappe` null and `demo: true`; a demo bath
+  counts nothing); `projekt` is the folder's name. `/api/rod/aabn` with no folder → 400.
+* **Memories**: `antal`/`slags` count the day's dominant media kind when the media are at least a
+  quarter of the day's files (an FX9 clip's XML sidecar does not turn "93 klip" into "360 filer").
+* **Office**: a post to `DEMO-PC` (the demo) is answered locally; on a colleague's bet
+  `antal_gaet` is only our own guess (the opener knows all of them); `/api/kontor/gaet` returns
+  `{ok, vaeddemaal}`; a `slik_svar` of type ballade also carries `toiletpapir`; demo events carry
+  `demo: true`; while the socket is not open yet the office routes say "Kontor-Klipperne er ikke
+  klar endnu – prøv igen om lidt"; internal cards may live up to 7 days (the year card: 2). Our
+  own trick-or-treat takes answers (`godbid`/`ballade`) for 5 min, one per PC. A render queue: a
+  bet ends with its own job; a render that stops without an end calls the bet off after 60 s.
+* **Food log**: `MEAL_LOG_MAX` is 3000 (the year review counts a year's meals from it).
+
+After two independent reviews (2026-10-12):
+
+* **Office robustness**: a packet that cannot be handled (e.g. `"start": 10**400`) is logged at
+  debug and dropped – it never stops the office's thread. Bet numbers start at a random value per
+  process (a restart never reuses one). Our own and the demo bet are never evicted; at most 2 bets
+  per sender address, the oldest arrival goes first. Bet updates and `vinder` count only from the
+  address the bet came from; the owner's updates of a known bet have their own 2-s gap (a "lukket"
+  is never lost to the 30-s one). A new guess on the same bet within 2.5 s → 400 "Vent lidt, før du
+  gætter igen".
+* **Message board**: LAN cards (`post:`/`aar:` tags) are at most 6; a new one replaces the oldest
+  LAN card, never another program's message or an unanswered call – with no LAN card to drop, it
+  is refused.
+* **Fyraften trophies**: `day_last` is per day from the split parts – a stretch past midnight ends
+  that day at 24.0 (neither "Hjem til tiden" nor "Fyraften til tiden" rewards night work).
+* **Widget**: a GET after a (re)connect is ignored when an SSE event of its kind came while it was
+  on its way; `loadBets` replaces the list, and a colleague's unfinished bet goes 3 h after its
+  `lukker`; the calendar is reloaded when the date changes and only exists in December (or the
+  demo); a trick-or-treater closes the 🏆 panel, the tray and the post panel, waits while the
+  render game is open, and its countdown is `min(25, 55 − waited)` s – under 8 s left it does not
+  come in ("… var forbi efter slik, mens du havde travlt"), nothing is sent; `data-ballade` is a
+  token list ("hat toiletpapir"); demos answering `{ok: false, grund}` say the reason; "Lars'" and
+  "dit gevir"; eggs wait while Klippe is at lunch; switching `widget_renderspil` off closes a game.

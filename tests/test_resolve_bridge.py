@@ -333,6 +333,50 @@ class HelperLifecycleTests(unittest.TestCase):
         self.assertEqual(len(h.children.running), 1)
         self.assertEqual(h.state["clip_count"], 4)
 
+    def silent_resolve(self, **kwargs: Any) -> Harness:
+        """Resolve answered once, then a poll got no answer in time (it plays back)."""
+        h = Harness(self, follow="off", **kwargs)
+        h.tick()
+        self.assertFalse(h.bridge.activity(max_age=120.0)["busy"])
+        h.children.fail["poll"] = "timeout"
+        with self.assertLogs("projektsog.resolve_bridge", "WARNING"):
+            h.tick(3.0)
+        return h
+
+    def test_a_silent_resolve_keeps_its_last_activity_until_it_answers(self) -> None:
+        h = self.silent_resolve()
+        h.clock.advance(600.0)                  # ten minutes of playback, not a word
+        act = h.bridge.activity(max_age=120.0)
+        self.assertEqual((act["project"], act["busy"]), ("Rikke Lindholm - Testimonial", True))
+        self.assertGreater(act["age"], 600.0)
+        h.tick()                                # playback stopped: it answers again
+        act = h.bridge.activity(max_age=120.0)
+        self.assertEqual((act["busy"], act["age"]), (False, 0.0))
+
+    def test_a_silent_resolve_that_quits_has_no_activity(self) -> None:
+        h = self.silent_resolve()
+        h.winui.running = False
+        h.tick(1.0)
+        self.assertIsNone(h.bridge.activity(max_age=120.0))
+
+    def test_a_refusing_resolve_is_not_silent(self) -> None:
+        answers: dict[str, Any] = {"resolve": FakeResolve(rikke_project())}
+        h = self.silent_resolve(connect=lambda: answers["resolve"])
+        answers["resolve"] = None
+        h.tick(rb.CHILD_BACKOFF_S[0])           # a new helper: Resolve refuses the connection
+        self.assertEqual(h.state["error"], rb.ERR_EXTERNAL_SCRIPTING)
+        h.clock.advance(200.0)
+        self.assertIsNone(h.bridge.activity(max_age=120.0))
+
+    def test_a_crashed_helper_does_not_make_resolve_silent(self) -> None:
+        h = Harness(self, follow="off")
+        h.tick()
+        h.children.children[0].crash()
+        with self.assertLogs("projektsog.resolve_bridge", "WARNING"):
+            h.tick(3.0)
+        h.clock.advance(200.0)
+        self.assertIsNone(h.bridge.activity(max_age=120.0))
+
     def test_back_off_grows_while_the_helper_cannot_start(self) -> None:
         h = Harness(self)
         h.children.spawn_error = OSError("pythonw.exe is missing")

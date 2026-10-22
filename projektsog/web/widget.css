@@ -39,19 +39,25 @@ body {
 
 /* ---------------------------------------------------------------- header */
 .head { display: flex; align-items: center; gap: 6px; min-height: 22px; }
-.head__name { font: 600 15px/1.2 var(--font-display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.head__name { flex: 0 0 auto; max-width: 48%; font: 600 15px/1.2 var(--font-display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .head__level {
+  min-width: 0;
   padding: 1px 7px;
+  overflow: hidden;
   border-radius: 999px;
   background: rgba(240, 164, 91, 0.14);
   color: var(--accent);
   font-size: 11px;
   font-weight: 600;
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
-.head__right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.head__streak { font-size: 12px; font-weight: 600; color: var(--warn); white-space: nowrap; }
+.head__right { display: flex; flex: 0 1 auto; align-items: center; gap: 5px; min-width: 0; margin-left: auto; }
+.head__streak { min-width: 0; overflow: hidden; font-size: 12px; font-weight: 600; color: var(--warn); white-space: nowrap; text-overflow: ellipsis; }
+/* the header's icons (§23.12) need the room: the level pill steps aside (the line under Klippe says it too) */
+.head:has(.head__icon:not([hidden])) .head__level { display: none; }
 .head__trophies {
+  flex: none;
   padding: 1px 8px;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -122,11 +128,23 @@ body {
 .zzz text { fill: #9fb4ff; font: 700 18px var(--font-display); }
 .sweat { fill: #7fc4ff; }
 
-.body__inner, .egg, .clapper, .pupils, .zzz, .sweat, .arm { transform-box: fill-box; }
+.egg, .clapper, .pupils, .zzz, .sweat, .arm { transform-box: fill-box; }
 .body, .egg { transform-origin: 100px 180px; transform-box: view-box; }
+/* .figur is Klippe's figure – its body (.body__inner) and everything it wears and holds – so every
+   animation that moves the body is on it, and the hat, the glasses, the headphones and what is in
+   the hand move along. Its pivots are fixed points in SVG units: where .body__inner's own fill-box
+   had them at rest (getBBox 34,62 132×116), the top-left corner (34,62) for the rules without an
+   origin (the default, 0 0) and the bottom centre (100,178) for 50% 100% – so a cape, a scarf or a
+   megaphone never moves them (a fill-box grows with whatever is drawn in it). */
+.figur { transform-box: view-box; transform-origin: 34px 62px; }
 .clapper { transform-origin: 0% 100%; }
 .arm--left { transform-origin: 100% 0%; }
 .arm--right { transform-origin: 0% 0%; }
+/* What the right hand holds (.figur__haand) turns round the arm's own pivot, the shoulder (150,132),
+   and every animation of .arm--right is its animation too – same keyframes, duration, delay and
+   easing, and switched in the same instant – so the thing stays in the hand. Poses (transform
+   without an animation) are the arm's alone. */
+.figur__haand { transform-box: view-box; transform-origin: 150px 132px; }
 
 /* what is shown when */
 .eyes-closed, .eyes-happy, .mouth, .acc, .zzz, .sweat, .egg, .egg__eyes .pupil { display: none; }
@@ -168,17 +186,17 @@ body {
 [data-stage="legend"] .pet__glow { opacity: 0.6; }
 
 /* moods */
-[data-mood="working"] .body__inner { animation: bob 0.9s ease-in-out infinite; }
+[data-mood="working"] .figur { animation: bob 0.9s ease-in-out infinite; }
 [data-mood="working"] .arm--left { animation: type-l 0.45s ease-in-out infinite; }
-[data-mood="working"] .arm--right { animation: type-r 0.45s ease-in-out infinite 0.22s; }
+[data-mood="working"] :is(.arm--right, .figur__haand) { animation: type-r 0.45s ease-in-out infinite 0.22s; }
 [data-mood="working"] .egg { animation: wobble 1.4s ease-in-out infinite; }
 [data-mood="waiting"] .pupils { animation: look 2.4s ease-in-out infinite; }
-[data-mood="waiting"] .foot:first-child { animation: tap 0.5s ease-in-out infinite; transform-box: fill-box; transform-origin: 100% 100%; }
-[data-mood="sleeping"] .body__inner, [data-mood="sleepy"] .body__inner { animation: breathe 3.2s ease-in-out infinite; }
+[data-mood="waiting"] .foot:first-of-type { animation: tap 0.5s ease-in-out infinite; transform-box: fill-box; transform-origin: 100% 100%; }
+[data-mood="sleeping"] .figur, [data-mood="sleepy"] .figur { animation: breathe 3.2s ease-in-out infinite; }
 [data-mood="sleeping"] .zzz text { animation: zzz 3s ease-in-out infinite; }
 [data-mood="sleeping"] .zzz text:nth-child(2) { animation-delay: 0.6s; }
 [data-mood="sleeping"] .zzz text:nth-child(3) { animation-delay: 1.2s; }
-[data-mood="chill"] .body__inner { animation: sway 3s ease-in-out infinite; }
+[data-mood="chill"] .figur { animation: sway 3s ease-in-out infinite; }
 [data-mood="working"] .pet__glow { opacity: 0.35; }
 
 .clap .clapper { animation: clap 0.3s ease-in-out 3; }
@@ -354,7 +372,7 @@ body {
 .carry__file:nth-child(3) { animation-delay: 1s; }
 [data-transfer="copy"] .arm--left { transform: rotate(120deg); }
 [data-transfer="copy"] .arm--right { transform: rotate(-120deg); }
-[data-transfer] .body__inner { animation: bob 0.5s ease-in-out infinite; }
+[data-transfer] .figur { animation: bob 0.5s ease-in-out infinite; }
 
 [data-transfer="verify"] .carry__glass { display: inline; animation: inspect 1.2s ease-in-out infinite; transform-box: fill-box; transform-origin: 20% 20%; }
 [data-transfer="verify"] .carry__checks, [data-transfer="delete"] .carry__checks { display: inline; }
@@ -401,7 +419,7 @@ body {
 [data-aura="varm"] .pet__glow, [data-aura="kold"] .pet__glow, [data-aura="hjerter"] .pet__glow,
 [data-aura="stjernestoev"] .pet__glow { opacity: 0.6; }
 
-.hat, .briller, .mund, .haand, .aura { display: none; }
+.hat, .briller, .mund, .hals, .haand, .aura { display: none; }
 [data-hat="sloejfe"] .hat--sloejfe, [data-hat="festhat"] .hat--festhat, [data-hat="baret"] .hat--baret,
 [data-hat="nissehue"] .hat--nissehue, [data-hat="blomst"] .hat--blomst, [data-hat="propelhat"] .hat--propelhat,
 [data-briller="hornbriller"] .briller--hornbriller, [data-briller="solbriller"] .briller--solbriller,
@@ -500,9 +518,9 @@ body {
 .aura--lyn path:nth-child(2) { animation-delay: 0.3s; }
 .aura--lyn path:nth-child(3) { animation-delay: 0.55s; }
 .aura--lyn path:nth-child(4) { animation-delay: 0.8s; }
-[data-energi] .body__inner { animation: buzz 0.16s linear infinite; }
+[data-energi] .figur { animation: buzz 0.16s linear infinite; }
 [data-energi][data-mood="working"] .arm--left { animation-duration: 0.2s; }
-[data-energi][data-mood="working"] .arm--right { animation-duration: 0.2s; animation-delay: 0.1s; }
+[data-energi][data-mood="working"] :is(.arm--right, .figur__haand) { animation-duration: 0.2s; animation-delay: 0.1s; }
 @keyframes flicker { 0% { opacity: 1; } 50% { opacity: 0.15; } }
 @keyframes buzz { 0%, 100% { translate: 0 0; } 25% { translate: 1px -1px; } 50% { translate: -1px 0; } 75% { translate: 1px 1px; } }
 
@@ -670,18 +688,18 @@ body {
 .panel[hidden] { display: none; }
 .panel__head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .panel__tabs { display: flex; flex: 1; gap: 4px; }
-.panel__tab { flex: 1; padding: 5px 6px; border: 0; border-radius: 8px; background: transparent; color: var(--text-2);
-  font: 600 12px/1.3 var(--font); cursor: pointer; }
-.panel__tab[aria-selected="true"] { background: var(--surface-3); color: var(--text); }
+.panel__tab { display: inline-flex; flex: 1 1 auto; align-items: center; justify-content: center; gap: 4px; min-width: 0;
+  padding: 5px 6px; border: 0; border-radius: 8px; background: transparent; color: var(--text-2);
+  font: 600 12px/1.3 var(--font); white-space: nowrap; cursor: pointer; }
+.panel__tab[hidden] { display: none; }
+.panel__tab[aria-selected="true"] { flex-grow: 3; background: var(--surface-3); color: var(--text); }
+.panel__tab:not([aria-selected="true"]) .panel__tab-tekst { display: none; }   /* the others: only the icon */
+.panel__tab:hover:not([aria-selected="true"]) { background: var(--surface); }
 .panel__close { width: 26px; height: 26px; border: 0; border-radius: 7px; background: transparent; color: var(--text-3);
   font-size: 17px; line-height: 1; cursor: pointer; }
 .panel__close:hover { background: var(--surface-3); color: var(--text); }
 .panel__body { flex: 1; overflow-y: auto; padding: 6px 10px 14px; scrollbar-width: thin; }
 .panel__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--line); }
-.panel__demo { display: flex; flex-wrap: wrap; flex-basis: 100%; gap: 6px; }
-.panel__demo-button { flex: 1 1 auto; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
-  color: var(--text-2); font: 600 11.5px/1.2 var(--font); white-space: nowrap; cursor: pointer; }
-.panel__demo-button:hover { background: var(--surface-3); color: var(--text); }
 .panel__play { padding: 6px 12px; border: 0; border-radius: 8px; background: var(--accent); color: #1d1b19;
   font: 600 12px/1.2 var(--font); cursor: pointer; }
 .panel__play:hover { filter: brightness(1.08); }
@@ -874,8 +892,9 @@ html.sprites *, html.sprites *::before, html.sprites *::after { animation: none 
 
 /* Klippe aims at a robot (data-sigter, `robot` events): the sprite sheet's aim pose, mirrored round
    x = 100 – so the end of the barrel is at (100 − 92·S, 180 − 54.75·S) for Klippe's scale S, where
-   the helper starts the laser. Nothing else moves the body meanwhile. */
-#app[data-sigter][data-haand="awp"] .body { animation: none !important; }
+   the helper starts the laser. Nothing else moves the body meanwhile – not the figure either, now
+   that the AWP is part of it, nor the hand (.figur__haand, in step with the still arm). */
+#app[data-sigter][data-haand="awp"] :is(.body, .figur, .figur__haand) { animation: none !important; }
 #app[data-sigter="venstre"][data-haand="awp"] .body { scale: -1 1; }
 #app[data-sigter][data-haand="awp"] .haand--awp { transform: translate(-14px, -26px); display: inline !important; }
 #app[data-sigter][data-haand="awp"] .arm--right { animation: none !important; transform: rotate(-55deg); }
@@ -913,6 +932,7 @@ html.sprites *, html.sprites *::before, html.sprites *::after { animation: none 
 [data-telefon="svarer"] .telefon__roer--gaffel, [data-telefon="svarer"] .telefon__ledning--gaffel { display: none; }
 [data-telefon="svarer"] .telefon__roer--oere, [data-telefon="svarer"] .telefon__ledning--oere { display: inline; }
 [data-telefon="svarer"] .arm--right { animation: none !important; transform: rotate(-100deg); }
+[data-telefon="svarer"] .figur__haand { animation: none !important; }       /* in step with the arm */
 [data-telefon="svarer"] .haand { display: none !important; }
 @keyframes ringer {
   0%, 40%, 100% { rotate: 0deg; } 5%, 15%, 25% { rotate: -9deg; } 10%, 20%, 30% { rotate: 9deg; } 35% { rotate: -5deg; }
@@ -1065,6 +1085,671 @@ svg.festkat__kat { overflow: visible; }
 svg.festkat__kat.snurrer { animation: kat-snurr 0.46s linear 3; }
 @keyframes kat-snurr { 0% { scale: 1 1; } 25% { scale: 0.08 1; } 50% { scale: -1 1; } 75% { scale: -0.08 1; } 100% { scale: 1 1; } }
 
+/* =================================================================================================
+   Fun in the office (SPEC §23). widget.js sets these hooks; the drawings are in widget.html.
+   #app data-*   nat (gaber | doeser | sover) · dans · saeson (halloween | jul) · kostume (vampyr |
+                 spoegelse | skelet | heks – a guest may have one too) · ballade (a list: hat, toiletpapir) ·
+                 snestorm · beskidt (lidt | beskidt | meget) · bad (≈ 8 s) · frokost (ringer | loeber |
+                 ude | tilbage) · post (ud, ≈ 6 s) · panik · vink · savler · helt · hals (the neck slot)
+   #pet pulses   gaab (a yawn, 1.6 s) · nikker (a nod, 1.2 s)
+   .gaest        data-kostume · data-post (it brings a letter)
+   .figur        Klippe's figure: .body__inner plus all it wears and holds (outfits, hats, the witch's
+                 hat, glasses, .figur__haand with the .haand things, .kuvert, .frokostklokke, the mouth,
+                 .noder, .panik-udbrud) – every body animation goes on .figur, never on .body__inner,
+                 and every .arm--right animation on .figur__haand too (see "the pet (SVG)" above)
+   SVG           .kostume--*, .graeskar-lygte, .flagermus, .toiletpapir, .hat--nathue, .oejenlaag,
+                 .noder, .snavs (.plet--1…8), .fluer, .stank, .badekar (.badekar__kar, .skum,
+                 .bad__bobler, .bad__and, .bad__bruser, .bad__glimt), .frokostklokke, #frokost-doer,
+                 .kuvert, .kappe, .panik-draaber, .panik-udbrud and the new wardrobe items
+   HTML          .sne-lag, #frokost-skilt, .head__icon (#frokost-knap, #post-knap, #jul-knap with
+                 #jul-antal, #aar-knap), #panel-proev (.proev__knap), #post-panel (.post__modtager,
+                 .post__hurtig), #slik, #vaeddemaal (.vm__valg), #spil and #spil-knap, .kalender (.laage)
+   ================================================================================================= */
+
+/* Klippe's scale (as .body above), for the things that grow with it but are drawn outside it */
+#app { --skala: 1; }
+#app[data-stage="egg"], #app[data-stage="baby"] { --skala: 0.74; }
+#app[data-stage="junior"] { --skala: 0.86; }
+#app[data-stage="pro"] { --skala: 0.95; }
+.mouth--o { transform-box: fill-box; transform-origin: center; }
+
+/* ---------------------------------------------------------------- new things in the wardrobe (SPEC §23.1) */
+[data-hat="heksehat"] .hat--heksehat, [data-hat="nathue"] .hat--nathue, [data-hat="racerhjelm"] .hat--racerhjelm,
+[data-hat="gevir"] .hat--gevir, [data-hat="glorie"] .hat--glorie, [data-hat="julestjerne"] .hat--julestjerne,
+[data-briller="racerbriller"] .briller--racerbriller, [data-briller="julebriller"] .briller--julebriller,
+[data-mund="vampyrtaender"] .mund--vampyrtaender,
+[data-hals="halstoerklaede"] .hals--halstoerklaede, [data-hals="julesloejfe"] .hals--julesloejfe,
+[data-haand="graeskar"] .haand--graeskar, [data-haand="klokke"] .haand--klokke, [data-haand="brev"] .haand--brev,
+[data-haand="krystalkugle"] .haand--krystalkugle, [data-haand="badeand"] .haand--badeand,
+[data-haand="slikstok"] .haand--slikstok, [data-haand="julegave"] .haand--julegave,
+[data-aura="bobler"] .aura--bobler, [data-aura="snefnug"] .aura--snefnug, [data-aura="julelys"] .aura--julelys { display: inline; }
+[data-farve="julerod"] { --body: #5a1c22; --body-edge: #c4453d; }
+[data-striber="polkagris"] { --stripe-dark: #d6332b; --stripe-light: #fff6f2; }
+[data-aura="bobler"] { --aura: #8fd3ff; }
+[data-aura="snefnug"] { --aura: #cfe9ff; }
+[data-aura="julelys"] { --aura: #ffcf4a; }
+[data-aura="bobler"] .pet__glow, [data-aura="snefnug"] .pet__glow, [data-aura="julelys"] .pet__glow { opacity: 0.5; }
+
+.nathue__top { fill: #3d55b4; stroke: #233478; stroke-width: 2; stroke-linejoin: round; }
+.nathue__stjerne { fill: #ffe27a; }
+.nathue__kant, .nathue__kvast { fill: #f2f4ff; stroke: #c3c9ea; stroke-width: 1.5; }
+.heksehat__skygge, .heksehat__top { fill: #5b3a99; stroke: #36205f; stroke-width: 2; stroke-linejoin: round; }
+.heksehat__baand { fill: #f0a45b; }
+.heksehat__pynt { fill: #ffd56b; }
+.racerhjelm__kuppel { fill: #d6332b; stroke: #8e1e17; stroke-width: 2; }
+.racerhjelm__stribe { fill: #f6f1ea; }
+.racerhjelm__visir { fill: #1d2836; stroke: #0d131b; stroke-width: 1.2; }
+.racerhjelm__glans { fill: none; stroke: rgba(255, 255, 255, 0.55); stroke-width: 2.6; stroke-linecap: round; }
+.racerhjelm__kant { fill: #2a2a2e; }
+.racerhjelm__skilt { fill: #f6f1ea; stroke: #1b1b1d; stroke-width: 1; }
+.racerhjelm__nummer { fill: #1b1b1d; font: 900 9px var(--font-display); text-anchor: middle; }
+.gevir__kant { fill: none; stroke: #4e3216; stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+.gevir__gren { fill: none; stroke: #b07a45; stroke-width: 4.4; stroke-linecap: round; stroke-linejoin: round; }
+.gevir__naese { fill: #e2483c; stroke: #8e1e17; stroke-width: 1; }
+.gevir__glans { fill: rgba(255, 255, 255, 0.75); }
+.gevir__lys { fill: rgba(255, 92, 72, 0.35); transform-box: fill-box; transform-origin: center; animation: rudolf 1.8s ease-in-out infinite; }
+@keyframes rudolf { 50% { opacity: 0.3; scale: 0.8; } }
+.glorie__lys { fill: rgba(255, 228, 140, 0.18); }
+.glorie__ring { fill: none; stroke: #ffd54a; stroke-width: 5; }
+.glorie__glans { fill: none; stroke: #fff6c8; stroke-width: 1.3; }
+.hat--glorie { animation: svaev 2.6s ease-in-out infinite; }
+@keyframes svaev { 50% { translate: 0 -3px; } }
+.julestjerne__stjerne { fill: #ffcf4a; stroke: #c9951c; stroke-width: 2; stroke-linejoin: round; }
+.julestjerne__fod { fill: #c9951c; stroke: #8a6420; stroke-width: 1; }
+.julestjerne__glans { fill: none; stroke: #fff6c8; stroke-width: 2; stroke-linecap: round; }
+.julestjerne__straaler { fill: none; stroke: #ffe58a; stroke-width: 2.4; stroke-linecap: round; animation: straaler 1.6s ease-in-out infinite; }
+@keyframes straaler { 50% { opacity: 0.2; } }
+.racer__rem { fill: none; stroke: #2a2a2e; stroke-width: 6; stroke-linecap: round; }
+.racer__ramme { fill: #3a3d44; stroke: #1d1f23; stroke-width: 1.5; }
+.racer__glas { fill: url(#racer-glas); opacity: 0.88; }
+.racer__bro { fill: none; stroke: #3a3d44; stroke-width: 4; stroke-linecap: round; }
+.racer__glans { fill: none; stroke: rgba(255, 255, 255, 0.75); stroke-width: 2.2; stroke-linecap: round; }
+.jule__ramme { fill: rgba(255, 255, 255, 0.07); stroke: #d6332b; stroke-width: 3.6; }
+.jule__stang { fill: none; stroke: #2f8f5b; stroke-width: 3.2; stroke-linecap: round; }
+.jule__blad { fill: #2f8f5b; stroke: #1c5c39; stroke-width: 0.8; stroke-linejoin: round; }
+.jule__baer { fill: #e2483c; }
+.vampyr__taender path, .mund--vampyrtaender path { fill: #fbfaf7; stroke: #b9b2a6; stroke-width: 0.8; stroke-linejoin: round; }
+.toerklaede__baand, .toerklaede__ende { fill: #d6332b; stroke: #8e1e17; stroke-width: 1.4; stroke-linejoin: round; }
+.toerklaede__striber { fill: none; stroke: #f6f1ea; stroke-width: 5; }
+.toerklaede__ende-stribe { fill: none; stroke: #f6f1ea; stroke-width: 2.6; }
+.toerklaede__frynser { fill: none; stroke: #f6f1ea; stroke-width: 1.6; stroke-linecap: round; }
+.sloejfe__loekke, .sloejfe__hale { fill: #d6332b; stroke: #8e1e17; stroke-width: 1.4; stroke-linejoin: round; }
+.sloejfe__knude { fill: #b3262a; stroke: #8e1e17; stroke-width: 1.2; }
+.sloejfe__fold { fill: none; stroke: #8e1e17; stroke-width: 1.2; stroke-linecap: round; }
+.lygte__hank { fill: none; stroke: #3a2a1d; stroke-width: 2.2; stroke-linecap: round; }
+.klokke__skaft { fill: #8a5a2b; stroke: #5a3a1c; stroke-width: 1; }
+.klokke__krop { fill: #e0b44a; stroke: #8a6420; stroke-width: 1.4; stroke-linejoin: round; }
+.klokke__kneb { fill: #8a6420; }
+.klokke__glans { fill: none; stroke: rgba(255, 246, 200, 0.85); stroke-width: 2; stroke-linecap: round; }
+.kuvert__papir { fill: #f6efe0; stroke: #a8987a; stroke-width: 1.2; }
+.kuvert__flap { fill: none; stroke: #a8987a; stroke-width: 1.2; stroke-linejoin: round; }
+.kuvert__hjerte { fill: #e2483c; }
+.kugle__glas { fill: url(#kugle-glas); stroke: #6c4fc4; stroke-width: 1; }
+.kugle__hvirvel { fill: none; stroke: rgba(255, 255, 255, 0.7); stroke-width: 1.4; stroke-linecap: round; }
+.kugle__glans { fill: rgba(255, 255, 255, 0.85); }
+.kugle__fod { fill: #c9951c; stroke: #8a6420; stroke-width: 1; stroke-linejoin: round; }
+.kugle__lys { fill: rgba(181, 156, 255, 0.28); transform-box: fill-box; transform-origin: center; animation: kugle 2.4s ease-in-out infinite; }
+@keyframes kugle { 50% { opacity: 0.35; scale: 0.85; } }
+.and__krop, .and__hoved { fill: #ffd23f; stroke: #c99a1c; stroke-width: 1.2; }
+.and__naeb { fill: #ff8a1f; stroke: #c25f0c; stroke-width: 0.8; stroke-linejoin: round; }
+.and__oeje { fill: #1d1b19; }
+.and__vinge { fill: #f5c22a; stroke: #c99a1c; stroke-width: 0.8; }
+.slikstok__hvid { fill: none; stroke: #fbfaf7; stroke-width: 6; stroke-linecap: round; }
+.slikstok__roed { fill: none; stroke: #d6332b; stroke-width: 6; stroke-dasharray: 4 4.6; }
+.gave__papir { fill: #2f8f5b; stroke: #1c5c39; stroke-width: 1.2; }
+.gave__baand { fill: none; stroke: #e2483c; stroke-width: 4; }
+.gave__sloejfe { fill: #ffcf4a; stroke: #c9951c; stroke-width: 1; stroke-linejoin: round; }
+.aura--bobler circle { fill: rgba(191, 230, 255, 0.12); stroke: rgba(191, 230, 255, 0.85); stroke-width: 1.3;
+  animation: boble-aura 4s ease-in-out infinite; }
+.aura--bobler circle:nth-child(2n) { animation-delay: -1.3s; }
+.aura--bobler circle:nth-child(3n) { animation-delay: -2.6s; }
+.bobler__glans { fill: none; stroke: rgba(255, 255, 255, 0.85); stroke-width: 1.2; stroke-linecap: round; }
+@keyframes boble-aura { 0%, 100% { translate: 0 0; opacity: 0.6; } 50% { translate: 2px -9px; opacity: 1; } }
+.aura--snefnug path { fill: none; stroke: #e8f4ff; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round;
+  transform-box: fill-box; transform-origin: center; animation: snefnug 9s linear infinite; }
+.aura--snefnug g:nth-child(2n) path { animation-direction: reverse; animation-duration: 12s; }
+@keyframes snefnug { from { rotate: 0deg; } to { rotate: 360deg; } }
+.julelys__ledning { fill: none; stroke: #2f5a3a; stroke-width: 1.4; }
+.julelys__paerer ellipse { fill: #ff5d5d; stroke: rgba(0, 0, 0, 0.35); stroke-width: 0.6; animation: julelys 1.8s steps(1) infinite; }
+.julelys__paerer ellipse:nth-child(4n+2) { fill: #ffd34d; animation-delay: -0.45s; }
+.julelys__paerer ellipse:nth-child(4n+3) { fill: #5fdc7f; animation-delay: -0.9s; }
+.julelys__paerer ellipse:nth-child(4n+4) { fill: #6fb8ff; animation-delay: -1.35s; }
+@keyframes julelys { 0% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* ---------------------------------------------------------------- Natte-Klippe (SPEC §23.2)
+   From fyraften: the nightcap (gaber), heavy lids and nodding off (doeser), then asleep (sover).
+   The nightcap wins over every hat, costume hat and work clothes on the head. */
+#app[data-nat]:not([data-fest]) .hat:not(.hat--nathue),
+#app[data-nat]:not([data-fest]) :is(.acc--fusion, .acc--audio, .acc--deliver, .acc--crown, .kostume--heks) { display: none !important; }
+#app[data-nat]:not([data-fest]) .hat--nathue { display: inline !important; }   /* a delivery party: the Deliver cap */
+#app[data-nat="doeser"] .oejenlaag { display: inline; }
+#app[data-nat="doeser"] .figur { transform-origin: 100px 178px; animation: doeser 4.6s ease-in-out infinite; }
+@keyframes doeser { 0%, 100% { translate: 0 0; rotate: 0deg; } 50% { translate: 0 2px; rotate: 1.5deg; } }
+#app[data-nat="sover"]:not(.party) :is(.eyes-open, .eyes-happy, .mouth) { display: none !important; }
+#app[data-nat="sover"]:not(.party) .eyes-closed { display: inline !important; }
+#app[data-nat="sover"]:not(.party) .mouth--o { display: inline !important; scale: 0.55 0.5; }
+#app[data-nat="sover"] .zzz { display: inline; }
+#app[data-nat="sover"] .zzz text { animation: zzz 3s ease-in-out infinite; }
+#app[data-nat="sover"] .zzz text:nth-child(2) { animation-delay: 0.6s; }
+#app[data-nat="sover"] .zzz text:nth-child(3) { animation-delay: 1.2s; }
+#app[data-nat="sover"] .figur { animation: breathe 4.4s ease-in-out infinite; }
+#app[data-nat="sover"] :is(.arm--left, .arm--right, .figur__haand) { animation: none; }
+.oejenlaag { display: none; }
+.oejenlaag path { fill: var(--body); }
+.oejenlaag .oejenlaag__kant { fill: none; stroke: #f3efe6; stroke-width: 2.6; stroke-linecap: round; }
+/* Something in the right hand (data-haand, on show – none of the states that put it away): the yawn
+   and the dance only lift it a little, ≤ 30°, instead of throwing the arm up 115° or 100° – and the
+   thing turns along (.figur__haand). A variable rather than a selector of its own, so the arm and the
+   hand change animation in the same instant and stay in step. */
+#app[data-haand]:not([data-haand="ingen-haand"], [data-transfer], [data-spiser], [data-telefon="svarer"], [data-fest],
+  [data-frokost="ringer"], [data-post="ud"], [data-bad]) { --gaab-h: gaab-h-holder; --dans-h: dans-h-holder; }
+/* a yawn: eyes shut, the mouth wide open, a stretch */
+#pet.gaab :is(.eyes-open, .eyes-happy, .mouth) { display: none !important; }
+#pet.gaab .eyes-closed { display: inline !important; }
+#pet.gaab .mouth--o { display: inline !important; animation: gaab-mund 1.6s ease-in-out; }
+#app:not([data-drop]):not([data-spise-art="drop"]) #pet.gaab .arm--left { animation: gaab-v 1.6s ease-in-out !important; }
+#pet.gaab :is(.arm--right, .figur__haand) { animation: var(--gaab-h, gaab-h) 1.6s ease-in-out !important; }
+#pet.gaab .figur { transform-origin: 100px 178px; animation: gaab-strak 1.6s ease-in-out !important; }
+@keyframes gaab-mund { 0%, 100% { scale: 1 1; } 30%, 70% { scale: 1.9 2.4; } }
+@keyframes gaab-v { 0%, 100% { transform: rotate(0deg); } 35%, 65% { transform: rotate(115deg); } }
+@keyframes gaab-h { 0%, 100% { transform: rotate(0deg); } 35%, 65% { transform: rotate(-115deg); } }
+@keyframes gaab-h-holder { 0%, 100% { transform: rotate(0deg); } 35%, 65% { transform: rotate(-30deg); } }
+@keyframes gaab-strak { 0%, 100% { scale: 1 1; } 40%, 60% { scale: 0.97 1.05; } }
+/* a nod: the eyes fall shut, the body sinks – and it jerks awake */
+#pet.nikker .figur { transform-origin: 100px 178px; animation: nikker 1.2s ease-in-out !important; }
+#pet.nikker .eyes-closed { display: inline !important; animation: nik-luk 1.2s linear; }
+#pet.nikker .eyes-open { animation: nik-aaben 1.2s linear; }
+@keyframes nikker { 0% { translate: 0 0; rotate: 0deg; } 58% { translate: 0 5px; rotate: 4deg; } 70% { translate: 0 -3px; rotate: -2deg; }
+  84%, 100% { translate: 0 0; rotate: 0deg; } }
+@keyframes nik-luk { 0%, 14% { opacity: 0; } 18%, 62% { opacity: 1; } 66%, 100% { opacity: 0; } }
+@keyframes nik-aaben { 0%, 14% { opacity: 1; } 18%, 62% { opacity: 0; } 66%, 100% { opacity: 1; } }
+
+/* ---------------------------------------------------------------- the dance (SPEC §23.2): 120 BPM */
+.noder { display: none; }
+#app[data-dans] .noder { display: inline; }
+#app[data-dans] .figur { transform-origin: 100px 178px; animation: dans 1s ease-in-out infinite; }
+/* On the drip (data-drop) the stand stays on the floor, its tube taped to the left hand at (34,150),
+   and that arm keeps still. The dance's ±5° turn round (100,178) would carry the hand ~6 units off
+   the tube's end and its 6px hop as much again, so on the drip Klippe only bobs to the beat: 2px,
+   no turn – the tube's end (2 wide) stays inside the hand (the arm is 7 wide). */
+#app[data-dans]:where([data-drop], [data-spise-art="drop"]) .figur { animation: dans-drop 1s ease-in-out infinite; }
+#app[data-dans] .arm--left { animation: dans-v 1s ease-in-out infinite; }
+#app[data-dans] :is(.arm--right, .figur__haand) { animation: var(--dans-h, dans-h) 1s ease-in-out infinite; }
+#app[data-dans] .clapper { animation: dans-klap 0.5s ease-in-out infinite; }
+@keyframes dans { 0%, 100% { translate: 0 0; rotate: -5deg; } 25% { translate: 0 -6px; rotate: 0deg; }
+  50% { translate: 0 0; rotate: 5deg; } 75% { translate: 0 -6px; rotate: 0deg; } }
+@keyframes dans-drop { 0%, 50%, 100% { translate: 0 0; } 25%, 75% { translate: 0 -2px; } }
+@keyframes dans-v { 0%, 100% { transform: rotate(20deg); } 50% { transform: rotate(100deg); } }
+@keyframes dans-h { 0%, 100% { transform: rotate(-100deg); } 50% { transform: rotate(-20deg); } }
+@keyframes dans-h-holder { 0%, 100% { transform: rotate(-30deg); } 50% { transform: rotate(-6deg); } }   /* with a thing in the hand */
+@keyframes dans-klap { 0%, 100% { transform: rotate(0deg); } 40% { transform: rotate(-16deg); } }
+.node { opacity: 0; transform-box: fill-box; transform-origin: center; animation: node 2s ease-out infinite; }
+.node ellipse { fill: var(--node, #ffcf4a); }
+.node path { fill: none; stroke: var(--node, #ffcf4a); stroke-width: 1.8; stroke-linecap: round; }
+.node .node__bjaelke { stroke-width: 3; }
+.node--1 { --node: #ffcf4a; --nx: -8px; }
+.node--2 { --node: #7f9cff; --nx: 7px; animation-delay: 0.5s; }
+.node--3 { --node: #ff7eb6; --nx: -6px; animation-delay: 1s; }
+.node--4 { --node: #5fcf8f; --nx: 9px; animation-delay: 1.5s; }
+@keyframes node { 0% { opacity: 0; translate: 0 4px; scale: 0.6; } 15% { opacity: 1; } 75% { opacity: 0.9; }
+  100% { opacity: 0; translate: var(--nx, 6px) -34px; scale: 1.1; } }
+
+/* ---------------------------------------------------------------- Halloween (SPEC §23.3) */
+.kostume, .graeskar-lygte, .flagermus, .toiletpapir { display: none; }
+[data-kostume="vampyr"] .kostume--vampyr, [data-kostume="spoegelse"] .kostume--spoegelse,
+[data-kostume="skelet"] .kostume--skelet, [data-kostume="heks"] .kostume--heks { display: inline; }
+/* The witch's hat is the costume: it replaces the hat and work clothes on the head. The other
+   costumes keep the hat on – so a hat won in a prank (data-hat, SPEC §23.3) is seen on the thief. */
+[data-kostume="heks"] :is(.hat, .acc--crown, .acc--fusion, .acc--audio, .acc--deliver) { display: none !important; }
+#app[data-fest] .kostume--heks { display: none !important; }              /* the Deliver cap goes on */
+#app[data-saeson="halloween"] :is(.graeskar-lygte, .flagermus) { display: inline; }
+#app:is([data-bygger], [data-render], [data-fest], [data-transfer], [data-frokost]) .graeskar-lygte { display: none !important; }
+/* data-ballade is a list – "hat", "toiletpapir" or "hat toiletpapir" (a second prank keeps the hat away) */
+#app[data-ballade~="hat"]:not([data-nat]) .hat { display: none !important; }  /* a colleague took it till midnight */
+#app[data-ballade~="toiletpapir"] .toiletpapir { display: inline; }
+
+.vampyr__kappe { fill: #1f1828; stroke: #4b3d5c; stroke-width: 2; stroke-linejoin: round; }
+.vampyr__for { fill: #9e1c28; }
+.vampyr__krave { fill: #b3202e; stroke: #1f1828; stroke-width: 3; stroke-linejoin: round; }
+.spoegelse__lagen { fill: #f2efe9; stroke: #c9c2b5; stroke-width: 2; stroke-linejoin: round; }
+.spoegelse__fold { fill: none; stroke: rgba(160, 152, 140, 0.55); stroke-width: 1.6; stroke-linecap: round; }
+.skelet__hule { fill: none; stroke: #f3efe6; stroke-width: 3; }
+.skelet__naese, .skelet__knogle { fill: #f3efe6; }
+.skelet__ben { fill: none; stroke: #f3efe6; stroke-width: 3; stroke-linecap: round; }
+.skelet__taeer { fill: none; stroke: #f3efe6; stroke-width: 1.6; stroke-linecap: round; }
+.heks__skygge, .heks__top { fill: #262130; stroke: #6b6080; stroke-width: 2; stroke-linejoin: round; }
+.heks__baand { fill: #7d4cc0; }
+.heks__spaende { fill: none; stroke: #ffcf4a; stroke-width: 2; }
+
+.graeskar-lygte__side { fill: #d9661a; stroke: #7a3309; stroke-width: 1.2; }
+.graeskar-lygte__midt { fill: #f07f22; stroke: #7a3309; stroke-width: 1.2; }
+.graeskar-lygte__rille { fill: none; stroke: #b8510f; stroke-width: 1; }
+.graeskar-lygte__stilk { fill: #5c7a2e; stroke: #2f4216; stroke-width: 0.8; }
+.graeskar-lygte__ansigt { fill: #ffd34d; stroke: #7a3309; stroke-width: 0.6; animation: lygte 2.4s steps(1) infinite; }
+.graeskar-lygte__glod { fill: url(#graeskar-glod); animation: lygte-glod 2.4s ease-in-out infinite; }
+@keyframes lygte { 0%, 100% { fill: #ffd34d; } 18% { fill: #ffb53a; } 22% { fill: #ffe27a; } 47% { fill: #ffc44a; }
+  70% { fill: #fff0a3; } 74% { fill: #ffb53a; } }
+@keyframes lygte-glod { 0%, 100% { opacity: 0.85; } 20% { opacity: 0.55; } 45% { opacity: 1; } 70% { opacity: 0.7; } }
+
+.flagermus__vinge, .flagermus__krop { fill: #241c2c; stroke: #5e4d6e; stroke-width: 0.6; stroke-linejoin: round; }
+.flagermus__vinge { transform-box: fill-box; transform-origin: 100% 60%; animation: flagre 0.22s ease-in-out infinite alternate; }
+.flagermus__vinge--h { transform-origin: 0% 60%; }
+.flagermus__flyv { opacity: 0; animation: flagermus 15s linear infinite; }
+.flagermus__flyv--2 { animation-duration: 19s; animation-delay: 6s; }
+.flagermus__dyr { animation: flagermus-op 1.3s ease-in-out infinite alternate; }
+@keyframes flagre { from { scale: 1 1; } to { scale: 1 -0.45; } }
+@keyframes flagermus { 0% { translate: 236px 0; opacity: 0; } 2% { opacity: 1; } 30% { opacity: 1; } 32%, 100% { translate: -40px 0; opacity: 0; } }
+@keyframes flagermus-op { to { translate: 0 -7px; } }
+
+.tp__kant { fill: none; stroke: #c9c2b5; stroke-width: 9.4; stroke-linecap: round; }
+.tp__strimmel { fill: none; stroke: #fbfaf7; stroke-width: 7.6; stroke-linecap: round; }
+.tp__perfor { fill: none; stroke: #d9d3c8; stroke-width: 7.6; stroke-dasharray: 0.8 8; }
+.tp__rulle { fill: #fbfaf7; stroke: #c9c2b5; stroke-width: 1.2; }
+.tp__rulle-ende { fill: #f0ece4; stroke: #c9c2b5; stroke-width: 1.2; }
+.tp__rulle-hul { fill: #b9a88a; }
+
+/* ---------------------------------------------------------------- Christmas: snow in the box (SPEC §23.4)
+   Behind Klippe (z-index -1 in the page's own stacking context). Each flake is a full-height strip
+   that slides down, so the flake at its top falls through the stage; heavier in a snowstorm. */
+.sne-lag { position: absolute; inset: 0; z-index: -1; display: none; overflow: hidden; pointer-events: none; }
+#app[data-saeson="jul"] .sne-lag, #app[data-snestorm] .sne-lag { display: block; }
+.sne-lag i { --stoerrelse: calc(var(--s) * 1.4); position: absolute; top: 0; bottom: 0; left: var(--x); width: var(--stoerrelse);
+  animation: sne-fald var(--d) linear var(--f) infinite; }
+.sne-lag i::before { content: ""; position: absolute; top: 0; left: 0; width: var(--stoerrelse); height: var(--stoerrelse); border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0 38%, rgba(255, 255, 255, 0.55) 58%, rgba(255, 255, 255, 0) 72%);
+  opacity: var(--o); animation: sne-sving 2.8s ease-in-out var(--f) infinite alternate; }
+.sne-lag i:nth-child(n+17) { display: none; }
+#app[data-snestorm] .sne-lag i { --stoerrelse: calc(var(--s) * 1.7); display: block;
+  animation: sne-fald calc(var(--d) * 0.38) linear var(--f) infinite, sne-storm calc(var(--d) * 0.38) linear var(--f) infinite; }
+#app[data-snestorm] .sne-lag i::before { opacity: calc(var(--o) + 0.1); }
+@keyframes sne-fald { from { transform: translateY(-6%); } to { transform: translateY(100%); } }
+@keyframes sne-sving { from { translate: -5px 0; } to { translate: 5px 0; } }
+@keyframes sne-storm { from { translate: 34px 0; } to { translate: -46px 0; } }
+
+/* ---------------------------------------------------------------- dirt and the bath (SPEC §23.6) */
+.snavs, .plet, .snavs__toning, .fluer, .stank { display: none; }
+#app[data-beskidt] .snavs { display: inline; }
+#app[data-beskidt] :is(.plet--1, .plet--2) { display: inline; }
+#app:is([data-beskidt="beskidt"], [data-beskidt="meget"]) :is(.plet--3, .plet--4, .plet--5) { display: inline; }
+#app[data-beskidt="meget"] :is(.plet--6, .plet--7, .plet--8, .snavs__toning, .fluer, .stank) { display: inline; }
+#app[data-bad] :is(.snavs, .fluer, .stank) { display: none !important; }
+.plet path { fill: #6b4a2b; stroke: #3f2a15; stroke-width: 0.8; stroke-linejoin: round; }
+.plet circle { fill: #6b4a2b; }
+.plet .plet__glans { fill: none; stroke: #9a7246; stroke-width: 1.1; stroke-linecap: round; }
+.snavs__toning { fill: #5a3d1f; opacity: 0.22; }
+.flue__krop { fill: #2e2b27; stroke: #a59e92; stroke-width: 0.7; }
+.flue__vinge { fill: rgba(232, 242, 255, 0.85); stroke: rgba(160, 175, 195, 0.9); stroke-width: 0.4; transform-box: fill-box;
+  transform-origin: 50% 100%; animation: vinge 0.07s linear infinite alternate; }
+.flue { transform-box: view-box; transform-origin: 100px 100px; animation: flue 3.2s linear infinite; }
+.flue--2 { animation-duration: 4.4s; animation-direction: reverse; }
+.flue--3 { animation-duration: 2.6s; animation-delay: -1.2s; }
+.flue__surr { animation: surr 0.35s ease-in-out infinite alternate; }
+@keyframes flue { to { rotate: 360deg; } }
+@keyframes vinge { to { scale: 1 0.3; } }
+@keyframes surr { from { translate: -2px 1px; } to { translate: 2px -2px; } }
+.stank path { fill: none; stroke: rgba(160, 196, 98, 0.75); stroke-width: 2.4; stroke-linecap: round; opacity: 0; animation: stank 2.4s ease-out infinite; }
+.stank path:nth-child(2) { animation-delay: 0.8s; }
+.stank path:nth-child(3) { animation-delay: 1.6s; }
+@keyframes stank { 0% { opacity: 0; translate: 0 6px; } 30% { opacity: 1; } 100% { opacity: 0; translate: 0 -14px; } }
+
+/* the bath: the tub slides in from the right (0–1 s), Klippe hops in and sits in the foam with a duck
+   under the shower and scrubs (1.2–6.8 s), hops out (7 s) and sparkles as the tub slides away */
+.badekar { display: none; transform-box: view-box; transform-origin: 100px 180px; }
+#app[data-bad] .badekar { display: inline; }
+#app[data-stage="egg"] .badekar, #app[data-stage="baby"] .badekar { transform: scale(0.74); }
+#app[data-stage="junior"] .badekar { transform: scale(0.86); }
+#app[data-stage="pro"] .badekar { transform: scale(0.95); }
+.badekar__kar { animation: kar 8s ease-in-out both; }
+@keyframes kar { 0% { translate: 150px 0; opacity: 0; } 8% { opacity: 1; } 12%, 88% { translate: 0 0; opacity: 1; }
+  100% { translate: 160px 0; opacity: 0; } }
+#app[data-bad] :is(.body, .egg) { animation: bad-krop 8s ease-in-out both; }
+@keyframes bad-krop { 0%, 12% { translate: 0 0; } 15% { translate: 0 calc(-14px * var(--skala, 1)); }
+  19%, 84% { translate: 0 calc(10px * var(--skala, 1)); } 87% { translate: 0 calc(-14px * var(--skala, 1)); } 91%, 100% { translate: 0 0; } }
+#app[data-bad] .pet__shadow { opacity: 0; transition: opacity 0.6s; }
+#app[data-bad] :is(.haand, .mund, .drom, .knurr, .savl, .noder) { display: none !important; }
+#app[data-bad] :is(.eyes-open, .eyes-closed, .mouth) { display: none !important; }
+#app[data-bad] .eyes-happy, #app[data-bad] .mouth--grin { display: inline !important; }
+#app[data-bad]:not([data-drop]) .arm--left { animation: skrub-v 0.36s ease-in-out 2s 11 alternate; }
+#app[data-bad] :is(.arm--right, .figur__haand) { animation: skrub-h 0.36s ease-in-out 2.18s 11 alternate; }
+@keyframes skrub-v { from { transform: rotate(40deg); } to { transform: rotate(112deg); } }
+@keyframes skrub-h { from { transform: rotate(-40deg); } to { transform: rotate(-112deg); } }
+.badekar__indre { fill: #a8d6ea; stroke: #b9b2a6; stroke-width: 2; }
+.badekar__front { fill: #f4f2ee; stroke: #b9b2a6; stroke-width: 2; stroke-linejoin: round; }
+.badekar__kant { fill: none; stroke: #ffffff; stroke-width: 3; stroke-linecap: round; }
+.badekar__fod { fill: #d4af37; stroke: #8a6420; stroke-width: 0.8; stroke-linejoin: round; }
+.skum circle { fill: #ffffff; stroke: #d6ecf7; stroke-width: 1.2; transform-box: fill-box; transform-origin: center; animation: skum 8s ease-out both; }
+.skum circle:nth-child(2n) { animation-name: skum-b; }
+@keyframes skum { 0%, 17% { scale: 0; } 23% { scale: 1.15; } 27%, 82% { scale: 1; } 89%, 100% { scale: 0; } }
+@keyframes skum-b { 0%, 19% { scale: 0; } 25% { scale: 1.2; } 29% { scale: 1; } 50% { scale: 1.08; } 70%, 82% { scale: 1; } 89%, 100% { scale: 0; } }
+.bad__bobler circle { fill: rgba(220, 240, 255, 0.25); stroke: rgba(220, 240, 255, 0.9); stroke-width: 0.8; opacity: 0;
+  animation: bad-boble 1.6s ease-out 2s 3; }
+.bad__bobler circle:nth-child(2n) { animation-delay: 2.5s; }
+@keyframes bad-boble { 0% { opacity: 0; translate: 0 6px; } 20% { opacity: 1; } 100% { opacity: 0; translate: 3px -26px; } }
+.bad__and { opacity: 0; transform-box: fill-box; transform-origin: 50% 100%; animation: and-vip 8s ease-in-out both; }
+@keyframes and-vip { 0%, 20% { opacity: 0; translate: 0 -12px; } 25% { opacity: 1; translate: 0 0; rotate: 0deg; } 33% { rotate: -9deg; }
+  43% { rotate: 8deg; } 53% { rotate: -6deg; } 63% { rotate: 6deg; } 73% { rotate: -4deg; } 82% { opacity: 1; rotate: 0deg; }
+  87%, 100% { opacity: 0; } }
+.bad__bruser { opacity: 0; animation: bruser 8s ease-in-out both; }
+@keyframes bruser { 0%, 18% { opacity: 0; translate: 0 -20px; } 24%, 66% { opacity: 1; translate: 0 0; } 74%, 100% { opacity: 0; translate: 0 -20px; } }
+.bruser__roer { fill: none; stroke: #9aa3b1; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.bruser__hoved { fill: #c4c9ce; stroke: #6c7480; stroke-width: 1; stroke-linejoin: round; }
+.bruser__draaber path { fill: none; stroke: #8fd3ff; stroke-width: 1.6; stroke-linecap: round; opacity: 0; animation: bruser-draabe 0.6s linear infinite; }
+.bruser__draaber path:nth-child(2n) { animation-delay: 0.3s; }
+.bruser__draaber path:nth-child(3n) { animation-delay: 0.15s; }
+@keyframes bruser-draabe { 0% { opacity: 0; translate: 0 0; } 20% { opacity: 1; } 100% { opacity: 0; translate: -8px 26px; } }
+.bad__glimt path { fill: #fff6c4; opacity: 0; transform-box: fill-box; transform-origin: center; animation: glimt 8s ease-out both; }
+.bad__glimt path:nth-child(2) { animation-delay: 0.15s; }
+.bad__glimt path:nth-child(3) { animation-delay: 0.3s; }
+.bad__glimt path:nth-child(4) { animation-delay: 0.45s; }
+@keyframes glimt { 0%, 85% { opacity: 0; scale: 0.2; } 89% { opacity: 1; scale: 1.25; } 94% { opacity: 1; scale: 0.9; } 100% { opacity: 0; scale: 0.4; } }
+
+/* ---------------------------------------------------------------- lunch (SPEC §23.12)
+   ringer: the bell rings, arm up · loeber: the door opens and Klippe runs out through it · ude: the
+   door is shut, the sign says where Klippe is · tilbage: it walks back in. */
+.frokostklokke, .frokost-doer, .frokost-skilt { display: none; }
+#app[data-frokost="ringer"] .frokostklokke { display: inline; }
+#app[data-frokost="ringer"] :is(.haand, .megafon) { display: none !important; }
+#app[data-frokost="ringer"] :is(.arm--right, .figur__haand) { animation: klokke-arm 0.3s ease-in-out infinite alternate !important; }
+#app[data-frokost="ringer"] .figur { animation: bob 0.3s ease-in-out infinite; }
+#app[data-frokost="ringer"] :is(.eyes-open, .eyes-closed, .mouth) { display: none !important; }
+#app[data-frokost="ringer"] .eyes-happy, #app[data-frokost="ringer"] .mouth--grin { display: inline !important; }
+.frokostklokke__sving { transform-box: view-box; transform-origin: 0 0; animation: klokke 0.3s ease-in-out infinite alternate; }
+.frokostklokke__ding text { fill: #ffcf4a; stroke: #1d1b19; stroke-width: 3; paint-order: stroke; font: 900 10px var(--font-display);
+  opacity: 0; transform-box: fill-box; transform-origin: center; animation: ding 0.6s ease-out infinite; }
+.frokostklokke__ding text:nth-child(2) { animation-delay: 0.3s; }
+@keyframes klokke-arm { from { transform: rotate(-62deg); } to { transform: rotate(-76deg); } }
+@keyframes klokke { from { rotate: -24deg; } to { rotate: 24deg; } }
+@keyframes ding { 0% { opacity: 0; scale: 0.5; } 25% { opacity: 1; scale: 1.15; } 70% { opacity: 1; scale: 1; } 100% { opacity: 0; } }
+
+#app:is([data-frokost="loeber"], [data-frokost="ude"], [data-frokost="tilbage"]) .frokost-doer { display: inline; }
+.doer__karm { fill: #4a311b; stroke: #24170b; stroke-width: 1; stroke-linejoin: round; }
+.doer__aabning { fill: #120c07; }
+.doer__lys { fill: url(#doer-lys); opacity: 0.8; }
+.doer__flade { fill: #a06c3d; stroke: #5a3a1c; stroke-width: 1; }
+.doer__felt { fill: none; stroke: #6e4624; stroke-width: 1.2; }
+.doer__greb { fill: #ffcf4a; stroke: #8a6420; stroke-width: 0.6; }
+.doer__lysstreg { display: none; fill: none; stroke: #ffd27a; stroke-width: 1.4; opacity: 0.75; }
+#app[data-frokost="ude"] .doer__lysstreg { display: inline; }
+.doer__skilt { fill: #2f8f5b; stroke: #1c5c39; stroke-width: 0.8; }
+.doer__skilt-tekst { fill: #fff; font: 800 5.4px var(--font); text-anchor: middle; letter-spacing: 0.3px; }
+.doer__blad { transform-box: view-box; transform-origin: 218px 133px; }
+#app[data-frokost="loeber"] .frokost-doer { animation: doer-ind 1.5s ease-out both; }
+#app[data-frokost="loeber"] .doer__blad { animation: doer-ud-af 1.5s ease-in-out both; }
+#app[data-frokost="tilbage"] .doer__blad { animation: doer-ind-af 1.5s ease-in-out both; }
+#app[data-frokost="tilbage"] .frokost-doer { animation: doer-vaek 1.5s ease-in both; }
+@keyframes doer-ind { from { opacity: 0; } 15%, to { opacity: 1; } }
+@keyframes doer-vaek { 0%, 86% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes doer-ud-af { 0%, 14% { scale: 1 1; } 26%, 86% { scale: 0.12 1; } 100% { scale: 1 1; } }
+@keyframes doer-ind-af { 0% { scale: 1 1; } 14%, 80% { scale: 0.12 1; } 96%, 100% { scale: 1 1; } }
+#app[data-frokost="loeber"] :is(.body, .egg, .pet__shadow) { animation: frokost-ud 1.5s ease-in both; }
+#app[data-frokost="tilbage"] :is(.body, .egg, .pet__shadow) { animation: frokost-hjem 1.5s ease-out both; }
+#app:is([data-frokost="loeber"], [data-frokost="tilbage"]) .figur { animation: loeb 0.24s ease-in-out infinite alternate !important; }
+#app:is([data-frokost="loeber"], [data-frokost="tilbage"]):not([data-drop]) .arm--left { animation: loeb-v 0.24s ease-in-out infinite alternate; }
+#app:is([data-frokost="loeber"], [data-frokost="tilbage"]) :is(.arm--right, .figur__haand) { animation: loeb-h 0.24s ease-in-out infinite alternate; }
+#app[data-frokost="ude"] :is(.body, .egg, .pet__shadow, .pet__glow, .zzz, .aura, .sweat, .carry) { visibility: hidden; }
+/* through the doorway it gets smaller and smaller – it walks off down the corridor (and back) */
+.pet__shadow { transform-box: view-box; transform-origin: 100px 184px; }
+@keyframes frokost-ud { 0%, 14% { translate: 0 0; scale: 1; opacity: 1; } 56% { translate: 76px 0; scale: 0.7; opacity: 1; }
+  84%, 100% { translate: 103px -2px; scale: 0.26; opacity: 0; } }
+@keyframes frokost-hjem { 0%, 12% { translate: 103px -2px; scale: 0.26; opacity: 0; } 40% { translate: 76px 0; scale: 0.7; opacity: 1; }
+  86%, 100% { translate: 0 0; scale: 1; opacity: 1; } }
+@keyframes loeb { from { translate: 0 0; rotate: -3deg; } to { translate: 0 -5px; rotate: 3deg; } }
+@keyframes loeb-v { from { transform: rotate(-30deg); } to { transform: rotate(40deg); } }
+@keyframes loeb-h { from { transform: rotate(-40deg); } to { transform: rotate(30deg); } }
+.frokost-skilt { position: absolute; left: 50%; bottom: calc(min(10%, 21px) + 4px); z-index: 1; translate: -50% 0;
+  display: none; flex-direction: column; align-items: center; gap: 1px; width: max-content; max-width: calc(100% - 16px); padding: 7px 12px 6px;
+  border: 2px solid #8a5a2b; border-radius: 10px; background: linear-gradient(#f6e7c8, #e9d2a4); color: #3a2410;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45); font: 700 13px/1.2 var(--font); text-align: center; cursor: pointer;
+  animation: skilt 0.5s cubic-bezier(.3, 1.6, .5, 1); }
+.frokost-skilt__hint { color: #6b4a2b; font-size: 10.5px; font-weight: 600; }
+.frokost-skilt:hover { filter: brightness(1.05); }
+#app[data-frokost="ude"] .frokost-skilt { display: flex; }
+@keyframes skilt { from { scale: 0.4; opacity: 0; } to { scale: 1; opacity: 1; } }
+
+/* ---------------------------------------------------------------- Klippe-post (SPEC §23.12)
+   data-post="ud": Klippe takes the letter out to the left (≈ 6 s) and comes back without it. */
+.kuvert { display: none; transform-box: fill-box; transform-origin: center; }
+#app[data-post="ud"] .kuvert, .gaest[data-post] .kuvert { display: inline; }
+.gaest[data-post] .haand { display: none !important; }
+#app[data-post="ud"] .kuvert { animation: kuvert 6s linear both; }
+#app[data-post="ud"] :is(.haand, .megafon) { display: none !important; }
+#app[data-post="ud"] :is(.body, .egg, .pet__shadow) { animation: post-gaa 6s ease-in-out both; }
+#app[data-post="ud"] .figur { animation: loeb 0.3s ease-in-out infinite alternate !important; }
+@keyframes kuvert { 0% { opacity: 0; scale: 0.4; } 6% { opacity: 1; scale: 1.12; } 9%, 30% { opacity: 1; scale: 1; } 32%, 100% { opacity: 0; } }
+@keyframes post-gaa { 0% { translate: 0 0; opacity: 1; } 5% { translate: 0 -8px; } 9% { translate: 0 0; } 26% { opacity: 1; }
+  32% { translate: -150px 0; opacity: 0; } 66% { translate: -150px 0; opacity: 0; } 72% { opacity: 1; } 92%, 100% { translate: 0 0; opacity: 1; } }
+
+/* ---------------------------------------------------------------- easter eggs (SPEC §23.8) */
+.panik-draaber, .panik-udbrud, .kappe { display: none; }
+#app[data-panik] :is(.body, .egg) { animation: panik 1.1s ease-in-out infinite; }
+#app[data-panik] .figur { animation: loeb 0.18s ease-in-out infinite alternate !important; }
+#app[data-panik]:not([data-drop]) .arm--left { animation: panik-v 0.16s linear infinite alternate; }
+#app[data-panik] :is(.arm--right, .figur__haand) { animation: panik-h 0.16s linear 0.08s infinite alternate; }
+#app[data-panik] :is(.mouth, .eyes-happy, .eyes-closed) { display: none !important; }
+#app[data-panik] .eyes-open { display: inline !important; }
+#app[data-panik] .mouth--o { display: inline !important; scale: 1.5; }
+#app[data-panik] :is(.sweat, .panik-draaber) { display: inline !important; }
+#app[data-panik] .panik-udbrud { display: inline; }
+@keyframes panik { 0%, 100% { translate: 0 0; } 25% { translate: -34px -3px; } 50% { translate: 0 0; } 75% { translate: 34px -3px; } }
+@keyframes panik-v { from { transform: rotate(30deg); } to { transform: rotate(118deg); } }
+@keyframes panik-h { from { transform: rotate(-30deg); } to { transform: rotate(-118deg); } }
+.panik-draaber path { fill: #7fc4ff; opacity: 0; animation: panik-hoejre 0.9s ease-out infinite; }
+.panik-draaber path:nth-child(2) { animation-name: panik-venstre; animation-delay: 0.3s; }
+.panik-draaber path:nth-child(3) { animation-delay: 0.6s; }
+@keyframes panik-hoejre { 0% { opacity: 0; translate: 0 0; } 20% { opacity: 1; } 100% { opacity: 0; translate: 16px 12px; } }
+@keyframes panik-venstre { 0% { opacity: 0; translate: 0 0; } 20% { opacity: 1; } 100% { opacity: 0; translate: -16px 12px; } }
+.panik-udbrud { fill: #ef4b3d; stroke: #1d1b19; stroke-width: 3; paint-order: stroke; font: 900 20px var(--font-display);
+  text-anchor: middle; animation: udbrud 0.25s steps(2) infinite; }
+@keyframes udbrud { 0% { translate: -1.5px 0; } 50% { translate: 1.5px -1px; } }
+
+#app[data-vink]:not([data-drop]) .arm--left { animation: vink 0.42s ease-in-out infinite alternate; }
+#app[data-vink] .megafon { display: none !important; }
+#app[data-vink] :is(.eyes-open, .eyes-closed, .mouth) { display: none !important; }
+#app[data-vink] .eyes-happy, #app[data-vink] .mouth--grin { display: inline !important; }
+@keyframes vink { from { transform: rotate(88deg); } to { transform: rotate(120deg); } }
+
+#app[data-savler] .savl { display: inline !important; animation: drool 1.4s ease-in infinite !important; }
+#app[data-savler] :is(.eyes-open, .eyes-closed, .mouth) { display: none !important; }
+#app[data-savler] .eyes-happy, #app[data-savler] .mouth--o { display: inline !important; }
+
+#app[data-helt] .kappe { display: inline; }
+#app[data-helt] .figur { animation: helt 0.9s ease-in-out infinite alternate; }
+#app[data-helt] .mouth { display: none !important; }
+#app[data-helt] .mouth--grin { display: inline !important; }
+.kappe__stof { fill: #d6332b; stroke: #8e1e17; stroke-width: 2; stroke-linejoin: round; transform-box: fill-box; transform-origin: 50% 0%;
+  animation: kappe 0.5s ease-in-out infinite alternate; }
+.kappe__fold { fill: none; stroke: rgba(110, 18, 14, 0.55); stroke-width: 2; stroke-linecap: round; }
+.kappe__skjold { fill: #ffcf4a; stroke: #b07d12; stroke-width: 1.4; stroke-linejoin: round; }
+.kappe__k { fill: #d6332b; font: 900 11px var(--font-display); text-anchor: middle; }
+@keyframes kappe { from { transform: skewX(-7deg) scaleX(1.04); } to { transform: skewX(5deg) scaleX(0.98); } }
+@keyframes helt { from { translate: 0 0; } to { translate: 0 -4px; } }
+
+/* ---------------------------------------------------------------- the header's icons (SPEC §23.12) */
+.head__icon {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font: 12px/1 var(--font);
+  cursor: pointer;
+}
+.head__icon[hidden] { display: none; }
+.head__icon:hover { background: var(--surface-3); }
+#frokost-knap { animation: klokke-knap 8s ease-in-out infinite; }
+@keyframes klokke-knap { 0%, 92%, 100% { rotate: 0deg; } 94% { rotate: -16deg; } 96% { rotate: 14deg; } 98% { rotate: -8deg; } }
+.head__antal {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: #ef3b2d;
+  color: #fff;
+  font: 700 9px/14px var(--font);
+  text-align: center;
+  box-shadow: 0 0 0 1.5px var(--bg);
+}
+.head__antal[hidden] { display: none; }
+
+/* ---------------------------------------------------------------- the panel's Prøv tab (SPEC §23.12) */
+.panel__proev[hidden] { display: none; }
+.proev { display: grid; gap: 5px; }
+.proev__knap {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  align-items: center;
+  gap: 0 8px;
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.proev__knap:hover { background: var(--surface-3); }
+.proev__ikon { grid-row: span 2; font-size: 16px; line-height: 1; text-align: center; }
+.proev__titel { font: 600 12px/1.25 var(--font); }
+.proev__hint { color: var(--text-3); font: 10.5px/1.25 var(--font); }
+
+/* ---------------------------------------------------------------- the Christmas calendar (SPEC §23.4) */
+.kalender { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-top: 4px; perspective: 600px; }
+.laage {
+  --laage: #a3232f;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  height: 54px;
+  padding: 4px 1px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  border-radius: 7px;
+  background: var(--laage);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.12);
+  color: #fff6e5;
+  font: 600 10px/1.2 var(--font);
+  text-align: center;
+  cursor: default;
+}
+.laage:nth-child(4n+2) { --laage: #1f6b45; }
+.laage:nth-child(4n+3) { --laage: #8a5a1f; }
+.laage:nth-child(4n+4) { --laage: #23476e; }
+.laage:nth-child(8n+5) { --laage: #1f6b45; }
+.laage:nth-child(8n+6) { --laage: #a3232f; }
+.laage__nr { font: 800 17px/1 var(--font-display); color: #ffd56b; text-shadow: 0 1px 0 rgba(0, 0, 0, 0.45); }
+.laage__gave { font-size: 18px; line-height: 1; }
+.laage__tekst { display: -webkit-box; max-width: 100%; overflow: hidden; color: rgba(255, 246, 229, 0.86); font-size: 9px;
+  letter-spacing: -0.25px; line-height: 1.12; overflow-wrap: anywhere; hyphens: auto; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.laage.is-laast { opacity: 0.5; filter: saturate(0.55); }
+.laage.is-klar { border-color: #ffd56b; box-shadow: inset 0 0 0 2px rgba(255, 213, 107, 0.45), 0 0 10px rgba(255, 213, 107, 0.45);
+  cursor: pointer; animation: laage-klar 1.6s ease-in-out infinite; }
+.laage.is-klar:hover { filter: brightness(1.12); }
+.laage.is-aaben { border-color: rgba(255, 213, 107, 0.35); background: #2a2420; box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.55); }
+.laage.is-aaben .laage__nr { position: absolute; top: 3px; left: 5px; font-size: 9.5px; color: rgba(255, 213, 107, 0.8); }
+.laage.is-aabner::before { content: ""; position: absolute; inset: 0; z-index: 1; border-radius: inherit; background: var(--laage);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.12); transform-origin: 0 50%; animation: laage-aabner 0.8s ease-in forwards; }
+@keyframes laage-klar { 50% { transform: translateY(-1px) rotate(-1.5deg); } }
+@keyframes laage-aabner { from { transform: rotateY(0deg); } to { transform: rotateY(-115deg); opacity: 0; } }
+
+/* ---------------------------------------------------------------- Klippe-post's panel (SPEC §23.12) */
+.post-panel { max-height: calc(100% - 16px); overflow-y: auto; }
+.post__label { margin: 7px 0 4px; color: var(--text-3); font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.post__til, .post__hurtigliste { display: flex; flex-wrap: wrap; gap: 5px; }
+.post__til p, .post__hurtigliste p { margin: 0; color: var(--text-3); font-size: 11.5px; }
+.post__modtager, .post__hurtig { padding: 4px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--text);
+  font: 600 11.5px/1.3 var(--font); cursor: pointer; }
+.post__hurtig { padding: 3px 8px; color: var(--text-2); font-size: 11px; }
+.post__modtager:hover, .post__hurtig:hover { background: var(--surface-3); color: var(--text); }
+.post__modtager[aria-pressed="true"] { border-color: var(--accent); background: rgba(240, 164, 91, 0.18); }
+.post__tekst { display: block; width: 100%; margin-top: 7px; padding: 6px 8px; resize: none; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--text); font: 12px/1.35 var(--font); user-select: text; }
+.post__tekst:focus { outline: none; border-color: var(--accent); }
+.post__fod { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+.post__fejl { flex: 1; min-width: 0; margin: 0; color: var(--danger); font-size: 11px; }
+.post__send { flex: none; padding: 6px 12px; border: 0; border-radius: 8px; background: var(--accent); color: #1d1b19;
+  font: 600 12px/1.2 var(--font); cursor: pointer; }
+.post__send:hover:not(:disabled) { filter: brightness(1.08); }
+.post__send:disabled { opacity: 0.5; cursor: default; }
+
+/* ---------------------------------------------------------------- trick or treat (SPEC §23.3) */
+.slik { margin: 0 0 8px; padding: 8px 10px; border: 1px solid rgba(255, 138, 31, 0.65); border-radius: 10px;
+  background: linear-gradient(135deg, rgba(255, 138, 31, 0.16), rgba(125, 76, 192, 0.18));
+  animation: message-in 0.3s ease-out, slik-glod 1.6s ease-in-out 0.3s infinite; }
+.slik[hidden] { display: none; }
+.slik__tekst { margin: 0; font-size: 12.5px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.slik__raekke { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+.slik__giv { flex: none; padding: 5px 10px; border: 0; border-radius: 7px; background: #ff8a1f; color: #1d0f05;
+  font: 700 12px/1.2 var(--font); cursor: pointer; }
+.slik__giv:hover:not(:disabled) { filter: brightness(1.1); }
+.slik__giv:disabled { opacity: 0.5; cursor: default; }
+.slik__tid { flex: 1; min-width: 0; color: var(--text-2); font-size: 11px; font-variant-numeric: tabular-nums; }
+@keyframes slik-glod { 50% { box-shadow: 0 0 0 3px rgba(255, 138, 31, 0.35); } }
+
+/* ---------------------------------------------------------------- render bets (SPEC §23.12) */
+.vaeddemaal { margin: 0 0 8px; padding: 8px 10px; border: 1px solid rgba(181, 156, 255, 0.55); border-radius: 10px;
+  background: rgba(181, 156, 255, 0.1); animation: message-in 0.3s ease-out; }
+.vaeddemaal[hidden], .vm__valgliste[hidden], .vm__raekke[hidden] { display: none; }
+.vm__titel { margin: 0; font-size: 12.5px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.vm__valgliste { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 7px; }
+.vm__valg { min-width: 0; padding: 4px 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--text);
+  font: 600 11.5px/1.2 var(--font); font-variant-numeric: tabular-nums; cursor: pointer; }
+.vm__valg:hover { background: var(--surface-3); }
+.vm__valg[aria-pressed="true"] { border-color: #b59cff; background: rgba(181, 156, 255, 0.28); }
+.vm__raekke { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.vm__label { color: var(--text-3); font-size: 11px; white-space: nowrap; }
+.vm__tid { flex: 1; min-width: 0; padding: 3px 6px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--text);
+  font: 600 12px/1.2 var(--font); color-scheme: dark; user-select: text; }
+.vm__gaet { flex: none; padding: 5px 10px; border: 0; border-radius: 7px; background: #b59cff; color: #140d24;
+  font: 700 12px/1.2 var(--font); cursor: pointer; }
+.vm__gaet:hover:not(:disabled) { filter: brightness(1.08); }
+.vm__gaet:disabled { opacity: 0.5; cursor: default; }
+.vm__status { margin: 6px 0 0; color: var(--text-2); font-size: 11.5px; line-height: 1.3; }
+.vm__status:empty { display: none; }
+
+/* ---------------------------------------------------------------- the render game (SPEC §23.10) */
+.spil-knap { flex: none; margin-left: auto; padding: 0 7px; border: 1px solid rgba(95, 207, 143, 0.55); border-radius: 999px;
+  background: rgba(95, 207, 143, 0.14); color: var(--text); font: 600 11px/1.55 var(--font); cursor: pointer; }
+.spil-knap:hover { background: rgba(95, 207, 143, 0.26); }
+.spil-knap[hidden] { display: none; }
+.spil { position: fixed; inset: 0; z-index: 4; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 10px; background: var(--bg); }
+.spil[hidden] { display: none; }
+.spil__head { display: flex; align-items: center; gap: 8px; }
+.spil__titel { flex: 1; min-width: 0; font: 600 14px/1.2 var(--font-display); }
+.spil__point { color: var(--accent); font: 700 20px/1 var(--font-display); font-variant-numeric: tabular-nums; }
+.spil__tal { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 10px; color: var(--text-2); font-size: 11px;
+  font-variant-numeric: tabular-nums; }
+.spil__tal span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spil__tal span:empty { display: none; }
+.spil__bane { position: relative; flex: 1; min-height: 140px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px;
+  background: linear-gradient(#1c212a, #12151a); }
+.spil__canvas { display: block; width: 100%; height: 100%; }
+.spil__midte { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px;
+  padding: 10px; text-align: center; pointer-events: none; }
+.spil__besked { margin: 0; padding: 5px 9px; border-radius: 9px; background: rgba(21, 20, 19, 0.78); color: var(--text);
+  font-size: 12px; font-weight: 600; line-height: 1.3; }
+.spil__besked:empty, .spil__besked[hidden] { display: none; }
+.spil__start { padding: 7px 16px; border: 0; border-radius: 9px; background: var(--accent); color: #1d1b19; font: 700 13px/1.2 var(--font);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); pointer-events: auto; cursor: pointer; }
+.spil__start:hover { filter: brightness(1.08); }
+.spil__start[hidden] { display: none; }
+.spil__render { display: grid; gap: 2px; color: var(--text-3); font-size: 10.5px; }
+.spil__render .bar--render { margin-top: 0; }
+
 /* ---------------------------------------------------------------- effects */
 .fx { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }
 .flash { animation: flash 0.9s ease-out; }
@@ -1073,4 +1758,11 @@ svg.festkat__kat.snurrer { animation: kat-snurr 0.46s linear 3; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
   .telefon__ring, .telefon__ringer { animation: none !important; }   /* a phone that rings, but does not shake */
+  /* the snow stands still where it is; the bath is a tub with Klippe in the foam; no flies or notes */
+  .sne-lag i, .sne-lag i::before { animation: none !important; }
+  .sne-lag i { transform: translateY(var(--y0, 40%)); }
+  #app[data-bad] :is(.badekar__kar, .body, .egg, .skum circle, .bad__and) { animation: none !important; }
+  #app[data-bad] :is(.body, .egg) { translate: 0 calc(10px * var(--skala, 1)); }
+  #app[data-bad] .bad__and { opacity: 1; }
+  .fluer, .stank, .noder, .flagermus, .bad__glimt, .bad__bobler, .bruser__draaber, .frokostklokke__ding { display: none !important; }
 }

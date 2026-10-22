@@ -39,6 +39,7 @@ import re
 import sqlite3
 import time
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from . import config, db, textutil
@@ -814,6 +815,106 @@ def recent_projects(conn: sqlite3.Connection, sources: Mapping[int, Mapping[str,
         return [_item(conn, row, live[row[_R_SID]]) if row is not None
                 else root_item(conn, root, mtime=mtime)
                 for mtime, _order, row, root in ranked[:limit]]
+
+
+# --------------------------------------------------------------------------------------
+# "I dag for N år siden" (SPEC §23.9)
+# --------------------------------------------------------------------------------------
+
+MEMORY_VIDEO = ("mov", "mp4", "mxf", "braw", "r3d", "crm", "mts", "m2ts", "avi", "mkv", "m4v", "insv",
+                "mpg", "mpeg", "webm", "ari")
+MEMORY_IMAGE = ("png", "jpg", "jpeg", "tif", "tiff", "gif", "webp", "heic", "bmp", "exr", "dpx", "tga",
+                "arw", "cr3", "dng", "nef", "psd")
+MEMORY_AUDIO = ("wav", "mp3", "aif", "aiff", "m4a", "flac", "bwf", "ogg", "aac")
+
+
+def _in_list(names: Sequence[str]) -> str:
+    return "(" + ", ".join(f"'{name}'" for name in names) + ")"
+
+
+_MEMORY_SQL = (
+    "SELECT source_id, project_rel, count(*), "
+    f"coalesce(sum(ext IN {_in_list(MEMORY_VIDEO)}), 0), "
+    f"coalesce(sum(ext IN {_in_list(MEMORY_IMAGE)}), 0), "
+    f"coalesce(sum(ext IN {_in_list(MEMORY_AUDIO)}), 0) "
+    "FROM entries WHERE kind = ? AND mtime >= ? AND mtime < ? GROUP BY source_id, project_rel")
+
+
+def same_day(today: date, years_back: int) -> date:
+    """``today``'s date ``years_back`` years ago (29 February → 28 February)."""
+    year = today.year - years_back
+    try:
+        return today.replace(year=year)
+    except ValueError:
+        return date(year, 2, 28)
+
+
+def _local_day(day: date) -> tuple[float, float]:
+    """The local day as epoch seconds: [midnight, next midnight)."""
+    start = datetime.combine(day, datetime.min.time())
+    return start.timestamp(), datetime.combine(day + timedelta(days=1), datetime.min.time()).timestamp()
+
+
+def _memory_kind(count: int, video: int, image: int, audio: int) -> tuple[str, int]:
+    """``("klip", 180)``, ``("billeder", …)`` or ``("lydfiler", …)`` when that kind is most of the
+    day's media files – and the media are at least a quarter of all of them (an FX9 clip's XML
+    sidecar is no reason to say "filer") – else ``("filer", count)``."""
+    media = video + image + audio
+    kind, most = max((("klip", video), ("billeder", image), ("lydfiler", audio)), key=lambda km: km[1])
+    return (kind, most) if most and most * 2 > media and media * 4 >= count else ("filer", count)
+
+
+def memories(conn: sqlite3.Connection, sources: Mapping[int, Mapping[str, Any]], today: date, *,
+             years: int = 15, minimum: int = 5, online_only: bool = False,
+             limit: int = 3) -> list[dict[str, Any]]:
+    """For each year back (1 … ``years``) the project with the most files from this calendar day
+    (file mtime, local time; at least ``minimum``), the nearest ``limit`` years: the project's Item
+    (SPEC §7.1) + ``minde: {aar_siden, dato, antal, slags}``. Templates never count."""
+    live = _live_sources(sources)
+    found: list[dict[str, Any]] = []
+    with db.read_snapshot(conn):
+        templates = _template_prefixes(conn, live)
+        for back in range(1, max(0, int(years)) + 1):
+            if len(found) >= limit:
+                break
+            day = same_day(today, back)
+            start, end = _local_day(day)
+            ranked: list[tuple[tuple[int, int, str], int, str, tuple[int, int, int, int]]] = []
+            for sid, project_rel, count, video, image, audio in conn.execute(
+                    _MEMORY_SQL, (KIND_FILE, start, end)):
+                src = live.get(sid)
+                if src is None or (online_only and not src.get("online")) or count < minimum:
+                    continue
+                rel = project_rel
+                if rel is None:
+                    if root_kind(src) != KIND_PROJECT:
+                        continue                              # files outside any project
+                    rel = ""
+                if _under_template(sid, rel + "\\", templates):
+                    continue
+                name = rel.rpartition("\\")[2] if rel else (src.get("display_name") or "")
+                # Most files that day first; ties: more media files, then the name.
+                ranked.append(((-count, -(video + image + audio), name.casefold()), sid, rel,
+                               (count, video, image, audio)))
+            for _key, sid, rel, numbers in sorted(ranked):
+                item = _memory_item(conn, live[sid], sid, rel)
+                if item is not None:
+                    kind, count = _memory_kind(*numbers)
+                    item["minde"] = {"aar_siden": back, "dato": day.isoformat(), "antal": count, "slags": kind}
+                    found.append(item)
+                    break
+    return found
+
+
+def _memory_item(conn: sqlite3.Connection, src: Mapping[str, Any], sid: int, rel: str) -> dict[str, Any] | None:
+    """The Item of a memory's project folder (the source's root when ``rel`` is "")."""
+    if not rel:
+        return root_item(conn, src, mtime=_root_mtime(conn, sid))
+    row = conn.execute(f"SELECT {db.ROW_COLUMNS} FROM entries WHERE source_id = ? AND rel_path = ?",
+                       (sid, rel)).fetchone()
+    if row is None or row[_R_KIND] != KIND_PROJECT:
+        return None
+    return _item(conn, row, src)
 
 
 def children(conn: sqlite3.Connection, sources: Mapping[int, Mapping[str, Any]],

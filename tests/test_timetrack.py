@@ -6,6 +6,7 @@ from datetime import date, datetime
 
 from projektsog import config, timetrack
 from projektsog.config import Config
+from projektsog.resolve_bridge import CHILD_CALL_TIMEOUT_S
 
 _tmp: tempfile.TemporaryDirectory | None = None
 _old_appdata: str | None = None
@@ -42,16 +43,18 @@ class World:
 
     # signal callbacks
     def activity(self, max_age: float = 15.0):
-        """Like ResolveBridge.activity(): the last answer, or None when older than max_age."""
+        """Like ResolveBridge.activity(): the last answer, or None when older than max_age -
+        unless a poll got no answer in time (Resolve plays back): then it holds, ``busy``."""
         if not self.resolve_running:
             return None
         if self.frozen is not None:
             age = self.t - self.frozen_at
-            return None if age > max_age else {**self.frozen, "age": age}
-        return {**self.act, "age": 0.0}
+            busy = age > CHILD_CALL_TIMEOUT_S
+            return None if age > max_age and not busy else {**self.frozen, "age": age, "busy": busy}
+        return {**self.act, "age": 0.0, "busy": False}
 
     def freeze(self) -> None:
-        """Resolve stops answering scripts (busy) - the window stays in front."""
+        """Resolve stops answering scripts (it plays back) - the window stays in front."""
         self.frozen, self.frozen_at = dict(self.act), self.t
 
     def foreground(self):
@@ -172,12 +175,38 @@ class CountingTests(TrackerCase):
         self.assertAlmostEqual(self.minutes(), 10.0, delta=0.2)
         self.assertEqual(len(self.report()["projects"][0]["timelines"]), 1)
 
-    def test_a_resolve_that_stops_answering_stops_the_clock(self) -> None:
+    def test_playback_in_a_resolve_that_does_not_answer_counts(self) -> None:
         self.w.advance(300)
-        self.w.freeze()                        # no answer for 10 min: after 2 min it is not trusted
-        self.w.advance(600)
-        self.assertLess(self.minutes(), 5.0 + 2.2 + 0.1)
-        self.assertGreater(self.minutes(), 5.0 + 1.8)
+        self.w.freeze()                        # Resolve plays a 20 min cut and answers no scripts
+        self.w.advance(1200, typing=False)
+        self.assertEqual(self.tracker.status()["state"], "recording")
+        self.w.frozen = None                   # stopped: it answers again
+        self.w.advance(60)
+        self.assertAlmostEqual(self.minutes(), 26.0, delta=0.2)
+        self.assertEqual(len(self.report()["projects"][0]["timelines"]), 1)
+
+    def test_a_silent_resolve_counts_for_an_hour_at_most(self) -> None:
+        self.w.advance(60)
+        self.w.freeze()                        # went home, timeline loops all night
+        self.w.advance(5 * 3600, typing=False)
+        self.assertAlmostEqual(self.minutes(), 61.0, delta=0.2)
+        self.assertEqual(self.tracker.status()["state"], "idle")
+
+    def test_a_silent_resolve_while_rendering_is_not_activity(self) -> None:
+        self.w.advance(60)
+        self.w.act["rendering"] = True
+        self.w.freeze()
+        self.w.advance(1800, typing=False)
+        self.assertLess(self.minutes(), 1.5)
+
+    def test_a_silent_resolve_that_quits_stops_the_clock(self) -> None:
+        self.w.advance(300)
+        self.w.freeze()
+        self.w.advance(120, typing=False)
+        self.w.resolve_running = False
+        self.w.advance(600, typing=False)
+        self.assertEqual(self.tracker.status()["state"], "no-resolve")
+        self.assertAlmostEqual(self.minutes(), 7.0, delta=0.2)
 
     def test_music_sites_count_on_the_open_project(self) -> None:
         self.w.exe, self.w.title = "chrome.exe", "Royalty Free Music for Videos | Artlist - Google Chrome"

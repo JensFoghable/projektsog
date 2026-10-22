@@ -424,7 +424,7 @@ class InProcessChild:
         self._maybe_fail(cmd)
         answer = json.loads(json.dumps(self.session.handle(message)))
         if late:
-            raise rb.ChildError(f"no answer to {cmd!r} in time")
+            raise rb.ChildTimeout(f"no answer to {cmd!r} in time")
         return answer
 
     def _maybe_fail(self, what: str) -> None:
@@ -433,7 +433,7 @@ class InProcessChild:
             self.crashed = True
             raise rb.ChildError(f"the helper exited during {what!r}")
         if mode == "timeout":
-            raise rb.ChildError(f"no answer to {what!r} in time")
+            raise rb.ChildTimeout(f"no answer to {what!r} in time")
 
     def crash(self) -> None:
         self.crashed = True
