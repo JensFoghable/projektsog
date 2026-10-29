@@ -886,7 +886,6 @@ class Kontor:
                 self._post_at = before
             raise ValueError(MSG_POST_LONG) from None
         self._note("post_sendt")
-        log.info("office Klippes: a post to %s", til)
         self.bus.publish("post_sendt", {"til": til, "navn_til": peer["navn"]})
         return {"ok": True}
 
@@ -1249,7 +1248,6 @@ class Kontor:
         self._post_card(msg["pc"], msg["navn"], msg["seq"], msg["x"]["tekst"])
         self._note("post_faaet")
         event = self._guest("post", msg)
-        log.info("office Klippes: a post from %s", msg["pc"])
         self.bus.publish("besoeg", event)
         return event
 
@@ -1263,7 +1261,7 @@ class Kontor:
                         "knapper": [{"tekst": "Svar", "uri": f"projektsog:post/{pc}"}], "udloeber": POST_TTL_S,
                         "lyd": True, "opkald": False}, internal=True)
         except Exception:
-            log.exception("office Klippes: the post from %s could not be shown", pc)
+            log.error("office Klippes: a post could not be shown")
 
     def _got_slik(self, msg: dict[str, Any], ip: str) -> dict[str, Any] | None:
         day = self._today().isoformat()

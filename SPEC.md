@@ -1473,9 +1473,11 @@ cancelled and its temp file removed).
 * The queue's state file is found through its registered link handler, never a fixed path:
   (default) of `HKCU\Software\Classes\resolvekoe\shell\open\command` (else
   `HKEY_CLASSES_ROOT\resolvekoe\shell\open\command`), split like a Windows command line, the
-  argument ending in `koe.py` → `<its folder>\state\koe.json`. Not found → no builds (looked up
-  again every 60 s). The file is only read (no mutex, never written); a failed read (being
-  replaced, bad JSON) keeps the last answer.
+  argument ending in `koe.py` → `<its folder>\state\<COMPUTERNAME>\koe.json` when that folder
+  exists (the queue keeps one state per computer: its folder can be shared with another PC that
+  has its own Resolve), else `<its folder>\state\koe.json`. Looked up again every 60 s, also once
+  found (the queue may move while the old file stays); not found → no builds. The file is only
+  read (no mutex, never written); a failed read (being replaced, bad JSON) keeps the last answer.
 * A **build** is `holder` = `{navn, projekt, opgave, pid, siden, opdateret}` with a str `navn`,
   `now − opdateret ≤ 3600` s and its pid alive (`OpenProcess`; no pid = alive). Read every 2 s.
 * **Demo**: `POST /api/bygger/demo {opkald: bool}`: `opkald` false → a demo build ("Demo" ·

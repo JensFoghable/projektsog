@@ -54,13 +54,39 @@ class HandlerTests(unittest.TestCase):
         self.assertEqual(crew.split_command_line('a "b c" d'), ["a", "b c", "d"])
 
     def test_the_state_file_sits_next_to_koe_py(self) -> None:
-        self.assertEqual(crew.koe_state_path(HANDLER), "C:\\Github\\Davinci\\resolve-koe\\state\\koe.json")
-        self.assertEqual(crew.koe_state_path('"C:\\Mine programmer\\Kø\\KOE.PY" "%1"'),
-                         "C:\\Mine programmer\\Kø\\state\\koe.json")
-        self.assertEqual(crew.koe_state_path("C:\\koe\\koe.py %1"), "C:\\koe\\state\\koe.json")
+        def path(command):
+            return crew.koe_state_path(command, computer="STUDIO-PC", isdir=lambda _folder: False)
+        self.assertEqual(path(HANDLER), "C:\\Github\\Davinci\\resolve-koe\\state\\koe.json")
+        self.assertEqual(path('"C:\\Mine programmer\\Kø\\KOE.PY" "%1"'), "C:\\Mine programmer\\Kø\\state\\koe.json")
+        self.assertEqual(path("C:\\koe\\koe.py %1"), "C:\\koe\\state\\koe.json")
         for command in ('"C:\\Python\\pythonw.exe" "C:\\x\\other.py" "%1"', "koe.py %1", "", "   "):
             with self.subTest(command=command):
-                self.assertIsNone(crew.koe_state_path(command))
+                self.assertIsNone(path(command))
+
+    def test_one_state_per_computer_when_the_queue_keeps_one(self) -> None:
+        asked = []
+
+        def isdir(folder):
+            asked.append(folder)
+            return folder == "C:\\Github\\Davinci\\resolve-koe\\state\\STUDIO-PC"
+        self.assertEqual(crew.koe_state_path(HANDLER, computer="STUDIO-PC", isdir=isdir),
+                         "C:\\Github\\Davinci\\resolve-koe\\state\\STUDIO-PC\\koe.json")
+        self.assertEqual(crew.koe_state_path(HANDLER, computer="GRAFIK-PC", isdir=isdir),   # (only another PC's)
+                         "C:\\Github\\Davinci\\resolve-koe\\state\\koe.json")
+        asked.clear()
+        self.assertEqual(crew.koe_state_path(HANDLER, computer="", isdir=isdir),
+                         "C:\\Github\\Davinci\\resolve-koe\\state\\koe.json")
+        self.assertEqual(asked, [])                  # no computer name: the shared state file
+        saved = os.environ.get("COMPUTERNAME")
+        os.environ["COMPUTERNAME"] = "STUDIO-PC"
+        try:
+            self.assertEqual(crew.find_koe_state(lambda _root, _subkey: HANDLER, isdir=isdir),
+                             "C:\\Github\\Davinci\\resolve-koe\\state\\STUDIO-PC\\koe.json")
+        finally:
+            if saved is None:
+                os.environ.pop("COMPUTERNAME", None)
+            else:
+                os.environ["COMPUTERNAME"] = saved
 
     def test_the_users_own_registration_first(self) -> None:
         def registry(values):
@@ -70,15 +96,18 @@ class HandlerTests(unittest.TestCase):
                 asked.append((root, subkey))
                 return values.get(root)
             return query, asked
+
+        def find_koe_state(query):
+            return crew.find_koe_state(query, computer="STUDIO-PC", isdir=lambda _folder: False)
         query, asked = registry({winreg.HKEY_CURRENT_USER: HANDLER, winreg.HKEY_CLASSES_ROOT: "C:\\y\\koe.py"})
-        self.assertEqual(crew.find_koe_state(query), "C:\\Github\\Davinci\\resolve-koe\\state\\koe.json")
+        self.assertEqual(find_koe_state(query), "C:\\Github\\Davinci\\resolve-koe\\state\\koe.json")
         self.assertEqual(asked, [(winreg.HKEY_CURRENT_USER, r"Software\Classes\resolvekoe\shell\open\command")])
         query, asked = registry({winreg.HKEY_CLASSES_ROOT: "C:\\y\\koe.py %1"})
-        self.assertEqual(crew.find_koe_state(query), "C:\\y\\state\\koe.json")
+        self.assertEqual(find_koe_state(query), "C:\\y\\state\\koe.json")
         self.assertEqual(asked[1], (winreg.HKEY_CLASSES_ROOT, r"resolvekoe\shell\open\command"))
         query, _ = registry({winreg.HKEY_CURRENT_USER: "notepad.exe %1", winreg.HKEY_CLASSES_ROOT: "C:\\y\\koe.py"})
-        self.assertEqual(crew.find_koe_state(query), "C:\\y\\state\\koe.json")
-        self.assertIsNone(crew.find_koe_state(registry({})[0]))
+        self.assertEqual(find_koe_state(query), "C:\\y\\state\\koe.json")
+        self.assertIsNone(find_koe_state(registry({})[0]))
 
     def test_a_missing_registry_key(self) -> None:
         missing = rf"Software\Classes\projektsog-test-{uuid.uuid4().hex}\shell\open\command"
@@ -200,6 +229,25 @@ class StateFileTests(unittest.TestCase):
         self.t += 60
         self.assertEqual(watch.current()["navn"], "Mette")
         self.assertEqual(self.lookups, 3)
+
+    def test_the_queue_moves_to_a_folder_for_this_computer(self) -> None:
+        self.write(self.holder(navn="Gammel"))
+        watch = self.watch()
+        self.assertEqual(watch.current()["navn"], "Gammel")
+        own = os.path.join(self.dir.name, "state", "STUDIO-PC", "koe.json")
+        os.makedirs(os.path.dirname(own))
+        self.path, self.found = own, own                     # the old file stays where it was
+        self.write(self.holder())
+        self.t += 30
+        self.assertEqual(watch.current()["navn"], "Gammel")   # looked up again once a minute …
+        self.assertEqual(self.lookups, 1)
+        self.t += 31
+        self.assertEqual(watch.current()["navn"], "Mette")    # … then this computer's own file
+        self.assertEqual(self.lookups, 2)
+        self.assertEqual(self.reads, 2)
+        self.t += 2
+        self.assertEqual(watch.current()["navn"], "Mette")
+        self.assertEqual(self.reads, 2)
 
     def test_the_file_is_opened_only_when_it_changed(self) -> None:
         self.write(self.holder())

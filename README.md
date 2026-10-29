@@ -614,3 +614,12 @@ powershell -ExecutionPolicy Bypass -File .\uninstall.ps1
 Stopper Projektsøg (kun Projektsøg selv – aldrig andre programmer) og fjerner genvejen,
 *Start med Windows* og Resolve-scriptet. Indeks og indstillinger bevares; tilføj `-RemoveData`
 for også at slette dem. Til sidst kan programmappen slettes.
+
+### Privatliv for Klippe-post
+
+Klippe-post gemmes kun i hukommelsen hos modtageren og forsvinder, når beskeden lukkes,
+udløber (efter 8 timer) eller programmet afsluttes. Nye beskeder og afsendelse/modtagelse
+logges ikke i den almindelige driftslog. Tidligere gemte postkort fjernes fra messages.json
+ved næste start. Ældre logfiler og eksterne sikkerhedskopier ryddes ikke.
+Modtageren ser stadig afsenderens Klippe-navn og pc-navn. Beskeder sendes uden kryptering
+direkte på lokalnetværket; funktionen giver ikke anonymitet. Begge pc’er skal opdateres.

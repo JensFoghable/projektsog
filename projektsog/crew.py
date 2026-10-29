@@ -138,15 +138,22 @@ def split_command_line(command: str) -> list[str]:
         _LocalFree(ctypes.cast(argv, wintypes.HLOCAL))
 
 
-def koe_state_path(command: str) -> str | None:
-    """``<folder of koe.py>\\state\\koe.json`` from the link handler's command line."""
+def koe_state_path(command: str, *, computer: str | None = None,
+                   isdir: Callable[[str], bool] = os.path.isdir) -> str | None:
+    """``<folder of koe.py>\\state\\<COMPUTERNAME>\\koe.json`` from the link handler's command line
+    when the queue keeps one state per computer (that folder exists – the folder may be shared
+    with another PC), else ``<folder of koe.py>\\state\\koe.json``."""
     try:
         args = split_command_line(command)
     except OSError:
         return None
     for arg in args:
         if arg.casefold().endswith("koe.py") and os.path.isabs(arg):
-            return os.path.join(os.path.dirname(arg), "state", "koe.json")
+            state = os.path.join(os.path.dirname(arg), "state")
+            pc = os.environ.get("COMPUTERNAME", "") if computer is None else computer
+            if pc and isdir(os.path.join(state, pc)):
+                return os.path.join(state, pc, "koe.json")
+            return os.path.join(state, "koe.json")
     return None
 
 
@@ -162,13 +169,14 @@ def registry_default(root: int, subkey: str) -> str | None:
     return winreg.ExpandEnvironmentStrings(value) if kind == winreg.REG_EXPAND_SZ else value
 
 
-def find_koe_state(query: Callable[[int, str], str | None] = registry_default) -> str | None:
+def find_koe_state(query: Callable[[int, str], str | None] = registry_default, *, computer: str | None = None,
+                   isdir: Callable[[str], bool] = os.path.isdir) -> str | None:
     """Where the queue keeps its state: found through its registered ``resolvekoe:`` handler
     (the user's own registration first, then the merged view)."""
     for root, subkey in HANDLER_KEYS:
         command = query(root, subkey)
         if command and command.strip():
-            path = koe_state_path(command)
+            path = koe_state_path(command, computer=computer, isdir=isdir)
             if path is not None:
                 return path
     return None
@@ -288,15 +296,19 @@ class KoeWatch:
         return dict(self._answer) if self._answer is not None else None
 
     def _find(self, now: float) -> str | None:
-        if self._path is None and (self._looked_at is None or not 0 <= now - self._looked_at < KOE_LOOKUP_S):
+        # Looked up again every minute, also once found: the queue may move to a folder of its own
+        # for this computer while the old file is still there.
+        if self._looked_at is None or not 0 <= now - self._looked_at < KOE_LOOKUP_S:
             self._looked_at = now
             try:
-                self._path = self._path_finder()
+                path = self._path_finder()
             except Exception:
                 log.exception("looking for the Resolve queue failed")
-                self._path = None
-            if self._path is not None:
-                log.info("the Resolve queue keeps its state in %s", self._path)
+                return self._path
+            if path != self._path:
+                if path is not None:
+                    log.info("the Resolve queue keeps its state in %s", path)
+                self._path, self._stamp = path, None
         return self._path
 
 

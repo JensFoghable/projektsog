@@ -29,6 +29,9 @@ shown as a phone. The messages are kept in ``messages.json``: a restart of Proje
 lose a question a session is waiting on (Projektsøg's own messages with a ``projektsog:`` button
 are not reloaded).
 
+Klippe-post (``post:`` tags) is memory-only and is never saved or logged. Old saved
+posts are discarded and removed from messages.json at startup.
+
 The office Klippes' lunch bell (SPEC §23.7) is made here like the ring: a small hand bell,
 "ding-ding-ding" (``bell_sound()``).
 """
@@ -362,7 +365,8 @@ class MessageBoard:
                 self._sync_ring()
             line = " – ".join(part for part in (message["titel"], message["tekst"]) if part)
             self.bus.publish("say", {"tekst": line})
-            log.info("note %s: %s", message["tag"], line[:80])
+            if not message["tag"].startswith("post:"):
+                log.info("note %s: %s", message["tag"], line[:80])
             return {"ok": True, "vist": shown}
         call, ring_on = is_call(message) and not never_a_call, self._ring_enabled()
         tag = message["tag"]
@@ -373,7 +377,8 @@ class MessageBoard:
             if lan and not self._room_for_lan():
                 if old is not None:
                     self._messages[tag] = old
-                log.info("no room for %s: the board is full of other messages", tag)
+                if not tag.startswith("post:"):
+                    log.info("no room for %s: the board is full of other messages", tag)
                 return {"ok": False, "vist": False}
             news = old is None or (old["titel"], old["tekst"]) != (message["titel"], message["tekst"])
             # A call that is news (or was no call before) rings anew; a silent re-post keeps the
@@ -394,8 +399,9 @@ class MessageBoard:
         rang = self._sync_ring() and new_call      # this call's sound is the ring
         if shown and sound and (news or new_call) and not rang:
             self._sound()
-        log.info("%s %s%s: %s", "call" if call else "message", tag,
-                 "" if shown else " (Klippe is not shown)", message["titel"] or message["tekst"][:60])
+        if not tag.startswith("post:"):
+            log.info("%s %s%s: %s", "call" if call else "message", tag,
+                     "" if shown else " (Klippe is not shown)", message["titel"] or message["tekst"][:60])
         return {"ok": True, "vist": shown}
 
     def answer(self, tag: Any) -> dict[str, Any]:
@@ -467,13 +473,16 @@ class MessageBoard:
             except OSError as exc:
                 log.warning("could not open %s: %s", uri.split("?", 1)[0], exc)
                 raise ValueError("Knappen kunne ikke åbnes – kører køen?") from exc
-        log.info("message %s answered: %s", tag, message["knapper"][index]["tekst"])
+        if not tag.startswith("post:"):
+            log.info("message %s answered: %s", tag, message["knapper"][index]["tekst"])
         return {"ok": True}
 
     def close(self) -> None:
         """Stop the ringtone and its timers (at exit); later calls no longer ring."""
         with self._lock:
             self._closed = True
+            self._messages = {tag: m for tag, m in self._messages.items()
+                              if not tag.startswith("post:")}
             for tag in list(self._ringing):
                 self._stop_ringing(tag)
         self._sync_ring()
@@ -571,7 +580,11 @@ class MessageBoard:
             log.warning("could not read %s: %s", self._path, exc)
             return
         now = self._clock()
+        removed_posts = False
         for item in saved.get("messages", []) if isinstance(saved, dict) else []:
+            if isinstance(item, dict) and str(item.get("tag", "")).startswith("post:"):
+                removed_posts = True
+                continue
             try:
                 message = clean_message({**item, "visning": "kort", "lyd": bool(item.get("lyd", True))})
                 until = float(item["udloeber_ved"])
@@ -584,6 +597,8 @@ class MessageBoard:
             message.update(tid=float(item.get("tid") or now), udloeber_ved=until, opkald=call,
                            besvaret=not call or item.get("besvaret", True) is not False)
             self._messages[message["tag"]] = message
+        if removed_posts:
+            self._save()
         if self._messages:
             log.info("%d message(s) kept from before the restart", len(self._messages))
 
@@ -594,7 +609,8 @@ class MessageBoard:
         temp = self._path + ".tmp"
         try:
             with open(temp, "w", encoding="utf-8") as fh:
-                json.dump({"messages": list(self._messages.values())}, fh, ensure_ascii=False)
+                json.dump({"messages": [m for tag, m in self._messages.items()
+                                        if not tag.startswith("post:")]}, fh, ensure_ascii=False)
             os.replace(temp, self._path)
         except OSError as exc:
             log.warning("could not save the messages: %s", exc)

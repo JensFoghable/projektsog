@@ -490,6 +490,34 @@ class KeptTests(unittest.TestCase):
                                      sound=lambda: None, ring=self.rings.append, clock=lambda: self.clock[0],
                                      timer=FakeTimer, path=self.path)
 
+    def test_office_posts_are_memory_only_and_not_logged(self) -> None:
+        board = self.board()
+        board._on_internal = lambda uri: None
+        with mock.patch.object(messages.log, "info") as logged:
+            board.post(POST, internal=True)
+            board.click(POST["tag"], 0)
+        self.assertFalse(logged.called)
+        board.post(POST, internal=True)
+        self.assertEqual(len(board.list()["messages"]), 1)
+        with open(self.path, encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["messages"], [])
+        self.assertEqual(self.board().list()["messages"], [])
+        board.close()
+        self.assertEqual(board.list()["messages"], [])
+
+    def test_old_saved_posts_are_removed_without_losing_other_messages(self) -> None:
+        board = self.board()
+        board.post(WAIT)
+        with open(self.path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        saved["messages"].append({**POST, "udloeber_ved": 9000, "tid": 1000})
+        with open(self.path, "w", encoding="utf-8") as fh:
+            json.dump(saved, fh)
+        restored = self.board()
+        self.assertEqual([m["tag"] for m in restored.list()["messages"]], [WAIT["tag"]])
+        with open(self.path, encoding="utf-8") as fh:
+            self.assertNotIn(POST["tekst"], fh.read())
+
     def test_kept_across_a_restart(self) -> None:
         first = self.board()
         first.post(ASK)
