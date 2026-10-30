@@ -893,6 +893,307 @@
     return Math.floor(g.dist / 10) + g.taken * 10;
   }
 
+  /** Two boxes {x, y (top, down from the top), w, h} overlap. */
+  function boxHits(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  // Fejljagt (SPEC §23.10): Klippe stands on the timeline at the bottom and claps klippefejl out of the
+  // sky – they drift down in a swaying flock and drop noise. In units, y down: the field is at least 160
+  // high (all of a taller canvas), the timeline's top 10 above its bottom. Three takes; a flock that
+  // reaches Klippe's height ends the round.
+  const SKYD = { h: 160, ground: 10, kw: 20, kh: 22, speed: 130, shot: 240, reload: 0.25, fw: 16, fh: 11, gapX: 8,
+    gapY: 7, top: 14, takes: 3, safe: 1.2, pause: 1.2 };
+  const SKYD_POINTS = { sort: 10, glitch: 20, offline: 30 };
+
+  function skydNew(seed = 1, w = 320, h = SKYD.h) {
+    const fieldH = Math.max(SKYD.h, Number(h) || 0);
+    const g = { w, h: fieldH, floor: fieldH - SKYD.ground, t: 0, x: w / 2, dir: 0, aim: null, fire: false, cool: 0, shots: [], noise: [], frames: [],
+      fejl: [], wave: 0, fy: 0, rows: 0, cols: 0, takes: SKYD.takes, safe: 0, pause: 0, over: false, why: null,
+      score: 0, kills: 0, next: 1.5, rng: seeded(seed) };
+    skydWave(g);
+    return g;
+  }
+
+  /** The next flock: more rows as the waves go by (bottom row "sort", then glitch, then Media Offline). */
+  function skydWave(g) {
+    g.wave += 1;
+    g.rows = Math.min(2 + Math.floor((g.wave - 1) / 2), 4);
+    g.cols = Math.max(4, Math.min(8, Math.floor((g.w - 30) / (SKYD.fw + SKYD.gapX))));
+    g.fejl = [];
+    for (let r = 0; r < g.rows; r += 1) {
+      const fromBottom = g.rows - 1 - r;
+      const kind = fromBottom === 0 ? 'sort' : fromBottom === 1 ? 'glitch' : 'offline';
+      for (let c = 0; c < g.cols; c += 1) {
+        g.fejl.push({ kind, r, c, hp: kind === 'offline' ? 2 : 1, x: 0, y: 0, w: SKYD.fw, h: SKYD.fh, ph: g.rng() * 6.3 });
+      }
+    }
+    g.fy = -g.rows * (SKYD.fh + SKYD.gapY) - 4;                  // it comes in from above
+    skydPlace(g);
+  }
+
+  /** Where each klippefejl is: the flock sways side to side (glitch ones shiver too). */
+  function skydPlace(g) {
+    const width = g.cols * SKYD.fw + (g.cols - 1) * SKYD.gapX;
+    const amp = Math.max(0, (g.w - width) / 2 - 6);
+    const sway = Math.sin(g.t * (0.6 + 0.08 * g.wave)) * amp;
+    const left = (g.w - width) / 2 + sway;
+    for (const f of g.fejl) {
+      f.x = left + f.c * (SKYD.fw + SKYD.gapX) + (f.kind === 'glitch' ? Math.sin(g.t * 7 + f.ph) * 1.5 : 0);
+      f.y = SKYD.top + g.fy + f.r * (SKYD.fh + SKYD.gapY);
+    }
+  }
+
+  /** Klippe's box – a little smaller than its drawing. */
+  function skydKlippe(g) {
+    return { x: g.x - SKYD.kw / 2 + 3, y: g.floor - SKYD.kh + 4, w: SKYD.kw - 6, h: SKYD.kh - 4 };
+  }
+
+  /** A clap upwards – when the clapper is ready again. */
+  function skydFire(g) {
+    if (g.over || g.cool > 0) return false;
+    g.shots.push({ x: g.x - 1, y: g.floor - SKYD.kh - 6, w: 2, h: 6 });
+    g.cool = SKYD.reload;
+    return true;
+  }
+
+  /** One step of `dt` seconds; returns what happened: "shot", "hit", "kill", "frame", "hurt", "wave". */
+  function skydStep(g, dt) {
+    const events = [];
+    if (g.over) return events;
+    const step = Math.max(0, Math.min(0.05, Number(dt) || 0));
+    g.t += step;
+    g.cool = Math.max(0, g.cool - step);
+    g.safe = Math.max(0, g.safe - step);
+    const half = SKYD.kw / 2 + 2;
+    if (g.aim !== null && Number.isFinite(g.aim)) {
+      const d = g.aim - g.x;
+      g.x += Math.sign(d) * Math.min(Math.abs(d), SKYD.speed * step);
+    } else {
+      g.x += g.dir * SKYD.speed * step;
+    }
+    g.x = Math.max(half, Math.min(g.w - half, g.x));
+    if (g.fire && skydFire(g)) events.push('shot');
+    for (const s of g.shots) s.y -= SKYD.shot * step;
+    for (const n of g.noise) n.y += n.v * step;
+    for (const f of g.frames) f.y += 40 * step;
+    if (g.pause > 0) {                                          // a breath between two flocks
+      g.pause -= step;
+      if (g.pause <= 0) skydWave(g);
+    } else {
+      const alive = g.fejl.filter((f) => f.hp > 0).length;
+      const total = g.rows * g.cols;
+      // as fast down a tall field as down a short one
+      const speed = g.fy < 0 ? 30 : (1.4 + 0.45 * g.wave) * (1 + 1.2 * (1 - alive / total)) * (g.h / SKYD.h);
+      g.fy += speed * step;
+      skydPlace(g);
+      g.next -= step;
+      if (g.next <= 0 && g.fy >= 0) {
+        const lowest = new Map();
+        for (const f of g.fejl) if (f.hp > 0 && (!lowest.has(f.c) || lowest.get(f.c).r < f.r)) lowest.set(f.c, f);
+        const from = [...lowest.values()];
+        if (from.length) {
+          const f = from[Math.floor(g.rng() * from.length) % from.length];
+          g.noise.push({ x: f.x + f.w / 2 - 1.5, y: f.y + f.h, w: 3, h: 6, v: 60 + 6 * g.wave });
+        }
+        g.next = Math.max(0.45, 1.5 - 0.1 * g.wave) * (0.6 + g.rng() * 0.8);
+      }
+    }
+    for (const s of g.shots) {
+      const f = g.fejl.find((o) => o.hp > 0 && boxHits(s, o));
+      if (f) {
+        s.y = -99;
+        f.hp -= 1;
+        if (f.hp > 0) {
+          events.push('hit');
+        } else {
+          g.kills += 1;
+          g.score += SKYD_POINTS[f.kind];
+          events.push('kill');
+          if (g.rng() < 0.2) g.frames.push({ x: f.x + 3, y: f.y, w: 10, h: 9 });
+        }
+        continue;
+      }
+      const n = g.noise.find((o) => boxHits(s, o));
+      if (n) {
+        s.y = -99;
+        n.y = 999;
+        g.score += 2;
+      }
+    }
+    g.shots = g.shots.filter((s) => s.y + s.h > -10);
+    const me = skydKlippe(g);
+    g.frames = g.frames.filter((f) => {
+      if (boxHits(me, f)) {
+        g.score += 25;
+        events.push('frame');
+        return false;
+      }
+      return f.y < g.h;
+    });
+    if (g.safe <= 0 && g.noise.some((n) => boxHits(me, n))) {
+      g.takes -= 1;
+      g.noise = [];
+      g.safe = SKYD.safe;
+      events.push('hurt');
+      if (g.takes <= 0) Object.assign(g, { over: true, why: 'stoej' });
+    }
+    g.noise = g.noise.filter((n) => n.y < g.h);
+    if (!g.over && g.pause <= 0) {
+      if (g.fejl.some((f) => f.hp > 0 && f.y + f.h >= g.floor - SKYD.kh)) {
+        Object.assign(g, { over: true, why: 'nede', takes: 0 });
+      } else if (g.fejl.every((f) => f.hp <= 0)) {
+        g.score += 50 * g.wave;
+        g.pause = SKYD.pause;
+        g.noise = [];
+        events.push('wave');
+      }
+    }
+    return events;
+  }
+
+  // Over tidslinjen (SPEC §23.10): Klippe hops from the Media Pool at the bottom over three audio
+  // tracks, the marker strip and three video tracks to Deliver at the top, while clips slide along
+  // the tracks. In units, y down: row 0 (bottom) to row 8 (Deliver), 16 high each, from y 16.
+  // A clip knocks Klippe back to the last safe row (the Media Pool or the markers); three takes.
+  const KRYDS = { h: 160, rows: 9, lane: 16, top: 16, kw: 14, kh: 13, hop: 0.12, stepX: 14, takes: 3, safe: 1.0,
+    markers: 4, goal: 8 };
+  const KRYDS_TRACKS = { 1: ['A1', 18, 1], 2: ['A2', 26, -1], 3: ['A3', 22, 1], 5: ['V1', 30, -1], 6: ['V2', 20, 1],
+    7: ['V3', 34, -1] };
+
+  function krydsNew(seed = 1, w = 320) {
+    const g = { w, t: 0, row: 0, x: w / 2, from: null, hopT: 0, best: 0, level: 1, takes: KRYDS.takes, safe: 0,
+      over: false, why: null, score: 0, delivered: 0, lanes: [], frame: null, nextFrame: 3, rng: seeded(seed) };
+    for (const [row, [name, , dir]] of Object.entries(KRYDS_TRACKS)) {
+      const lane = { row: Number(row), name, dir, kind: name[0] === 'A' ? 'lyd' : 'video', clips: [] };
+      let x = -60 + g.rng() * 30;
+      while (x < w + 60) {
+        const clipW = krydsClipWidth(g, lane);
+        lane.clips.push({ x, w: clipW });
+        x += clipW + krydsGap(g);
+      }
+      g.lanes.push(lane);
+    }
+    return g;
+  }
+
+  function krydsClipWidth(g, lane) {
+    return lane.kind === 'lyd' ? 30 + g.rng() * 30 : 22 + g.rng() * 24;
+  }
+
+  function krydsGap(g) {
+    return 30 + g.rng() * 44;
+  }
+
+  /** How fast a track's clips slide – faster for each delivery. */
+  function krydsSpeed(g, row) {
+    return KRYDS_TRACKS[row][1] * (1 + 0.18 * (g.level - 1));
+  }
+
+  /** The top of a row (y down). */
+  function krydsRowY(row) {
+    return KRYDS.top + (KRYDS.goal - row) * KRYDS.lane;
+  }
+
+  /** A hop: "op", "ned", "venstre" or "hoejre" – not while it is in the air. */
+  function krydsHop(g, dir) {
+    if (g.over || g.hopT > 0) return false;
+    const half = KRYDS.kw / 2 + 1;
+    let { row, x } = g;
+    if (dir === 'op') row += 1;
+    else if (dir === 'ned') row -= 1;
+    else if (dir === 'venstre') x -= KRYDS.stepX;
+    else if (dir === 'hoejre') x += KRYDS.stepX;
+    else return false;
+    row = Math.max(0, Math.min(KRYDS.goal, row));
+    x = Math.max(half, Math.min(g.w - half, x));
+    if (row === g.row && x === g.x) return false;
+    g.from = { row: g.row, x: g.x };
+    Object.assign(g, { row, x, hopT: KRYDS.hop });
+    return true;
+  }
+
+  function krydsKlippe(g) {
+    return { x: g.x - KRYDS.kw / 2 + 2, y: krydsRowY(g.row) + 2, w: KRYDS.kw - 4, h: KRYDS.lane - 4 };
+  }
+
+  /** One step of `dt` seconds; returns what happened: "step" (a new row), "frame", "hurt", "leveret". */
+  function krydsStep(g, dt) {
+    const events = [];
+    if (g.over) return events;
+    const step = Math.max(0, Math.min(0.05, Number(dt) || 0));
+    g.t += step;
+    g.safe = Math.max(0, g.safe - step);
+    for (const lane of g.lanes) {
+      const dx = lane.dir * krydsSpeed(g, lane.row) * step;
+      for (const c of lane.clips) c.x += dx;
+      lane.clips = lane.clips.filter((c) => c.x < g.w + 80 && c.x + c.w > -80);
+      if (lane.dir > 0) {
+        const first = lane.clips.reduce((a, c) => (a && a.x < c.x ? a : c), null);
+        const edge = first ? first.x : -10;                     // an empty track fills from outside
+        if (edge > -50) {
+          const clipW = krydsClipWidth(g, lane);
+          lane.clips.push({ x: edge - krydsGap(g) - clipW, w: clipW });
+        }
+      } else {
+        const last = lane.clips.reduce((a, c) => (a && a.x + a.w > c.x + c.w ? a : c), null);
+        const edge = last ? last.x + last.w : g.w + 10;
+        if (edge < g.w + 50) lane.clips.push({ x: edge + krydsGap(g), w: krydsClipWidth(g, lane) });
+      }
+    }
+    if (g.frame) {
+      g.frame.t -= step;
+      if (g.frame.t <= 0) g.frame = null;
+    } else {
+      g.nextFrame -= step;
+      if (g.nextFrame <= 0) {
+        const rows = Object.keys(KRYDS_TRACKS).map(Number);
+        g.frame = { row: rows[Math.floor(g.rng() * rows.length) % rows.length], x: 10 + g.rng() * (g.w - 30), w: 10,
+          h: 9, t: 6 };
+        g.nextFrame = 3 + g.rng() * 3;
+      }
+    }
+    if (g.hopT > 0) {
+      g.hopT = Math.max(0, g.hopT - step);
+      if (g.hopT > 0) return events;
+      g.from = null;
+      if (g.row > g.best) {
+        g.best = g.row;
+        g.score += 10;
+        events.push('step');
+      }
+      if (g.row === KRYDS.goal) {
+        g.score += 50 + 20 * g.level;
+        g.delivered += 1;
+        g.level += 1;
+        Object.assign(g, { row: 0, best: 0, x: g.w / 2 });
+        events.push('leveret');
+        return events;
+      }
+    }
+    const me = krydsKlippe(g);
+    if (g.frame && g.frame.row === g.row && boxHits(me, { x: g.frame.x, y: krydsRowY(g.row) + 3, w: g.frame.w, h: g.frame.h })) {
+      g.frame = null;
+      g.score += 25;
+      events.push('frame');
+    }
+    const lane = g.lanes.find((l) => l.row === g.row);
+    if (lane && g.safe <= 0 && lane.clips.some((c) => me.x < c.x + c.w && me.x + me.w > c.x)) {
+      g.takes -= 1;
+      g.safe = KRYDS.safe;
+      events.push('hurt');
+      if (g.takes <= 0) {
+        Object.assign(g, { over: true, why: 'klip' });
+      } else {
+        g.row = g.row > KRYDS.markers ? KRYDS.markers : 0;      // back to the last safe row
+      }
+    }
+    return events;
+  }
+
+  /** The render game's games, in the order of the picker. */
+  const GAME_IDS = ['hop', 'skyd', 'kryds'];
+
   const CHEERS = {
     hour: (n) => [`${n} ${n === 1 ? 'time' : 'timer'} i dag! 🎉`, `${n} t i kassen – godt klippet! 🎬`, `Time nr. ${n}! Du er on fire 🔥`],
     goal: () => ['Dagens mål er nået! 🏆', 'MÅL! Hele dagens mål er i hus 🎆'],
@@ -921,7 +1222,8 @@
     betKey, betStale, pickBet, betTitle, betStatus, betResult, lunchLine, slikLine, slikCountdown, slikSeconds,
     balladeTokens, possessive, yourItem, balladeLine, slikSvarLine, BET_STALE_S, SLIK_MIN_S,
     giftIcon, doorView, giftLine, eggPlan, dirtLevel, dirtLine, memoryLine, seeded, gameNew, gameJump, gameHits,
-    gameKlippe, gameSpawn, gameStep, gameScore, STAGES, FOCUS_STARS, BREAK_NUDGES, ROBOT_POSES, ROBOT_COUNT, BODY_SCALE,
+    gameKlippe, gameSpawn, gameStep, gameScore, boxHits, skydNew, skydWave, skydFire, skydStep, skydKlippe, krydsNew,
+    krydsHop, krydsStep, krydsRowY, krydsKlippe, SKYD, SKYD_POINTS, KRYDS, KRYDS_TRACKS, GAME_IDS, STAGES, FOCUS_STARS, BREAK_NUDGES, ROBOT_POSES, ROBOT_COUNT, BODY_SCALE,
     DIRECTOR_LINES, SLOT_KEYS, OUTFITS, KOSTUMER, FESTKAT_FRAMES, POST_NOTES, POST_MAX, EGGS, GAME, GAME_KINDS,
     YAWN_LINES, DANCE_LINES };
   if (typeof module === 'object' && module.exports) module.exports = helpers;
@@ -1036,7 +1338,7 @@
     vmStatus: $('vm-status'),
     spil: $('spil'), spilCanvas: $('spil-canvas'), spilPoint: $('spil-point'), spilBedste: $('spil-bedste'),
     spilRekord: $('spil-rekord'), spilRender: $('spil-render'), spilStart: $('spil-start'), spilLuk: $('spil-luk'),
-    spilBesked: $('spil-besked'), spilKnap: $('spil-knap'),
+    spilBesked: $('spil-besked'), spilKnap: $('spil-knap'), spilValg: $('spil-valg'),
   };
   el.box = el.pet.querySelector('.pakke');
 
@@ -2467,6 +2769,9 @@
       renderPanel();
     });
   }
+  window.addEventListener('keyup', (event) => {
+    if (state.game && !el.spil.hidden) gameKeyUp(event);
+  });
   window.addEventListener('keydown', (event) => {
     if (state.game && !el.spil.hidden && gameKey(event)) return;
     if (event.key !== 'Escape') return;
@@ -3914,8 +4219,24 @@
   }
 
   // ---------------------------------------------------------------- the render game (SPEC §23.10)
+  /** The games of the overlay: Hop (the runner), Fejljagt and Over tidslinjen. */
+  const GAME_INFO = {
+    hop: { name: 'Hop', help: 'Hop over klippefejlene og saml filmruder – klik eller tryk Mellemrum',
+      make: gameNew, step: gameStep },
+    skyd: { name: 'Fejljagt', help: 'Klap klippefejlene ned, før de når tidslinjen – ← → flytter, Mellemrum klapper (eller brug musen)',
+      make: skydNew, step: skydStep },
+    kryds: { name: 'Over tidslinjen', help: 'Hop over sporene til Deliver uden at blive ramt af et klip – piletaster (eller klik, hvor Klippe skal hen)',
+      make: krydsNew, step: krydsStep },
+  };
+
+  /** The game picked last (kept over a reload). */
+  function pickedGame() {
+    const kind = memory().spil;
+    return GAME_IDS.includes(kind) ? kind : 'hop';
+  }
+
   /** The overlay: a round starts on a click (or Space); a demo is one round. */
-  function openGame(demo = false) {
+  function openGame(demo = false, kind = null) {
     if (!el.spil || !el.spilCanvas) return;
     if (!demo && !state.render) {
       say('Render-spillet kan kun spilles, mens Resolve renderer 🎬', 4500);
@@ -3927,8 +4248,8 @@
     closePost();
     const css = getComputedStyle(el.app);
     const colour = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
-    state.game = { demo, g: null, raf: 0, last: 0, running: false, ended: false, rounds: 0, closeTimer: 0, pops: [],
-      submitted: false, unit: 1, ratio: 1, wUnits: 320,
+    state.game = { demo, kind: GAME_IDS.includes(kind) ? kind : pickedGame(), g: null, raf: 0, last: 0, running: false,
+      ended: false, rounds: 0, closeTimer: 0, pops: [], submitted: false, unit: 1, ratio: 1, wUnits: 320,
       look: { body: colour('--body', '#2c3440'), edge: colour('--body-edge', '#46536a'),
         dark: colour('--stripe-dark', '#1b1b1d'), light: colour('--stripe-light', '#f3efe6') } };
     el.spil.hidden = false;
@@ -3937,14 +4258,34 @@
     } else {
       delete el.spil.dataset.demo;
     }
-    gameMessage(demo ? 'Prøverunde! Hop over klippefejlene og saml filmruder – klik eller tryk Mellemrum'
-      : 'Hop over klippefejlene og saml filmruder – klik eller tryk Mellemrum');
     if (el.spilStart) {
       el.spilStart.textContent = '▶ Start';
       el.spilStart.hidden = false;
     }
     sizeGame();
     gameRender(state.render ? renderProgress(state.render) : null);
+    pickGame(state.game.kind);
+  }
+
+  /** Another game in the picker (between rounds): its help, its records and how it looks. */
+  function pickGame(kind) {
+    const G = state.game;
+    if (!G || G.running || !GAME_IDS.includes(kind)) return;
+    if (kind !== G.kind) {
+      G.kind = kind;
+      G.g = null;
+      G.rounds = 0;
+      if (el.spilStart) el.spilStart.textContent = '▶ Start';
+      show(el.spilStart, !G.ended);
+    }
+    const data = memory();
+    data.spil = kind;
+    remember(data);
+    el.spil.dataset.valgt = kind;
+    for (const b of el.spilValg ? el.spilValg.querySelectorAll('[data-spil]') : []) {
+      b.setAttribute('aria-pressed', String(b.dataset.spil === kind));
+    }
+    if (!G.ended) gameMessage(G.demo ? `Prøverunde! ${GAME_INFO[kind].help}` : GAME_INFO[kind].help);
     renderGameStats();
     loadGameState();
     drawGame();
@@ -3962,8 +4303,8 @@
     nextOnStage();
   }
 
-  /** Units to pixels: the course is at least GAME.w units wide (time to see a klippefejl coming) and
-   *  GAME.h high; a taller canvas gets more sky – the track stays at the bottom. */
+  /** Units to pixels: every game is at least GAME.w units wide and GAME.h high; a taller canvas gets
+   *  more sky – the game stays at the bottom. */
   function sizeGame() {
     const G = state.game;
     const canvas = el.spilCanvas;
@@ -3979,9 +4320,14 @@
   }
 
   async function loadGameState() {
+    const G = state.game;
+    if (!G) return;
     try {
-      state.spil = await get('/api/pet/spil');
-      renderGameStats();
+      const answer = await get(`/api/pet/spil?spil=${G.kind}`);
+      if (state.game === G && (!answer.spil || answer.spil === G.kind)) {
+        state.spil = answer;
+        renderGameStats();
+      }
     } catch { /* no records (yet) */ }
   }
 
@@ -3995,7 +4341,8 @@
     const G = state.game;
     const score = G && G.g ? G.g.score : 0;
     if (el.spilPoint) el.spilPoint.textContent = String(score);
-    const spil = state.spil || {};
+    if (el.spilValg) el.spilValg.hidden = Boolean(G && (G.running || G.ended));
+    const spil = state.spil && G && (state.spil.spil || 'hop') === G.kind ? state.spil : {};
     if (el.spilBedste) el.spilBedste.textContent = G && G.demo ? 'Prøverunde' : `Din bedste: ${spil.bedste || 0}`;
     if (el.spilRekord) {
       const top = Array.isArray(spil.kontor) && spil.kontor.length ? spil.kontor[0] : null;
@@ -4022,6 +4369,7 @@
     }
     gameMessage(score > 0 ? `Renderen er færdig! 🎬 Din score: ${score}` : 'Renderen er færdig! 🎬');
     show(el.spilStart, false);
+    renderGameStats();
     if (score > 0) submitScore(G, score);
     G.closeTimer = setTimeout(() => {
       if (state.game === G) closeGame();
@@ -4036,7 +4384,7 @@
       return;
     }
     sizeGame();
-    G.g = gameNew((Date.now() % 2147483647) + 1, G.wUnits);
+    G.g = GAME_INFO[G.kind].make((Date.now() % 2147483647) + 1, G.wUnits, G.hUnits);
     G.rounds += 1;
     G.running = true;
     G.submitted = false;
@@ -4044,6 +4392,7 @@
     G.pops = [];
     show(el.spilStart, false);
     gameMessage('');
+    renderGameStats();
     cancelAnimationFrame(G.raf);
     G.raf = requestAnimationFrame(gameFrame);
   }
@@ -4053,31 +4402,46 @@
     if (!G || !G.running) return;
     const dt = G.last ? (ts - G.last) / 1000 : 0;
     G.last = ts;
-    for (const event of gameStep(G.g, dt)) {
-      if (event === 'frame' && !REDUCED) G.pops.push({ x: GAME.kx + 6, y: G.g.y + GAME.kh + 4, t: 0 });
+    const g = G.g;
+    for (const event of GAME_INFO[G.kind].step(g, dt)) {
+      if (REDUCED) continue;
+      if (G.kind === 'hop' && event === 'frame') {
+        G.pops.push({ x: GAME.kx + 6, y: GAME.ground - g.y - GAME.kh - 4, t: 0, text: '+10' });
+      } else if (G.kind === 'skyd' && (event === 'frame' || event === 'wave')) {
+        G.pops.push(event === 'frame' ? { x: g.x - 6, y: g.floor - SKYD.kh - 4, t: 0, text: '+25' }
+          : { x: g.w / 2 - 22, y: 70, t: 0, text: `Bølge klaret! +${50 * g.wave}` });
+      } else if (G.kind === 'kryds' && (event === 'frame' || event === 'leveret')) {
+        G.pops.push(event === 'frame' ? { x: g.x - 6, y: krydsRowY(g.row) - 2, t: 0, text: '+25' }
+          : { x: g.w / 2 - 26, y: krydsRowY(KRYDS.goal) + 12, t: 0, text: `Leveret! 🎬 +${50 + 20 * (g.level - 1)}` });
+      }
     }
     for (const pop of G.pops) pop.t += Math.min(0.05, dt);
     G.pops = G.pops.filter((p) => p.t < 0.8);
     drawGame();
     renderGameStats();
-    if (G.g.over) {
+    if (g.over) {
       roundOver(G);
       return;
     }
     G.raf = requestAnimationFrame(gameFrame);
   }
 
+  const GAME_OVER = { hul: 'Du faldt i et jump cut! 🕳️', fejl: 'Av – en klippefejl! 💥',
+    stoej: 'Støjen ramte – alle tre takes er brugt! 📺', nede: 'Klippefejlene nåede tidslinjen! 👾',
+    klip: 'Et klip kørte dig over – alle tre takes er brugt! 🎞️' };
+
   function roundOver(G) {
     G.running = false;
     cancelAnimationFrame(G.raf);
     const score = G.g.score;
-    const why = G.g.why === 'hul' ? 'Du faldt i et jump cut! 🕳️' : 'Av – en klippefejl! 💥';
+    const why = GAME_OVER[G.g.why] || 'Slut!';
     gameMessage(G.demo ? `${why} ${score} point · Prøverunden er slut – i Resolve kan du spille, mens den renderer`
       : `${why} ${score} point`);
     if (el.spilStart) {
       el.spilStart.textContent = G.demo ? 'Luk' : '▶ Prøv igen';
       el.spilStart.hidden = false;
     }
+    renderGameStats();
     submitScore(G, score);
   }
 
@@ -4086,11 +4450,12 @@
     G.submitted = true;
     let answer;
     try {
-      answer = await send('POST', '/api/pet/spil', { score: Math.round(score), demo: G.demo });
+      answer = await send('POST', '/api/pet/spil', { score: Math.round(score), demo: G.demo, spil: G.kind });
     } catch {
       return;                                  // a round that cannot be kept (the render ended long ago)
     }
-    if (answer && answer.spil) state.spil = answer.spil;
+    if (answer && answer.spil && state.game === G && answer.spil.spil === G.kind) state.spil = answer.spil;
+    const name = G.kind === 'hop' ? 'render-spillet' : GAME_INFO[G.kind].name;
     if (state.game === G) {
       renderGameStats();
       if (answer && answer.kontor_rekord) {
@@ -4099,11 +4464,12 @@
         gameMessage(`🎉 Ny rekord: ${score} point!`);
       }
     } else if (answer && (answer.kontor_rekord || answer.ny_rekord)) {
-      say(answer.kontor_rekord ? `🏆 Ny kontorrekord i render-spillet: ${score} point!` : `🎮 Ny rekord: ${score} point!`, 6000);
+      say(answer.kontor_rekord ? `🏆 Ny kontorrekord i ${name}: ${score} point!` : `🎮 Ny rekord i ${name}: ${score} point!`, 6000);
     }
   }
 
-  /** A click on the canvas, Space or ↑: start a round, or jump. */
+  /** A click on the canvas, Space or ↑: start a round – or jump (Hop), clap (Fejljagt), hop up
+   *  (Over tidslinjen). */
   function gameInput() {
     const G = state.game;
     if (!G) return;
@@ -4111,11 +4477,63 @@
       startRound();
       return;
     }
-    gameJump(G.g);
+    if (G.kind === 'hop') gameJump(G.g);
+    else if (G.kind === 'skyd') skydFire(G.g);
+    else krydsHop(G.g, 'op');
   }
 
+  /** A click or tap on the course: Fejljagt walks there and claps, Over tidslinjen hops towards it. */
+  function gamePointer(event) {
+    const G = state.game;
+    if (!G || !G.running || G.kind === 'hop') {
+      gameInput();
+      return;
+    }
+    const spot = gameSpot(event);
+    if (G.kind === 'skyd') {
+      G.g.aim = spot.x;
+      skydFire(G.g);
+      return;
+    }
+    const dx = spot.x - G.g.x;
+    const dy = spot.y - (krydsRowY(G.g.row) + KRYDS.lane / 2);
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 6) return;
+    krydsHop(G.g, Math.abs(dy) >= Math.abs(dx) ? (dy < 0 ? 'op' : 'ned') : dx < 0 ? 'venstre' : 'hoejre');
+  }
+
+  /** Where a pointer event is on the course, in units (y down from the top of the game). */
+  function gameSpot(event) {
+    const G = state.game;
+    const rect = el.spilCanvas.getBoundingClientRect();
+    const extra = G.kind === 'skyd' ? 0 : Math.max(0, (G.hUnits || GAME.h) - GAME.h);   // Fejljagt fills it all
+    return { x: (event.clientX - rect.left) / G.unit, y: (event.clientY - rect.top) / G.unit - extra };
+  }
+
+  const KEY_DIRS = { ArrowUp: 'op', ArrowDown: 'ned', ArrowLeft: 'venstre', ArrowRight: 'hoejre', w: 'op', s: 'ned',
+    a: 'venstre', d: 'hoejre' };
+
   function gameKey(event) {
-    if (event.key === ' ' || event.code === 'Space' || event.key === 'ArrowUp') {
+    const G = state.game;
+    const space = event.key === ' ' || event.code === 'Space';
+    const dir = KEY_DIRS[event.key] || KEY_DIRS[String(event.key).toLowerCase()];
+    if (G && G.running && G.kind === 'skyd' && (dir === 'venstre' || dir === 'hoejre')) {
+      event.preventDefault();
+      G.g.aim = null;
+      G.g.dir = dir === 'venstre' ? -1 : 1;
+      return true;
+    }
+    if (G && G.running && G.kind === 'skyd' && (space || dir === 'op')) {
+      event.preventDefault();
+      G.g.fire = true;
+      skydFire(G.g);
+      return true;
+    }
+    if (G && G.running && G.kind === 'kryds' && dir) {
+      event.preventDefault();
+      krydsHop(G.g, dir);
+      return true;
+    }
+    if (space || event.key === 'ArrowUp') {
       event.preventDefault();
       gameInput();
       return true;
@@ -4123,8 +4541,17 @@
     return false;
   }
 
-  /** The course in units: a sky, the timeline (V1 blue, A1 green, its gaps), the klippefejl, the
-   *  film frames and Klippe – drawn with its own colours. */
+  /** Fejljagt: letting go of an arrow stops Klippe, letting go of Space stops the clapping. */
+  function gameKeyUp(event) {
+    const G = state.game;
+    if (!G || !G.running || G.kind !== 'skyd') return;
+    const dir = KEY_DIRS[event.key] || KEY_DIRS[String(event.key).toLowerCase()];
+    if ((dir === 'venstre' && G.g.dir < 0) || (dir === 'hoejre' && G.g.dir > 0)) G.g.dir = 0;
+    if (event.key === ' ' || event.code === 'Space' || dir === 'op') G.g.fire = false;
+  }
+
+  /** The course in units: a sky (more of it over a tall canvas), then the game picked – drawn with
+   *  Klippe's own colours. */
   function drawGame() {
     const G = state.game;
     const canvas = el.spilCanvas;
@@ -4143,7 +4570,24 @@
     for (let i = 0; i < Math.round(extra / 6); i += 1) {
       ctx.fillRect((i * 67.3) % w, (i * 29.7) % Math.max(1, extra), 0.9, 0.9);
     }
-    ctx.setTransform(k, 0, 0, k, 0, extra * k);
+    ctx.setTransform(k, 0, 0, k, 0, G.kind === 'skyd' ? 0 : extra * k);   // Fejljagt fills the canvas
+    if (G.kind === 'skyd') {
+      drawSkyd(ctx, G, w, GAME.h + extra);
+    } else if (G.kind === 'kryds') {
+      drawKryds(ctx, G, w);
+    } else {
+      drawHop(ctx, G, w);
+    }
+    ctx.font = '700 9px "Segoe UI", sans-serif';
+    ctx.fillStyle = '#ffcf4a';
+    for (const pop of G.pops) {
+      ctx.globalAlpha = Math.max(0, 1 - pop.t / 0.8);
+      ctx.fillText(pop.text, pop.x, pop.y - pop.t * 30);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawHop(ctx, G, w) {
     const g = G.g;
     const dist = g ? g.dist : 0;
     ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';            // monitors far away
@@ -4159,13 +4603,6 @@
       for (const f of g.frames) drawFrame(ctx, f);
     }
     if (!g || !g.falling) drawKlippe(ctx, G);
-    ctx.font = '700 9px "Segoe UI", sans-serif';
-    ctx.fillStyle = '#ffcf4a';
-    for (const pop of G.pops) {
-      ctx.globalAlpha = Math.max(0, 1 - pop.t / 0.8);
-      ctx.fillText('+10', pop.x, GAME.ground - pop.y - pop.t * 30);
-    }
-    ctx.globalAlpha = 1;
   }
 
   function drawTrack(ctx, w, dist, g) {
@@ -4199,106 +4636,231 @@
 
   function drawObstacle(ctx, o) {
     if (o.kind === 'hul') return;
-    const y = GAME.ground - o.b - o.h;
-    if (o.kind === 'offline') {
+    drawFejl(ctx, o.kind, o.x, GAME.ground - o.b - o.h, o.w, o.h);
+  }
+
+  /** A klippefejl: a red "Media Offline" block, a black frame or a glitch block. */
+  function drawFejl(ctx, kind, x, y, w, h) {
+    if (kind === 'offline') {
       ctx.fillStyle = '#c93434';
-      ctx.fillRect(o.x, y, o.w, o.h);
+      ctx.fillRect(x, y, w, h);
       ctx.fillStyle = '#ffd6d2';
       ctx.font = '700 5px "Segoe UI", sans-serif';
-      ctx.fillText('MEDIA', o.x + 2, y + o.h / 2 - 1);
-      ctx.fillText('OFFLINE', o.x + 1, y + o.h / 2 + 5);
-    } else if (o.kind === 'sort') {
+      if (h >= 18) {
+        ctx.fillText('MEDIA', x + 2, y + h / 2 - 1);
+        ctx.fillText('OFFLINE', x + 1, y + h / 2 + 5);
+      } else {
+        ctx.fillText('OFF', x + w / 2 - 4.5, y + h / 2 + 2);
+      }
+    } else if (kind === 'sort') {
       ctx.fillStyle = '#000';
-      ctx.fillRect(o.x, y, o.w, o.h);
+      ctx.fillRect(x, y, w, h);
       ctx.strokeStyle = '#e8e4dc';
       ctx.lineWidth = 1;
-      ctx.strokeRect(o.x + 0.5, y + 0.5, o.w - 1, o.h - 1);
+      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
     } else {
       const colours = ['#ff4fd8', '#33e1ff', '#ffe14a', '#7cff6b'];
-      const rows = Math.max(3, Math.round(o.h / 5));
+      const rows = Math.max(3, Math.round(h / 5));
       for (let i = 0; i < rows; i += 1) {
-        const shift = ((i * 7 + Math.floor(o.x / 6)) % 5) - 2;
-        ctx.fillStyle = colours[(i + Math.floor(o.x / 9)) % colours.length];
-        ctx.fillRect(o.x + shift, y + (i * o.h) / rows, o.w, o.h / rows + 0.5);
+        const shift = ((i * 7 + Math.floor(x / 6)) % 5) - 2;
+        ctx.fillStyle = colours[(i + Math.floor(x / 9)) % colours.length];
+        ctx.fillRect(x + shift, y + (i * h) / rows, w, h / rows + 0.5);
       }
     }
   }
 
   function drawFrame(ctx, f) {
     if (f.taken) return;
-    const y = GAME.ground - f.b - f.h;
-    ctx.fillStyle = '#f0a45b';
-    ctx.fillRect(f.x, y, f.w, f.h);
-    ctx.fillStyle = '#3a2513';
-    for (const dx of [1.5, 4.5, 7.5]) {
-      ctx.fillRect(f.x + dx, y + 1, 1.2, 1.4);
-      ctx.fillRect(f.x + dx, y + f.h - 2.4, 1.2, 1.4);
-    }
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
-    ctx.fillRect(f.x + 2, y + 3.2, f.w - 4, f.h - 6.4);
+    drawFilmFrame(ctx, f.x, GAME.ground - f.b - f.h, f.w, f.h);
   }
 
-  /** Klippe, a little clapper board on two feet: its clapper opens while it is in the air. */
+  /** A film frame to catch (top-left x, y). */
+  function drawFilmFrame(ctx, x, y, w, h) {
+    ctx.fillStyle = '#f0a45b';
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = '#3a2513';
+    for (const dx of [1.5, 4.5, 7.5]) {
+      ctx.fillRect(x + dx, y + 1, 1.2, 1.4);
+      ctx.fillRect(x + dx, y + h - 2.4, 1.2, 1.4);
+    }
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.fillRect(x + 2, y + 3.2, w - 4, h - 6.4);
+  }
+
+  /** The takes left (Fejljagt, Over tidslinjen): small clapper boards in the top left corner. */
+  function drawTakes(ctx, G, takes) {
+    for (let i = 0; i < 3; i += 1) {
+      ctx.globalAlpha = i < takes ? 1 : 0.22;
+      ctx.fillStyle = G.look.body;
+      ctx.fillRect(5 + i * 11, 5, 8, 6);
+      ctx.fillStyle = G.look.light;
+      ctx.fillRect(5 + i * 11, 3, 8, 1.6);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  /** Fejljagt: the flock of klippefejl, their noise, the claps, the timeline and Klippe. */
+  function drawSkyd(ctx, G, w, h) {
+    const g = G.g;
+    const floor = h - SKYD.ground;
+    ctx.fillStyle = '#121418';                                // the timeline at the bottom
+    ctx.fillRect(0, floor, w, SKYD.ground);
+    ctx.fillStyle = '#4f7bd9';
+    ctx.fillRect(0, floor + 2, w, 6);
+    ctx.fillStyle = '#7f9cff';
+    ctx.fillRect(0, floor + 2, w, 1.2);
+    const x = g ? g.x : w / 2;
+    if (g) {
+      for (const f of g.fejl) {
+        if (f.hp <= 0) continue;
+        ctx.globalAlpha = f.kind === 'offline' && f.hp === 1 ? 0.6 : 1;   // a cracked Media Offline
+        drawFejl(ctx, f.kind, f.x, f.y, f.w, f.h);
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#e8e4dc';                               // noise: little static snow
+      for (const n of g.noise) {
+        for (let i = 0; i < 3; i += 1) ctx.fillRect(n.x + ((i * 2 + Math.floor(n.y)) % 3), n.y + i * 2, 1.2, 1.4);
+      }
+      ctx.fillStyle = '#ffcf4a';                               // the claps
+      for (const s of g.shots) ctx.fillRect(s.x, s.y, s.w, s.h);
+      for (const f of g.frames) drawFilmFrame(ctx, f.x, f.y, f.w, f.h);
+      drawTakes(ctx, G, g.takes);
+    }
+    const blink = g && !g.over && g.safe > 0 && Math.floor(g.safe * 10) % 2;   // just hit: it blinks
+    if (!blink) {
+      drawSlate(ctx, G.look, x - SKYD.kw / 2, floor, SKYD.kw, SKYD.kh - 4,
+        { open: g && g.cool > SKYD.reload / 2 ? -0.45 : 0, crashed: g && g.over, mouthO: false, step: 0 });
+    }
+  }
+
+  /** Over tidslinjen: Deliver at the top, the video tracks, the markers, the audio tracks and the
+   *  Media Pool at the bottom – the clips sliding along – and Klippe. */
+  function drawKryds(ctx, G, w) {
+    const g = G.g;
+    const L = KRYDS.lane;
+    ctx.font = '700 6px "Segoe UI", sans-serif';
+    for (let row = 0; row <= KRYDS.goal; row += 1) {
+      const y = krydsRowY(row);
+      const track = KRYDS_TRACKS[row];
+      ctx.fillStyle = row === KRYDS.goal ? '#3a2f1c' : row === 0 ? '#1f2530' : row === KRYDS.markers ? '#24202c'
+        : row % 2 ? '#15171c' : '#121418';
+      ctx.fillRect(0, y, w, L);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+      if (track) {
+        ctx.fillText(track[0], 2, y + L / 2 + 2);
+      } else if (row === KRYDS.goal) {
+        ctx.fillStyle = '#ffcf4a';
+        ctx.fillText('🎬 DELIVER', w / 2 - 18, y + L / 2 + 2);
+      } else if (row === 0) {
+        ctx.fillText('MEDIA POOL', w / 2 - 17, y + L / 2 + 2);
+      } else {
+        for (let x = 6; x < w; x += 22) {                      // the marker strip
+          ctx.fillStyle = ['#ef7166', '#ffcf4a', '#5fcf8f', '#7f9cff'][Math.floor(x / 22) % 4];
+          ctx.fillRect(x, y + L / 2 - 2, 4, 4);
+        }
+      }
+    }
+    if (g) {
+      for (const lane of g.lanes) {
+        const y = krydsRowY(lane.row) + 2;
+        const [fill, edge] = lane.kind === 'lyd' ? ['#3c9e6b', '#5fcf8f'] : ['#4f7bd9', '#7f9cff'];
+        for (const c of lane.clips) {
+          if (c.x > w || c.x + c.w < 0) continue;
+          ctx.fillStyle = fill;
+          ctx.fillRect(c.x, y, c.w, L - 4);
+          ctx.fillStyle = edge;
+          ctx.fillRect(c.x, y, c.w, 1.5);
+          if (lane.kind === 'lyd') {                             // a little waveform
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+            for (let x = c.x + 2; x < c.x + c.w - 2; x += 3) {
+              const amp = 1 + Math.abs(Math.sin(x * 0.7)) * 3;
+              ctx.fillRect(x, y + (L - 4) / 2 - amp / 2, 1.4, amp);
+            }
+          }
+        }
+      }
+      if (g.frame) drawFilmFrame(ctx, g.frame.x, krydsRowY(g.frame.row) + 3, g.frame.w, g.frame.h);
+      drawTakes(ctx, G, g.takes);
+    }
+    const row = g ? g.row : 0;
+    let x = g ? g.x : w / 2;
+    let bottom = krydsRowY(row) + L - 1;
+    let lift = 0;
+    if (g && g.from && g.hopT > 0) {                            // in the air between two rows
+      const p = 1 - g.hopT / KRYDS.hop;
+      x = g.from.x + (g.x - g.from.x) * p;
+      bottom = krydsRowY(g.from.row) + L - 1 + (krydsRowY(g.row) - krydsRowY(g.from.row)) * p;
+      lift = Math.sin(p * Math.PI) * 4;
+    }
+    const blink = g && !g.over && g.safe > 0 && Math.floor(g.safe * 10) % 2;   // just hit: it blinks
+    if (!blink) {
+      drawSlate(ctx, G.look, x - 6, bottom - lift, 12, 11,
+        { open: lift > 0 ? -0.45 : 0, crashed: g && g.over, mouthO: lift > 0, step: 0 });
+    }
+  }
+
+  /** Klippe in Hop, a little clapper board on two feet: its clapper opens while it is in the air. */
   function drawKlippe(ctx, G) {
     const g = G.g;
-    const look = G.look;
-    const x = GAME.kx;
-    const bottom = GAME.ground - (g ? g.y : 0);
-    const w = GAME.kw;
-    const h = GAME.kh - 8;
-    const top = bottom - 4 - h;
-    const step = G.running && g && g.ground ? Math.floor(g.t * 10) % 2 : 0;
+    drawSlate(ctx, G.look, GAME.kx, GAME.ground - (g ? g.y : 0), GAME.kw, GAME.kh - 8, {
+      open: g && !g.ground ? -0.45 : 0, crashed: g && g.over && g.why === 'fejl', mouthO: Boolean(g && !g.ground),
+      step: G.running && g && g.ground ? Math.floor(g.t * 10) % 2 : 0 });
+  }
+
+  /** Klippe as a clapper board `w` wide with a slate `h` high (22/24 of `w` for its face to fit) on two
+   *  feet standing at `bottom`. */
+  function drawSlate(ctx, look, x, bottom, w, h, { open, crashed, mouthO, step }) {
+    const s = w / 24;                                          // drawn for a slate 24 wide (Hop's)
+    const top = bottom - 4 * s - h;
     ctx.fillStyle = '#222a34';                                 // feet
-    ctx.fillRect(x + 4, bottom - 4 - (step ? 1 : 0), 6, 4);
-    ctx.fillRect(x + w - 10, bottom - 4 - (step ? 0 : 1), 6, 4);
+    ctx.fillRect(x + 4 * s, bottom - 4 * s - (step ? 1 : 0), 6 * s, 4 * s);
+    ctx.fillRect(x + w - 10 * s, bottom - 4 * s - (step ? 0 : 1), 6 * s, 4 * s);
     ctx.fillStyle = look.body;                                 // the slate
     ctx.strokeStyle = look.edge;
     ctx.lineWidth = 1.2;
-    roundRect(ctx, x, top, w, h, 3);
+    roundRect(ctx, x, top, w, h, 3 * s);
     ctx.fill();
     ctx.stroke();
-    const open = g && !g.ground ? -0.45 : 0;                   // the clapper
-    ctx.save();
+    ctx.save();                                                // the clapper
     ctx.translate(x, top + 1);
     ctx.rotate(open);
     for (let i = 0; i < 6; i += 1) {
       ctx.fillStyle = i % 2 ? look.light : look.dark;
-      ctx.fillRect((i * w) / 6, -5, w / 6 + 0.3, 4);
+      ctx.fillRect((i * w) / 6, -5 * s, w / 6 + 0.3, 4 * s);
     }
     ctx.restore();
-    const crashed = g && g.over && g.why === 'fejl';
     ctx.fillStyle = '#fbfaf7';
-    for (const ex of [x + 7, x + w - 7]) {
+    for (const ex of [x + 7 * s, x + w - 7 * s]) {
       if (crashed) {
         ctx.strokeStyle = '#fbfaf7';
         ctx.lineWidth = 1.2;
         ctx.beginPath();
-        ctx.moveTo(ex - 2, top + 7);
-        ctx.lineTo(ex + 2, top + 11);
-        ctx.moveTo(ex + 2, top + 7);
-        ctx.lineTo(ex - 2, top + 11);
+        ctx.moveTo(ex - 2 * s, top + 7 * s);
+        ctx.lineTo(ex + 2 * s, top + 11 * s);
+        ctx.moveTo(ex + 2 * s, top + 7 * s);
+        ctx.lineTo(ex - 2 * s, top + 11 * s);
         ctx.stroke();
       } else {
         ctx.beginPath();
-        ctx.ellipse(ex, top + 9, 2.6, 3.1, 0, 0, Math.PI * 2);
+        ctx.ellipse(ex, top + 9 * s, 2.6 * s, 3.1 * s, 0, 0, Math.PI * 2);
         ctx.fill();
       }
     }
     if (!crashed) {
       ctx.fillStyle = '#1d1b19';
-      for (const ex of [x + 7.6, x + w - 6.4]) {
+      for (const ex of [x + 7.6 * s, x + w - 6.4 * s]) {
         ctx.beginPath();
-        ctx.arc(ex, top + 9.5, 1.3, 0, Math.PI * 2);
+        ctx.arc(ex, top + 9.5 * s, 1.3 * s, 0, Math.PI * 2);
         ctx.fill();
       }
     }
     ctx.strokeStyle = '#f3efe6';                               // the mouth: a smile (an O in the air)
     ctx.lineWidth = 1.2;
     ctx.beginPath();
-    if (g && !g.ground) {
-      ctx.arc(x + w / 2, top + h - 5, 1.6, 0, Math.PI * 2);
+    if (mouthO) {
+      ctx.arc(x + w / 2, top + 17 * s, 1.6 * s, 0, Math.PI * 2);
     } else {
-      ctx.arc(x + w / 2, top + h - 7, 3, 0.2 * Math.PI, 0.8 * Math.PI);
+      ctx.arc(x + w / 2, top + 15 * s, 3 * s, 0.2 * Math.PI, 0.8 * Math.PI);
     }
     ctx.stroke();
   }
@@ -4360,8 +4922,15 @@
   });
   on(el.spilCanvas, 'pointerdown', (event) => {
     event.preventDefault();
-    gameInput();
+    gamePointer(event);
   });
+  on(el.spilCanvas, 'pointermove', (event) => {
+    const G = state.game;
+    if (G && G.running && G.kind === 'skyd' && event.pointerType === 'mouse') G.g.aim = gameSpot(event).x;
+  });
+  for (const b of el.spilValg ? el.spilValg.querySelectorAll('[data-spil]') : []) {
+    b.addEventListener('click', () => pickGame(b.dataset.spil));
+  }
   document.addEventListener('visibilitychange', () => {
     if (state.game) state.game.last = 0;      // no jump forward after a pause
   });
@@ -4371,7 +4940,7 @@
     applyBuild, applyRobot, aim, naughtyRobot, applyRender, visit, deliver, festkat, floor,
     // fun in the office (SPEC §23)
     clock, funTick, updateNat, natDemo, applySaeson, applyJul, applyRod, startLunch, comeHome, applyBet, renderBetCard,
-    easterEgg, snowStorm, openPost, openGame, closeGame, gameInput, startRound, loadRod, loadBets, loadSaeson,
+    easterEgg, snowStorm, openPost, openGame, closeGame, gameInput, startRound, pickGame, loadRod, loadBets, loadSaeson,
     loadJul, eat };   // for tests
 
   // ---------------------------------------------------------------- events

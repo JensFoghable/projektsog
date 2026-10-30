@@ -403,6 +403,31 @@ class GameTests(ProgressCase):
         self.assertEqual(pet._data["aar"]["2026"]["spil_bedste"], 300)
         self.assertEqual(pet._data["aar"]["2026"]["spil"], 3)
 
+    def test_each_game_keeps_its_own_records(self) -> None:
+        pet = self.pet()
+        pet.game_result(2000, False)                                         # Hop
+        skyd = pet.game_result(500, False, "skyd")
+        self.assertEqual((skyd["bedste"], skyd["ny_rekord"], skyd["kontor_rekord"]), (500, True, True))
+        self.assertEqual(skyd["spil"]["spil"], "skyd")
+        self.assertEqual(pet.game_state()["bedste"], 2000)
+        self.assertEqual(pet.game_state("kryds")["bedste"], 0)
+        self.assertEqual(pet.game_state("kryds")["spillet"], 2)              # rounds of every game
+        self.assertTrue(pet.office_record("GRAFIK-PC", "Bobby", 900, "skyd"))
+        self.assertFalse(pet.office_record("KLIPPER-PC", "Rolf", 600, "skyd"))     # kept, but no office record
+        self.assertEqual([r["pc"] for r in pet.game_state("kryds")["kontor"]], [])
+        self.assertEqual([r["score"] for r in pet.game_state("skyd")["kontor"]], [900, 600, 500])
+        self.assertEqual([r["score"] for r in pet.game_state()["kontor"]], [2000])
+        self.assertFalse(pet.office_record("GRAFIK-PC", "Bobby", 900, "pong"))
+        # only Hop counts for the year and the trophies
+        pet.game_result(4000, False, "kryds")
+        self.assertEqual(pet._data["aar"]["2026"]["spil_bedste"], 2000)
+        self.assertNotIn("fejlfri", {n["id"] for n in pet.refresh()})
+        self.assertEqual(self.pet().game_state("kryds")["bedste"], 4000)      # kept
+        with self.assertRaises(ValueError):
+            pet.game_result(100, False, "pong")
+        with self.assertRaises(ValueError):
+            pet.game_state("pong")
+
     def test_small_scores_are_no_records_and_bad_ones_are_refused(self) -> None:
         pet = self.pet()
         self.assertFalse(pet.game_result(99, False)["ny_rekord"])
@@ -437,12 +462,16 @@ class StorageTests(ProgressCase):
     def test_a_broken_record_starts_over(self) -> None:
         with open(self.path, "w", encoding="utf-8") as fh:
             json.dump({"jul": {"2026": [1], "2025": {"1": 5}}, "julegaver": ["gevir", "awp", "gevir", 3],
-                       "spil": {"bedste": "x", "kontor": {"A": {"score": "1"}, "B": {"score": 5}}},
+                       "spil": {"bedste": "x", "kontor": {"A": {"score": "1"}, "B": {"score": 5}},
+                                "andre": {"skyd": {"bedste": -4, "kontor": {"C": {"score": 7}, "D": 3}}, "kryds": 5}},
                        "aar": {"2026": 5}, "halloween": [], "counters": {"bade": 2}}, fh)
         pet = self.pet()
         self.assertEqual(pet._data["jul"], {"2025": {"1": 5}})
         self.assertEqual(pet._data["julegaver"], ["gevir"])
         self.assertEqual((pet._data["spil"]["bedste"], list(pet._data["spil"]["kontor"])), (0, ["B"]))
+        self.assertEqual(pet._data["spil"]["andre"],
+                         {"skyd": {"bedste": 0, "bedste_ved": None, "kontor": {"C": {"score": 7}}},
+                          "kryds": {"bedste": 0, "bedste_ved": None, "kontor": {}}})
         self.assertEqual((pet._data["aar"], pet._data["halloween"]), ({}, {}))
         self.assertIn("gevir", pet.owned())
         self.assertEqual(pet.stats().counters["bade"], 2)

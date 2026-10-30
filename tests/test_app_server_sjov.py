@@ -49,12 +49,12 @@ class ProgressStandIn(FakeProgress):
         self.calls.append(("calendar_demo", nr))
         return {"ok": True, "gave": {"id": "sne1"}, "demo": True}
 
-    def game_state(self) -> dict:
-        self.calls.append(("game_state",))
-        return {"bedste": 2310, "spillet": 4, "kontor": []}
+    def game_state(self, game: str = "hop") -> dict:
+        self.calls.append(("game_state", game))
+        return {"spil": game, "bedste": 2310, "spillet": 4, "kontor": []}
 
-    def game_result(self, score: int, demo: bool) -> dict:
-        self.calls.append(("game_result", score, demo))
+    def game_result(self, score: int, demo: bool, game: str = "hop") -> dict:
+        self.calls.append(("game_result", score, demo, game))
         return dict(self.result)
 
     def year_review(self, year: int) -> dict:
@@ -121,15 +121,28 @@ class FunRouteTests(ServerTestBase):
         self.assertEqual(self.kontor.called("record"), [])          # a demo round is never told
         self.rendering[0] = True
         self.assertTrue(self.ok("POST", "/api/pet/spil", {"score": 2400})["ny_rekord"])
-        self.assertEqual(self.kontor.called("record"), [((2400,), {})])   # a new best: the office hears it
+        self.assertEqual(self.kontor.called("record"), [((2400, "hop"), {})])   # a new best: the office hears it
         self.progress.result["ny_rekord"] = False
         self.ok("POST", "/api/pet/spil", {"score": 300})
         self.assertEqual(len(self.kontor.called("record")), 1)
         self.assertEqual([c for c in self.progress.calls if c[0] == "game_result"],
-                         [("game_result", 1200, True), ("game_result", 2400, False), ("game_result", 300, False)])
+                         [("game_result", 1200, True, "hop"), ("game_result", 2400, False, "hop"),
+                          ("game_result", 300, False, "hop")])
         for bad in ({}, {"score": -1}, {"score": 10 ** 8}, {"score": "100"}, {"score": 1.5}, {"score": True}):
             with self.subTest(bad=bad):
                 self.assertEqual(self.refused("POST", "/api/pet/spil", bad), "Ugyldig værdi: score")
+
+    def test_each_game_of_the_render_game_has_its_own_records(self) -> None:
+        self.assertEqual(self.ok("GET", "/api/pet/spil?spil=skyd")["spil"], "skyd")
+        self.assertEqual(self.ok("GET", "/api/pet/spil")["spil"], "hop")
+        self.rendering[0] = True
+        self.ok("POST", "/api/pet/spil", {"score": 1800, "spil": "kryds"})
+        self.assertEqual(self.kontor.called("record"), [((1800, "kryds"), {})])
+        self.assertEqual([c for c in self.progress.calls if c[0] == "game_result"], [("game_result", 1800, False, "kryds")])
+        for bad in ("pong", "", 3, None, ["hop"]):
+            with self.subTest(bad=bad):
+                self.assertEqual(self.refused("POST", "/api/pet/spil", {"score": 5, "spil": bad}), "Ugyldig værdi: spil")
+        self.assertEqual(self.refused("GET", "/api/pet/spil?spil=pong"), "Ugyldig værdi: spil")
         self.assertEqual(self.refused("POST", "/api/pet/spil", {"score": 5, "demo": "ja"}), "demo skal være sand/falsk")
 
     def test_without_the_apps_tally_the_bridge_is_asked(self) -> None:

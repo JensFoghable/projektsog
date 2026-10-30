@@ -94,8 +94,8 @@ class FakeProgress:
     def prank_won(self, hat: str, fra_pc: str, fra_navn: str) -> None:
         self.won.append((hat, fra_pc, fra_navn))
 
-    def office_record(self, pc: str, navn: str, score: int) -> bool:
-        self.records.append((pc, navn, score))
+    def office_record(self, pc: str, navn: str, score: int, game: str = "hop") -> bool:
+        self.records.append((pc, navn, score, game))
         return self.record_answer
 
 
@@ -199,6 +199,7 @@ class SchemaTests(unittest.TestCase):
             "vinder": {"vid": 3, "status": "slut", "vinder_pc": "GRAFIK-PC", "vinder_navn": "Gurli",
                        "tid": now + 600, "slut": now + 590},
             "rekord": {"score": 2310},
+            "spilrekord": {"spil": "kryds", "score": 2310},
             "aar": {"aar": 2026, "timer": 1234, "side": "color", "projekter": 23, "durum": 57, "kort": 38,
                     "leveringer": 19, "trofaeer": 21},
         }
@@ -266,6 +267,10 @@ class SchemaTests(unittest.TestCase):
             "vinder_navn long": packet("vinder", {**good["vinder"], "vinder_navn": "K" * 21}),
             "score negative": packet("rekord", {"score": -5}),
             "score huge": packet("rekord", {"score": 10 ** 9}),
+            "spil unknown": packet("spilrekord", {"spil": "pong", "score": 500}),
+            "spil hop": packet("spilrekord", {"spil": "hop", "score": 500}),     # Hop's go as rekord
+            "spilrekord without spil": packet("spilrekord", {"score": 500}),
+            "spil a list": packet("spilrekord", {"spil": ["skyd"], "score": 500}),
             "aar old": packet("aar", {**good["aar"], "aar": 2025}),
             "aar hours": packet("aar", {**good["aar"], "timer": 10 ** 7}),
             "side upper": packet("aar", {**good["aar"], "side": "Color"}),
@@ -487,7 +492,12 @@ class ReceiveTests(unittest.TestCase):
         h = Harness(self)
         self.assertEqual(h.receive(packet("rekord", {"score": 2310})),
                          {"tekst": "🎮 Bobby (STUDIE-PC) har ny kontorrekord i render-spillet: 2310!"})
-        self.assertEqual(h.progress.records, [("STUDIE-PC", "Bobby", 2310)])
+        self.assertEqual(h.progress.records, [("STUDIE-PC", "Bobby", 2310, "hop")])
+        self.assertEqual(len(h.published("say")), 1)
+        # the render game's other games come as spilrekord
+        self.assertEqual(h.receive(packet("spilrekord", {"spil": "skyd", "score": 1400}, seq=7)),
+                         {"tekst": "🎮 Bobby (STUDIE-PC) har ny kontorrekord i Fejljagt: 1400!"})
+        self.assertEqual(h.progress.records[-1], ("STUDIE-PC", "Bobby", 1400, "skyd"))
         self.assertEqual(len(h.published("say")), 1)
         h.progress.record_answer = False                         # not the office's best
         self.assertIsNone(h.receive(grafik("rekord", {"score": 900}), GRAFIK))
@@ -495,7 +505,8 @@ class ReceiveTests(unittest.TestCase):
         h.cfg.update({"widget_renderspil": False})
         h.clock.t += 60
         self.assertIsNone(h.receive(packet("rekord", {"score": 5000}, seq=8)))
-        self.assertEqual(len(h.progress.records), 2)
+        self.assertIsNone(h.receive(packet("spilrekord", {"spil": "kryds", "score": 5000}, seq=9)))
+        self.assertEqual(len(h.progress.records), 3)
 
     def test_a_colleagues_year(self) -> None:
         h = Harness(self)
@@ -675,6 +686,10 @@ class SendTests(unittest.TestCase):
         self.assertEqual(h.k.record(2310), 1)
         (msg, _address), _broadcast = h.flush()
         self.assertEqual((msg["type"], msg["x"]), ("rekord", {"score": 2310}))
+        self.assertEqual(h.k.record(1500, "skyd"), 1)
+        (msg, _address), _broadcast = h.flush()
+        self.assertEqual((msg["type"], msg["x"]), ("spilrekord", {"spil": "skyd", "score": 1500}))
+        self.assertEqual(h.k.record(1500, "pong"), 0)
         summary = {"aar": 2026, "timer": 1234, "side": "color", "projekter": 23, "durum": 57, "kort": 38,
                    "leveringer": 19, "trofaeer": 21}
         self.assertEqual(h.k.share_year(summary), {"ok": True})

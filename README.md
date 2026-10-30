@@ -311,10 +311,17 @@ nogensinde dine filer.
   et af de hurtige forslag). Den dukker op hos kollegaen med en kuvert, og beskeden kan besvares.
 - **Render-væddemål:** Starter en lang render (over 3 minutter), kan hele kontoret gætte, hvornår den
   er færdig – Klippe kårer vinderen, når renderen er klar.
-- **Render-spillet:** Mens Resolve renderer, står der **🎮 Spil** ved renderlinjen: hjælp Klippe med
-  at hoppe over klippefejl (Media Offline, sorte frames, glitches) og samle filmruder. Klik, mellemrum
-  eller ↑ for at hoppe – to gange for dobbelthop. Spillet slutter, når renderen er færdig, og
-  kontorets rekord deles med de andre Klipper.
+- **Render-spillet:** Mens Resolve renderer, står der **🎮 Spil** ved renderlinjen. Vælg mellem tre spil:
+  - **🏃 Hop:** hjælp Klippe med at hoppe over klippefejl (Media Offline, sorte frames, glitches) og
+    samle filmruder. Klik, mellemrum eller ↑ for at hoppe – to gange for dobbelthop.
+  - **🎯 Fejljagt:** en flok klippefejl driver ned mod tidslinjen og drysser støj. ← → (eller musen)
+    flytter Klippe, mellemrum (eller klik) klapper dem ned. Media Offline skal have to klap.
+  - **🚦 Over tidslinjen:** hop fra Media Pool over lyd- og videosporene til Deliver uden at blive
+    ramt af et klip. Piletaster (eller klik, hvor Klippe skal hen). Rammer et klip, ryger Klippe
+    tilbage til markørerne eller Media Pool.
+
+  Fejljagt og Over tidslinjen giver tre takes. Hvert spil har sin egen rekord, og kontorets rekorder
+  deles med de andre Klipper. Spillet slutter, når renderen er færdig.
 - **Påskeæg i søgefeltet:** Prøv at skrive *kaffe*, *fredag*, *deadline*, *durum*, *booster*,
   *festkat*, *hjælp*, *fyraften*, *sne* – eller Klippes navn. Søgningen virker som altid.
 - **I dag for N år siden:** Når søgefeltet er tomt, står der af og til et minde øverst – det projekt,
@@ -581,7 +588,7 @@ Projektsøg lytter kun på `127.0.0.1` (port 47811 eller den næste ledige) – 
 fra andre computere. Den eneste undtagelse er **Kontor-Klipper**: Klippe sender og modtager små
 hilsner (UDP port 47850) med de andre pc'er på kontoret – navn, udseende og trofæ, frokostklokken,
 Klippe-post (kun til den kollega, du sender til), slik eller ballade, render-væddemål (navnet på
-den fil, der renderes – det kan rumme kundens navn – og gættene), rekorden i render-spillet og
+den fil, der renderes – det kan rumme kundens navn – og gættene), rekorderne i render-spillet og
 tallene fra *Klippet* (kun tal, aldrig projektnavne) – aldrig selve filerne eller kommandoer.
 Første gang spørger Windows måske, om Projektsøg må bruge netværket; sig ja (eller slå
 **Kontor-Klipper** fra, så lyttes der ikke).

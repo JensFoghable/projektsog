@@ -609,6 +609,49 @@ class RenderGameTests(FunCase):
         self.wait("document.querySelector('#spil').hidden", timeout=7)
         self.assertFalse(self.shown("#spil-knap"))
 
+    def test_three_games_to_pick_from(self) -> None:
+        self.open_widget()
+        self.publish("render", self.RENDER)
+        self.wait(SHOWN.format(sel="#spil-knap"))
+        self.page.click("#spil-knap")
+        self.wait(SHOWN.format(sel="#spil-valg"))
+        self.assertEqual(self.js("document.querySelector('#spil-valg [data-spil=hop]').getAttribute('aria-pressed')"), "true")
+        # Fejljagt: arrows walk, Space claps; a klippefejl taken down gives points
+        self.page.click("#spil-valg [data-spil=skyd]")
+        self.wait("document.querySelector('#spil').dataset.valgt === 'skyd'")
+        self.assertIn("klippefejlene ned", self.text("#spil-besked"))
+        self.assertEqual(self.wait_request("/api/pet/spil", method="GET", count=2)["query"].get("spil"), "skyd")
+        self.page.click("#spil-start")
+        self.wait("window.__klippe.state.game?.running === true && !" + SHOWN.format(sel="#spil-valg"))
+        x = self.js("window.__klippe.state.game.g.x")
+        self.js("window.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowLeft'}))")
+        self.wait(f"window.__klippe.state.game.g.x < {x}")
+        self.js("window.dispatchEvent(new KeyboardEvent('keyup', {key: 'ArrowLeft'}))")
+        self.wait("window.__klippe.state.game.g.dir === 0")
+        self.js("window.dispatchEvent(new KeyboardEvent('keydown', {key: ' ', code: 'Space'}))")
+        self.wait("window.__klippe.state.game.g.fire === true && window.__klippe.state.game.g.cool > 0")
+        self.js("(() => { const g = window.__klippe.state.game.g; g.takes = 1; g.safe = 0;"
+                " const b = {x: g.x - 1, y: g.floor - 16, w: 3, h: 6, v: 0}; g.noise.push(b); g.score = 340; })()")
+        self.wait("window.__klippe.state.game.running === false")
+        body = self.wait_request("/api/pet/spil", method="POST")["body"]
+        self.assertEqual((body["spil"], body["demo"]), ("skyd", False))
+        self.wait(f"document.querySelector('#spil-besked')?.textContent === '🎉 Ny rekord: {body['score']} point!'")
+        self.wait("document.querySelector('#spil-bedste')?.textContent === 'Din bedste: ' + "
+                  + str(body["score"]))
+        # Over tidslinjen: ↑ hops a track up; the picker remembers the game
+        self.wait(SHOWN.format(sel="#spil-valg"))
+        self.page.click("#spil-valg [data-spil=kryds]")
+        self.assertEqual(self.text("#spil-bedste"), "Din bedste: 0")
+        self.page.click("#spil-start")
+        self.wait("window.__klippe.state.game?.running === true")
+        self.js("window.__klippe.state.game.g.lanes.forEach((l) => { l.clips = []; l.dir = 1; })")
+        self.page.key("ArrowUp")
+        self.wait("window.__klippe.state.game.g.row === 1 && window.__klippe.state.game.g.score === 10")
+        self.page.click("#spil-luk")
+        self.wait("document.querySelector('#spil').hidden")
+        self.page.click("#spil-knap")
+        self.wait("window.__klippe.state.game?.kind === 'kryds'")
+
     def test_a_demo_round(self) -> None:
         self.open_widget()
         self.open_proev()

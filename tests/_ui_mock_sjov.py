@@ -3,8 +3,8 @@
 Canned state for the new routes, kept in memory and steered by tests:
 
 * ``POST /api/_mock/set {"key", "data"}`` replaces one piece of state – ``saeson`` (GET
-  /api/pet/saeson, SSE ``pet_saeson``), ``jul`` (GET /api/pet/jul, SSE ``pet_jul``), ``spil`` (GET
-  /api/pet/spil), ``rod`` (GET /api/rod, SSE ``rod``), ``vaeddemaal`` (the list of GET
+  /api/pet/saeson, SSE ``pet_saeson``), ``jul`` (GET /api/pet/jul, SSE ``pet_jul``), ``spil`` (per game: GET
+  /api/pet/spil?spil=…), ``rod`` (GET /api/rod, SSE ``rod``), ``vaeddemaal`` (the list of GET
   /api/kontor/vaeddemaal), ``minder`` (GET /api/minder) or ``aar`` (GET /api/aar) – and publishes
   the matching event where there is one.
 * ``POST /api/_mock/publish`` of ``pet_saeson``, ``pet_jul``, ``rod`` or ``vaeddemaal`` updates the
@@ -26,6 +26,7 @@ EGGS = ("kaffe", "fredag", "deadline", "klippe", "durum", "booster", "festkat", 
 KOSTUMER = ("vampyr", "spoegelse", "skelet", "heks")
 DEMO_PC = "DEMO-PC"
 
+GAMES = ("hop", "skyd", "kryds")   # the render game's games
 GET_ROUTES = ("/api/pet/saeson", "/api/pet/jul", "/api/pet/spil", "/api/rod", "/api/kontor/vaeddemaal",
               "/api/minder", "/api/aar")
 POST_ROUTES = ("/api/pet/jul", "/api/pet/jul/demo", "/api/pet/spil", "/api/sne/demo", "/api/rod/aabn",
@@ -87,7 +88,7 @@ class MockSjov:
         self.state: dict[str, Any] = {
             "saeson": {"saeson": None, "kostume": None, "kostume_aar": "vampyr", "ballade": None, "bytte": None},
             "jul": _jul_idle(today),
-            "spil": {"bedste": 0, "spillet": 0, "kontor": []},
+            "spil": {game: {"spil": game, "bedste": 0, "spillet": 0, "kontor": []} for game in GAMES},
             "rod": dict(ROD_IDLE),
             "vaeddemaal": [],
             "minder": {"dato": today.isoformat(), "minder": []},
@@ -149,7 +150,10 @@ class MockSjov:
             if route == "/api/pet/jul":
                 return self._copy(self.state["jul"])
             if route == "/api/pet/spil":
-                return self._copy(self.state["spil"])
+                game = query.get("spil", "hop")
+                if game not in GAMES:
+                    raise ValueError("Ugyldig værdi: spil")
+                return self._copy(self.state["spil"][game])
             if route == "/api/rod":
                 return self._copy(self.state["rod"])
             if route == "/api/kontor/vaeddemaal":
@@ -204,11 +208,13 @@ class MockSjov:
         return {"ok": True, "gave": gift, "demo": True}
 
     def _post_pet_spil(self, body: dict[str, Any]) -> Any:
-        score, demo = body.get("score"), bool(body.get("demo"))
+        score, demo, game = body.get("score"), bool(body.get("demo")), body.get("spil", "hop")
         if type(score) is not int or not 0 <= score <= 10_000_000:
             raise ValueError("Ugyldig værdi: score")
+        if game not in GAMES:
+            raise ValueError("Ugyldig værdi: spil")
         with self.backend.lock:
-            spil = self.state["spil"]
+            spil = self.state["spil"][game]
             record = not demo and score > spil["bedste"] and score >= 100
             if not demo:
                 spil["spillet"] += 1

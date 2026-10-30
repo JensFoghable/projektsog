@@ -246,6 +246,7 @@ def calendar_order(secret: str, year: int) -> list[Gift]:
 SCORE_MAX = 10_000_000         # the render game's scores (SPEC §23.10)
 RECORD_MIN = 100               # a new best below this is not worth telling the office
 OFFICE_RECORDS_MAX = 32        # colleagues' records kept
+GAMES = ("hop", "skyd", "kryds")   # the render game's games: Hop, Fejljagt, Over tidslinjen
 STAGE_HOURS = (("legend", 300.0), ("pro", 100.0), ("junior", 25.0), ("baby", 5.0))   # as the widget grows it
 _PC_NAME = re.compile(r"[A-Z0-9-]{1,15}")
 _NOT_PC = re.compile(r"[^A-Z0-9-]")
@@ -264,6 +265,13 @@ def _short_text(value: Any, limit: int) -> str:
     if not isinstance(value, str):
         return ""
     return "".join(c for c in value if c.isprintable()).strip()[:limit].strip()
+
+
+def _clean_records(table: Any) -> dict[str, Any]:
+    """The office's records of a game from pet.json – only rows with an int score."""
+    if not isinstance(table, dict):
+        return {}
+    return {pc: row for pc, row in table.items() if isinstance(row, dict) and type(row.get("score")) is int}
 
 
 def _own_pc() -> str:
@@ -750,8 +758,15 @@ class PetProgress:
                 spil[key] = 0
         if not isinstance(spil.get("kontor"), dict):
             spil["kontor"] = {}
-        spil["kontor"] = {pc: row for pc, row in spil["kontor"].items()
-                          if isinstance(row, dict) and type(row.get("score")) is int}
+        spil["kontor"] = _clean_records(spil["kontor"])
+        # The other games (not Hop) keep their own best and the office's (SPEC §23.10).
+        andre = spil.get("andre") if isinstance(spil.get("andre"), dict) else {}
+        spil["andre"] = {}
+        for game in GAMES[1:]:
+            own = andre.get(game) if isinstance(andre.get(game), dict) else {}
+            best = own.get("bedste")
+            spil["andre"][game] = {"bedste": best if type(best) is int and best >= 0 else 0,
+                                   "bedste_ved": own.get("bedste_ved"), "kontor": _clean_records(own.get("kontor"))}
         mad = data["mad"]
         if not isinstance(mad.get("spist"), dict):
             mad["spist"] = {}
@@ -1060,65 +1075,79 @@ class PetProgress:
             log.debug("no snow on the monitor", exc_info=True)
 
     # -- the render game (SPEC §23.10) ------------------------------------------------------------
-    def game_result(self, score: Any, demo: Any = False) -> dict[str, Any]:
-        """``POST /api/pet/spil {score, demo}``: a round of the render game. A demo round keeps
-        nothing. ``ny_rekord``: beats this PC's best (≥ 100); ``kontor_rekord``: and every
-        colleague's record too."""
+    def _game_records(self, game: str) -> dict[str, Any]:
+        """The records of one game (under the lock): Hop's live at the top of ``spil``."""
+        spil = self._data["spil"]
+        return spil if game == "hop" else spil["andre"][game]
+
+    def game_result(self, score: Any, demo: Any = False, game: Any = "hop") -> dict[str, Any]:
+        """``POST /api/pet/spil {score, demo, spil}``: a round of one of the render game's games.
+        A demo round keeps nothing. ``ny_rekord``: beats this PC's best in that game (≥ 100);
+        ``kontor_rekord``: and every colleague's record too. Only Hop counts for the trophies
+        and the year."""
         if type(score) is not int or not 0 <= score <= SCORE_MAX:
             raise ValueError("Ugyldig værdi: score")
+        if game not in GAMES:
+            raise ValueError("Ugyldig værdi: spil")
         if demo:
-            state = self.game_state()
+            state = self.game_state(game)
             return {"ok": True, "bedste": state["bedste"], "ny_rekord": False, "kontor_rekord": False, "spil": state}
         now = self._clock()
         with self._lock:
             spil = self._data["spil"]
-            best = spil["bedste"]
+            records = self._game_records(game)
+            best = records["bedste"]
             spil["spillet"] += 1
             self._bump("spil")
-            per = self._data["aar"].setdefault(str(self._today().year), {})
-            per["spil_bedste"] = max(int(per.get("spil_bedste") or 0), score)
+            if game == "hop":
+                per = self._data["aar"].setdefault(str(self._today().year), {})
+                per["spil_bedste"] = max(int(per.get("spil_bedste") or 0), score)
             if score > best:
-                spil["bedste"], spil["bedste_ved"] = score, now
+                records["bedste"], records["bedste_ved"] = score, now
             record = score > best and score >= RECORD_MIN
-            others = max((row["score"] for row in spil["kontor"].values()), default=0)
+            others = max((row["score"] for row in records["kontor"].values()), default=0)
             self._save()
         self._wake.set()                            # "Render-racer", "Fejlfri"
-        state = self.game_state()
+        state = self.game_state(game)
         return {"ok": True, "bedste": state["bedste"], "ny_rekord": record,
                 "kontor_rekord": record and score > others, "spil": state}
 
-    def office_record(self, pc: Any, navn: Any, score: Any) -> bool:
-        """A colleague's Klippe has a new record (``rekord`` from the office): kept as that PC's
-        best. True when it beats everyone – this PC included."""
+    def office_record(self, pc: Any, navn: Any, score: Any, game: Any = "hop") -> bool:
+        """A colleague's Klippe has a new record in a game (``rekord``/``spilrekord`` from the
+        office): kept as that PC's best. True when it beats everyone – this PC included."""
         if not isinstance(pc, str) or not _PC_NAME.fullmatch(pc) or type(score) is not int \
-                or not 0 < score <= SCORE_MAX:
+                or not 0 < score <= SCORE_MAX or game not in GAMES:
             return False
         now = self._clock()
         with self._lock:
-            spil = self._data["spil"]
-            table = spil["kontor"]
+            records = self._game_records(game)
+            table = records["kontor"]
             old = table.get(pc)
             if old is not None and old["score"] >= score:
                 return False
-            best_other = max([row["score"] for key, row in table.items() if key != pc] + [spil["bedste"]])
+            best_other = max([row["score"] for key, row in table.items() if key != pc] + [records["bedste"]])
             table[pc] = {"navn": _short_text(navn, 20) or "Klippe", "score": score, "ved": now}
             while len(table) > OFFICE_RECORDS_MAX:
                 del table[min(table, key=lambda key: (table[key]["score"], table[key].get("ved") or 0))]
             self._save()
         return score > best_other
 
-    def game_state(self) -> dict[str, Any]:
-        """``GET /api/pet/spil``: this PC's best, rounds played and the office's best (≤ 10)."""
+    def game_state(self, game: Any = "hop") -> dict[str, Any]:
+        """``GET /api/pet/spil?spil=…``: this PC's best in a game, rounds played (all games) and
+        the office's best (≤ 10)."""
+        if game not in GAMES:
+            raise ValueError("Ugyldig værdi: spil")
         with self._lock:
-            spil = self._data["spil"]
+            records = self._game_records(game)
             rows = [{"pc": pc, "navn": row.get("navn") or "Klippe", "score": row["score"], "ved": row.get("ved"),
-                     "egen": False} for pc, row in spil["kontor"].items()]
-            best, played, when = spil["bedste"], spil["spillet"], spil.get("bedste_ved")
+                     "egen": False} for pc, row in records["kontor"].items()]
+            best, when = records["bedste"], records.get("bedste_ved")
+            played = self._data["spil"]["spillet"]
         if best > 0:
             rows.append({"pc": _own_pc(), "navn": _short_text(self.cfg.get("widget_pet_name", "Klippe"), 20) or "Klippe",
                          "score": best, "ved": when, "egen": True})
         rows.sort(key=lambda row: (-row["score"], row["ved"] or 0))
-        return {"bedste": best, "spillet": played, "kontor": rows[:10]}
+        return {"spil": game, "bedste": best, "spillet": played, "kontor": rows[:10]}
 
     # -- Klippet <år> (SPEC §23.11) ------------------------------------------------------------------
     def year_review(self, year: int) -> dict[str, Any]:

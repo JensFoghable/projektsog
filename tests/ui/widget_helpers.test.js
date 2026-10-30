@@ -529,3 +529,103 @@ test('the render game: jumps, klippefejl, film frames, jump cuts and the score',
   assert.equal(w.gameHits({ x: 0, w: 10, b: 0, h: 10 }, { x: 9, w: 5, b: 9, h: 5 }), true);
   assert.equal(w.gameHits({ x: 0, w: 10, b: 0, h: 10 }, { x: 10, w: 5, b: 0, h: 5 }), false);
 });
+
+test('Fejljagt: the flock comes in, claps take klippefejl down, noise costs a take, a cleared flock brings the next', () => {
+  const g = w.skydNew(4, 210);
+  assert.equal(g.wave, 1);
+  assert.equal(g.rows, 2);
+  assert.ok(g.fejl.every((f) => f.y < w.SKYD.top), 'it comes in from above');
+  assert.equal(w.skydFire(g), true);
+  assert.equal(w.skydFire(g), false);                                   // the clapper must get ready again
+  for (let i = 0; i < 120; i += 1) w.skydStep(g, 1 / 60);
+  assert.ok(g.fy >= 0, 'the flock is in');
+  // a clap right under a klippefejl takes it down: points by kind
+  const target = g.fejl.find((f) => f.kind === 'sort');
+  g.shots = [{ x: target.x + 4, y: target.y + target.h + 1, w: 2, h: 6 }];
+  g.next = 1e9;
+  const before = g.score;
+  let events = w.skydStep(g, 1 / 60);
+  assert.ok(events.includes('kill') && target.hp === 0 && g.score === before + w.SKYD_POINTS.sort);
+  // Media Offline takes two claps
+  const off = w.skydNew(1, 210);
+  off.wave = 2;
+  w.skydWave(off);
+  const tough = off.fejl.find((f) => f.kind === 'offline');
+  assert.equal(tough.hp, 2);
+  // noise on Klippe: a take is gone, and Klippe blinks a moment (no second hit)
+  const n = w.skydNew(2, 210);
+  n.next = 1e9;
+  const me = w.skydKlippe(n);
+  n.noise.push({ x: me.x + 2, y: me.y, w: 3, h: 6, v: 0 });
+  events = w.skydStep(n, 1 / 60);
+  assert.ok(events.includes('hurt') && n.takes === 2 && n.safe > 0);
+  n.noise.push({ x: me.x + 2, y: me.y, w: 3, h: 6, v: 0 });
+  assert.ok(!w.skydStep(n, 1 / 60).includes('hurt'));
+  n.safe = 0;
+  n.takes = 1;
+  assert.ok(w.skydStep(n, 1 / 60).includes('hurt') && n.over && n.why === 'stoej');
+  assert.deepEqual(w.skydStep(n, 1 / 60), []);                          // nothing moves after the end
+  // every klippefejl down: a bonus, a breath, then the next flock
+  const c = w.skydNew(3, 210);
+  for (const f of c.fejl) f.hp = 0;
+  events = w.skydStep(c, 1 / 60);
+  assert.ok(events.includes('wave') && c.score === 50);
+  for (let i = 0; i < 90; i += 1) w.skydStep(c, 1 / 60);
+  assert.equal(c.wave, 2);
+  assert.ok(c.fejl.every((f) => f.hp > 0));
+  // a flock that reaches Klippe's height ends the round
+  const d = w.skydNew(3, 210);
+  d.fy = 200;
+  w.skydStep(d, 1 / 60);
+  assert.ok(d.over && d.why === 'nede');
+  // Klippe walks to where the mouse points, and stays on the course
+  const m = w.skydNew(1, 210);
+  m.aim = 1000;
+  for (let i = 0; i < 300; i += 1) w.skydStep(m, 1 / 60);
+  assert.ok(m.x <= 210 - w.SKYD.kw / 2 && m.x > 190);
+});
+
+test('Over tidslinjen: hops, clips that knock Klippe back, the markers, Deliver and the takes', () => {
+  const g = w.krydsNew(6, 210);
+  assert.deepEqual(g.lanes.map((l) => l.name), ['A1', 'A2', 'A3', 'V1', 'V2', 'V3']);
+  assert.equal(w.krydsHop(g, 'ned'), false);                              // nowhere below the Media Pool
+  for (const lane of g.lanes) lane.clips = [];                            // an empty timeline …
+  const clear = (k) => { for (const lane of k.lanes) lane.clips = lane.clips.filter((c) => c.x > 1e8); };
+  assert.equal(w.krydsHop(g, 'op'), true);
+  assert.equal(w.krydsHop(g, 'op'), false);                               // not while in the air
+  let events = [];
+  for (let i = 0; i < 10; i += 1) { clear(g); events = events.concat(w.krydsStep(g, 1 / 60)); }
+  assert.ok(events.includes('step') && g.row === 1 && g.score === 10);
+  // all the way up to Deliver: a bonus, the next level, back to the Media Pool
+  events = [];
+  for (let row = 2; row <= w.KRYDS.goal; row += 1) {
+    w.krydsHop(g, 'op');
+    for (let i = 0; i < 10; i += 1) { clear(g); events = events.concat(w.krydsStep(g, 1 / 60)); }
+  }
+  assert.ok(events.includes('leveret') && g.level === 2 && g.row === 0 && g.delivered === 1);
+  assert.equal(g.score, 80 + 50 + 20);
+  // a clip on Klippe's track (above the markers): a take is gone, back to the markers
+  const h = w.krydsNew(2, 210);
+  h.row = 6;
+  h.best = 6;
+  const lane = h.lanes.find((l) => l.row === 6);
+  lane.clips = [{ x: h.x - 20, w: 40 }];
+  events = w.krydsStep(h, 1 / 60);
+  assert.ok(events.includes('hurt') && h.takes === 2 && h.row === w.KRYDS.markers);
+  // below the markers: back to the Media Pool; the third take ends the round
+  h.safe = 0;
+  h.row = 2;
+  h.takes = 1;
+  h.lanes.find((l) => l.row === 2).clips = [{ x: h.x - 20, w: 40 }];
+  assert.ok(w.krydsStep(h, 1 / 60).includes('hurt') && h.over && h.why === 'klip');
+  // the tracks never run dry, and they go faster for each delivery
+  const s = w.krydsNew(9, 210);
+  for (let i = 0; i < 3000; i += 1) {
+    w.krydsStep(s, 1 / 30);
+    s.row = 0;
+  }
+  assert.ok(s.lanes.every((l) => l.clips.some((c) => c.x < 210 && c.x + c.w > 0)));
+  assert.ok(s.lanes.every((l) => l.clips.length < 20));
+  assert.ok(w.krydsHop(s, 'venstre') && s.x === 105 - w.KRYDS.stepX);
+  assert.deepEqual(w.GAME_IDS, ['hop', 'skyd', 'kryds']);
+});

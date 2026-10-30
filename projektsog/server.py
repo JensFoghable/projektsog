@@ -69,6 +69,7 @@ EASTER_EGGS = frozenset({"kaffe", "fredag", "deadline", "klippe", "durum", "boos
 EASTER_EGG_GAP_S = 3.0              # the same egg within this long hatches once
 RENDER_GAME_S = 300.0               # a score counts while a render was active this recently
 SCORE_MAX = 10_000_000
+GAMES = ("hop", "skyd", "kryds")   # the render game's games (achievements.GAMES)
 FIRST_YEAR = 2026                   # Klippet starts with the year Klippe arrived
 SNOW_DEMO_S = 20
 
@@ -623,20 +624,21 @@ class Server:
         return self._wardrobe().calendar_demo(_body_door(req.body))
 
     def _pet_game(self, req: _Request) -> Any:
-        return self._wardrobe().game_state()
+        return self._wardrobe().game_state(_game_id(req.query.get("spil", "hop")))
 
     def _pet_game_score(self, req: _Request) -> Any:
         score = req.body.get("score")
         if type(score) is not int or not 0 <= score <= SCORE_MAX:
             raise ValueError("Ugyldig værdi: score")
         demo = _body_bool(req.body, "demo", False)
+        game = _game_id(req.body.get("spil", "hop"))
         progress = self._wardrobe()
         if not demo and not self._rendered_lately():
             raise ValueError("Render-spillet kan kun spilles, mens Resolve renderer")
-        result = progress.game_result(score, demo)
+        result = progress.game_result(score, demo, game)
         if not demo and isinstance(result, dict) and result.get("ny_rekord") and self.kontor is not None:
             try:
-                self.kontor.record(score)            # the office hears a new best
+                self.kontor.record(score, game)      # the office hears a new best
             except Exception:
                 log.exception("the render game's record could not be told to the office")
         return result
@@ -1188,6 +1190,13 @@ def _body_str(body: dict[str, Any], name: str) -> str:
     value = body.get(name)
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} mangler")
+    return value
+
+
+def _game_id(value: Any) -> str:
+    """One of the render game's games (SPEC §23.10): hop, skyd or kryds."""
+    if value not in GAMES:
+        raise ValueError("Ugyldig værdi: spil")
     return value
 
 

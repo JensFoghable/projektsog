@@ -10,7 +10,7 @@ Every Projektsøg with Klippe switched on listens on UDP port ``PORT`` and
   post to one colleague (``post``), goes trick-or-treating in Halloween week (``slik`` – answered
   with a Booster, ``godbid``, or a prank, ``ballade``), lets the office bet on when a long render
   is done (``vaeddemaal``, ``gaet``, ``vinder``), tells a new record in the render game
-  (``rekord``) and shares its year (``aar``).
+  (``rekord`` for Hop, ``spilrekord`` for its other games) and shares its year (``aar``).
 
 A visit that comes in becomes SSE ``besoeg``: the guest Klippe walks into the widget. A packet is
 small JSON with exactly the keys of the schema, every value checked; it only ever comes from a
@@ -51,7 +51,7 @@ APP_TAG = "projektsog-klippe"
 VERSION = 1
 MAX_PACKET = 1024                 # bytes of UTF-8 JSON
 TYPES = ("hej", "besoeg", "fest", "slik", "godbid", "ballade", "frokost", "post", "vaeddemaal", "gaet",
-         "vinder", "rekord", "aar")
+         "vinder", "rekord", "spilrekord", "aar")
 STAGES = ("egg", "baby", "junior", "pro", "legend")
 STAGE_HOURS = (("legend", 300.0), ("pro", 100.0), ("junior", 25.0), ("baby", 5.0))   # as the widget grows it
 OUTFITS = ("none", "color", "fusion", "audio", "deliver")
@@ -72,6 +72,7 @@ X_KEYS: dict[str, tuple[str, ...]] = {
     "gaet": ("til", "vid", "tid"),
     "vinder": ("vid", "status", "vinder_pc", "vinder_navn", "tid", "slut"),
     "rekord": ("score",),
+    "spilrekord": ("spil", "score"),
     "aar": ("aar", "timer", "side", "projekter", "durum", "kort", "leveringer", "trofaeer"),
 }
 X_NULLABLE: dict[str, frozenset[str]] = {
@@ -84,6 +85,7 @@ POST_MAX = 120                    # characters of a post
 FIL_MAX = 40                      # characters of a render's name in a bet
 VID_MAX = 2 ** 31
 SCORE_MAX = 10_000_000
+GAME_NAMES = {"hop": "render-spillet", "skyd": "Fejljagt", "kryds": "Over tidslinjen"}   # achievements.GAMES
 YEAR_NUMBER_MAX = 1_000_000
 YEAR_FIRST, YEAR_LAST = 2026, 2100
 EPOCH_SLACK_S = 86400.0           # a time in a packet lies within a day of our clock
@@ -93,7 +95,8 @@ BUCKET_NAMES = {"edit": "Edit", "cut": "Cut", "color": "Color", "fusion": "Fusio
                 "ai": "AI-video og -billeder"}
 # Per sender address and type: at most one packet this often (seconds).
 TYPE_GAPS = {"slik": 600.0, "godbid": 5.0, "ballade": 5.0, "frokost": 300.0, "post": 15.0, "vaeddemaal": 30.0,
-             "gaet": 2.0, "vinder": 10.0, "rekord": 30.0, "aar": 600.0}
+             "gaet": 2.0, "vinder": 10.0, "rekord": 30.0, "spilrekord": 30.0,
+             "aar": 600.0}
 VISIT_TYPES = frozenset({"besoeg", "fest", "slik", "aar"})    # these share the visits' budget
 POSTS_PER_HOUR = 30               # posts in all
 OUTBOX_MAX = 64                   # packets waiting for the office's thread
@@ -321,6 +324,10 @@ def _x_value(key: str, value: Any, now: float) -> Any:
         return value
     if key == "score":
         return _int_in(value, 0, SCORE_MAX)
+    if key == "spil":
+        if not isinstance(value, str) or value not in GAME_NAMES or value == "hop":   # Hop's go as ``rekord``
+            raise ValueError(key)
+        return value
     if key == "aar":
         return _int_in(value, YEAR_FIRST, YEAR_LAST)
     if key in YEAR_NUMBERS:
@@ -1012,13 +1019,17 @@ class Kontor:
         self.bus.publish("vaeddemaal", view)
         return {"ok": True, "vaeddemaal": view}
 
-    def record(self, score: Any) -> int:
-        """A new best in the render game (``POST /api/pet/spil``): the office hears it."""
+    def record(self, score: Any, game: Any = "hop") -> int:
+        """A new best in one of the render game's games (``POST /api/pet/spil``): the office hears
+        it – Hop's as ``rekord`` (old versions know that one), the others' as ``spilrekord``."""
         if type(score) is not int or score < OFFICE_RECORD_MIN or self._sock is None \
-                or not self.cfg.get("widget_renderspil", True):
+                or not self.cfg.get("widget_renderspil", True) or game not in GAME_NAMES:
             return 0
         try:
-            self._queue_packet("rekord", {"score": min(score, SCORE_MAX)})
+            if game == "hop":
+                self._queue_packet("rekord", {"score": min(score, SCORE_MAX)})
+            else:
+                self._queue_packet("spilrekord", {"spil": game, "score": min(score, SCORE_MAX)})
         except ValueError:
             return 0
         return 1
@@ -1228,7 +1239,8 @@ class Kontor:
         answers to our own trick or treat are always taken."""
         setting = {"slik": "widget_saeson", "frokost": "widget_frokost", "post": "widget_post",
                    "vaeddemaal": "widget_vaeddemaal", "gaet": "widget_vaeddemaal", "vinder": "widget_vaeddemaal",
-                   "rekord": "widget_renderspil", "aar": "widget_aarsrapport"}.get(kind)
+                   "rekord": "widget_renderspil", "spilrekord": "widget_renderspil",
+                   "aar": "widget_aarsrapport"}.get(kind)
         return setting is None or bool(self.cfg.get(setting, True))
 
     @staticmethod
@@ -1362,10 +1374,16 @@ class Kontor:
         return view
 
     def _got_rekord(self, msg: dict[str, Any], ip: str) -> dict[str, Any] | None:
+        return self._office_record(msg, "hop")
+
+    def _got_spilrekord(self, msg: dict[str, Any], ip: str) -> dict[str, Any] | None:
+        return self._office_record(msg, msg["x"]["spil"])
+
+    def _office_record(self, msg: dict[str, Any], game: str) -> dict[str, Any] | None:
         score = msg["x"]["score"]
-        if self._progress_call("office_record", msg["pc"], msg["navn"], score) is not True:
+        if self._progress_call("office_record", msg["pc"], msg["navn"], score, game) is not True:
             return None
-        event = {"tekst": f"🎮 {msg['navn']} ({msg['pc']}) har ny kontorrekord i render-spillet: {score}!"}
+        event = {"tekst": f"🎮 {msg['navn']} ({msg['pc']}) har ny kontorrekord i {GAME_NAMES[game]}: {score}!"}
         self.bus.publish("say", event)
         return event
 

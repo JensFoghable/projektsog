@@ -1759,12 +1759,15 @@ et klokkeslæt mellem 12:00 og 23:59". The others are plain booleans (switches w
   `note("sne")`. Publishes `pet_jul` (= `calendar()`). `calendar_demo(nr)` → the gift that door
   holds this year, nothing kept (a sne gift: `on_snow(20)`).
 * **The render game's records** (pet.json `spil: {bedste, bedste_ved, spillet, kontor: {pc: {navn,
-  score, ved}}}`): `game_result(score, demo)` → `{ok, bedste, ny_rekord, kontor_rekord, spil}`
-  (score int 0–10 000 000; demo: nothing kept; else `spillet` + 1, `note("spil")`, best kept;
-  `ny_rekord` = beats the own best and ≥ 100; `kontor_rekord` = beats every colleague's record
-  too). `office_record(pc, navn, score) -> bool` keeps each colleague's best (≤ 32 PCs; True when
-  it beats everyone, this PC included). `game_state() -> {bedste, spillet, kontor: [{pc, navn,
-  score, ved, egen}]}` (best first, ≤ 10, this PC as `egen: true`).
+  score, ved}}, andre: {skyd|kryds: {bedste, bedste_ved, kontor}}}` – Hop's at the top, the other
+  games' under `andre`): `game_result(score, demo, game="hop")` → `{ok, bedste, ny_rekord,
+  kontor_rekord, spil}` (score int 0–10 000 000; game one of `hop`, `skyd`, `kryds`; demo: nothing
+  kept; else `spillet` (all games) + 1, `note("spil")`, that game's best kept; only Hop's best is the
+  year's `spil_bedste` and counts for the trophies; `ny_rekord` = beats the own best in that game
+  and ≥ 100; `kontor_rekord` = beats every colleague's record in it too). `office_record(pc, navn,
+  score, game="hop") -> bool` keeps each colleague's best per game (≤ 32 PCs each; True when it
+  beats everyone, this PC included). `game_state(game="hop") -> {spil, bedste, spillet, kontor:
+  [{pc, navn, score, ved, egen}]}` (best first, ≤ 10, this PC as `egen: true`).
 * `year_review(year) -> dict` gathers the data for `aar.year_review` (§23.11).
 
 ### 23.2 Natte-Klippe and the dance (`web/widget.*`)
@@ -1883,19 +1886,20 @@ et klokkeslæt mellem 12:00 og 23:59". The others are plain booleans (switches w
 ### 23.7 The office: lunch, post, trick or treat, bets, records, the year (`kontor.py`)
 
 * The protocol stays `v: 1`; `hej` is unchanged (old versions still see us). New `type`s:
-  `slik`, `godbid`, `ballade`, `frokost`, `post`, `vaeddemaal`, `gaet`, `vinder`, `rekord`, `aar`,
+  `slik`, `godbid`, `ballade`, `frokost`, `post`, `vaeddemaal`, `gaet`, `vinder`, `rekord`,
+  `spilrekord`, `aar`,
   with one more optional key `x` (an object with exactly the type's keys, every value checked):
   slik `{kostume}` · godbid `{til}` · ballade `{til, hat}` (a known hat id or null) · frokost (no
   `x`) · post `{til, tekst}` (1–120 printable) · vaeddemaal `{vid, fil, pct, start, lukker}` · gaet
   `{til, vid, tid}` · vinder `{vid, status: "slut"|"aflyst", vinder_pc, vinder_navn, tid, slut}`
-  (the last four may be null) · rekord `{score}` · aar `{aar, timer, side, projekter, durum, kort,
+  (the last four may be null) · rekord `{score}` (Hop) · spilrekord `{spil: "skyd"|"kryds", score}` · aar `{aar, timer, side, projekter, durum, kort,
   leveringer, trofaeer}`. `til` matches the `pc` pattern and must be this PC (else ignored); ints
   are real ints in range (`vid` 0–2³¹, `pct` 0–100, `score` 0–10⁷, the year's numbers 0–10⁶, `aar`
   2026–2100); epochs within a day of our clock; `fil` ≤ 40 printable; `side` a time bucket key.
   Old receivers reject the new types (unknown type) – harmless.
 * Rate limits per sender address and type: slik 10 min (and one per sender and day is shown),
   godbid/ballade 5 s, frokost 5 min, post 15 s (≤ 30 posts an hour in all), vaeddemaal 30 s,
-  gaet 2 s, vinder 10 s, rekord 30 s, aar 10 min. slik and aar also use the visits' budget (≤ 6 an
+  gaet 2 s, vinder 10 s, rekord 30 s, spilrekord 30 s, aar 10 min. slik and aar also use the visits' budget (≤ 6 an
   hour with besoeg and fest).
 * **Lunch**: `lunch()` (`POST /api/kontor/frokost`) – 400 "Slå Klippe til først", "Frokostklokken
   er slået fra", "Kontor-Klipperne er slået fra" (no socket), "Du har lige ringet – vent lidt 🔔"
@@ -1938,9 +1942,11 @@ et klokkeslæt mellem 12:00 og 23:59". The others are plain booleans (switches w
   mit_gaet, antal_gaet, resultat: {vinder_pc, vinder_navn, tid, slut, mig} | null}`.
   `bet_demo()` (`POST /api/kontor/vaeddemaal/demo`): a local made-up bet from DEMO-PC that closes
   after 60 s and ends after 90 s with the user's guess winning when there is one.
-* **Records**: after `POST /api/pet/spil` gives `ny_rekord`, `record(score)` broadcasts `rekord`.
-  Received → `progress.office_record(pc, navn, score)`; a new office record → SSE `say {tekst: "🎮
-  ‹navn› (‹PC›) har ny kontorrekord i render-spillet: 2310!"}`.
+* **Records**: after `POST /api/pet/spil` gives `ny_rekord`, `record(score, game)` broadcasts
+  `rekord` for Hop (old versions know it) and `spilrekord` for the others. Received →
+  `progress.office_record(pc, navn, score, game)`; a new office record → SSE `say {tekst: "🎮
+  ‹navn› (‹PC›) har ny kontorrekord i render-spillet: 2310!"}` (Hop; "i Fejljagt", "i Over
+  tidslinjen" for the others). Both obey `widget_renderspil`.
 * **The year**: `share_year(summary)` (`POST /api/aar/del {aar}`) broadcasts `aar` (own gap 10 min
   → 400 "Du har lige delt den – vent lidt"). Received → SSE `besoeg {type: "aar", pc, navn, stage,
   outfit, pynt, aar: x}` + a plain card "📊 Klippet ‹år› fra ‹navn› (‹PC›)" with a one-line summary
@@ -1991,15 +1997,37 @@ et klokkeslæt mellem 12:00 og 23:59". The others are plain booleans (switches w
 ### 23.10 The render game (widget, `achievements.py`, `kontor.py`)
 
 * Only while the bridge's render state is `aktiv` (and `widget_renderspil`): the render line gets
-  `#spil-knap` "🎮 Spil" → the overlay `#spil` (canvas `#spil-canvas`, `#spil-point`,
-  `#spil-bedste`, `#spil-rekord`, the render's bar `#spil-render`, `#spil-start`, `#spil-luk`,
-  `#spil-besked`). An endless runner on a timeline: Klippe jumps (click, Space, ↑; one double jump)
-  over "klippefejl" – red "Media Offline" blocks, black frames, glitch blocks, gaps (jump cuts) –
-  and collects film frames (+10); speed grows; score = distance/10 + frames. When the render ends
-  the round ends: "Renderen er færdig! 🎬 Din score: N", the overlay closes after 5 s.
-* `POST /api/pet/spil {score, demo}` → `game_result`; a non-demo score while no render was active in
-  the last 5 min → 400 "Render-spillet kan kun spilles, mens Resolve renderer". `GET /api/pet/spil`
-  → `game_state()`. The Prøv tab's "🎮 Prøv render-spillet" plays one round with `demo: true`.
+  `#spil-knap` "🎮 Spil" → the overlay `#spil` (the picker `#spil-valg` with `[data-spil]` buttons,
+  canvas `#spil-canvas`, `#spil-point`, `#spil-bedste`, `#spil-rekord`, the render's bar
+  `#spil-render`, `#spil-start`, `#spil-luk`, `#spil-besked`). Three games (`spil` ids): `hop`
+  "🏃 Hop", `skyd` "🎯 Fejljagt", `kryds` "🚦 Over tidslinjen"; the picker shows between rounds
+  (`aria-pressed` on the chosen one, `#spil[data-valgt]`), the last choice is remembered in the
+  widget's local memory, and each game shows its own best and office record.
+* **Hop**: an endless runner on a timeline: Klippe jumps (click, Space, ↑; one double jump) over
+  "klippefejl" – red "Media Offline" blocks, black frames, glitch blocks, gaps (jump cuts) – and
+  collects film frames (+10); speed grows; score = distance/10 + frames.
+* **Fejljagt**: Klippe stands on the timeline at the bottom of the whole canvas and claps
+  klippefejl down (← → or A/D walk, the mouse aims; Space, ↑ or a click claps – held, it claps every
+  0.25 s). A swaying flock comes in from above: 2 rows, one more every second wave up to 4 (bottom
+  row black frames 10 points, then glitch blocks 20, then Media Offline 30 that take two claps); it
+  drifts down faster each wave and as it thins, and drops noise; a clap stops noise (+2). A downed
+  klippefejl may drop a film frame (+25 when caught). A cleared flock: +50 × wave, 1.2 s pause, the
+  next. Noise on Klippe costs one of three takes (then 1.2 s blinking, no harm); the flock at
+  Klippe's height or no takes left ends the round.
+* **Over tidslinjen**: nine rows from the bottom: Media Pool (safe), A1–A3, the marker strip (safe),
+  V1–V3, Deliver. Clips slide along each track (alternating directions, faster for each delivery).
+  Klippe hops a row or 14 units sideways (arrows or WASD; a click hops towards it); +10 for each
+  row first reached in a crossing; Deliver: +50 + 20 × level, the next level, back to the Media
+  Pool. A film frame now and then on a track (+25, gone after 6 s). A clip on Klippe costs one of
+  three takes and sends it back to the last safe row (the markers or the Media Pool); no takes
+  left ends the round.
+* When the render ends the round ends: "Renderen er færdig! 🎬 Din score: N", the overlay closes
+  after 5 s.
+* `POST /api/pet/spil {score, demo, spil}` (`spil` default `hop`; another value → 400 "Ugyldig
+  værdi: spil") → `game_result`; a non-demo score while no render was active in the last 5 min →
+  400 "Render-spillet kan kun spilles, mens Resolve renderer". `GET /api/pet/spil?spil=…` →
+  `game_state(spil)`. The Prøv tab's "🎮 Prøv render-spillet" plays one round of the chosen game
+  with `demo: true` (choosing another game gives it one round too).
 
 ### 23.11 Klippet ‹år› (`aar.py`, `web/aar.html|js|css`)
 
@@ -2064,7 +2092,7 @@ SSE: `pet_saeson`, `pet_jul`, `sne`, `rod`, `frokost`, `post_sendt`, `post_svar`
 `vaeddemaal`, `paaskeaeg`, and `besoeg` types "slik", "post", "aar".
 
 Routes: `GET /api/pet/saeson` · `GET /api/pet/jul` · `POST /api/pet/jul {nr}` · `POST
-/api/pet/jul/demo {nr}` · `GET /api/pet/spil` · `POST /api/pet/spil {score, demo}` · `POST
+/api/pet/jul/demo {nr}` · `GET /api/pet/spil?spil=…` · `POST /api/pet/spil {score, demo, spil}` · `POST
 /api/sne/demo` · `GET /api/rod` · `POST /api/rod/aabn` · `POST /api/rod/demo` · `POST
 /api/kontor/frokost` · `POST /api/kontor/frokost/demo` · `POST /api/kontor/post {til, tekst}` ·
 `POST /api/kontor/post/demo` (a local post from DEMO-PC) · `POST /api/kontor/slik {id, svar}` ·

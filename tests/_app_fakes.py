@@ -326,7 +326,7 @@ class FakeKontor(Fake):
     def bets(self) -> dict: return self._call("bets")
     def guess(self, pc: Any, vid: Any, tid: Any) -> dict: return self._call("guess", pc, vid, tid)
     def bet_demo(self) -> dict: return self._call("bet_demo")
-    def record(self, score: Any) -> int: return self._call("record", score)
+    def record(self, score: Any, game: Any = "hop") -> int: return self._call("record", score, game)
     def share_year(self, summary: Any) -> dict: return self._call("share_year", summary)
 
 
